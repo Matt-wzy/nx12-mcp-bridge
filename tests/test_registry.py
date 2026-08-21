@@ -1,6 +1,10 @@
 """Tests for tool registry."""
 
+import pytest
+
 from nx_mcp.tools.registry import ToolRegistry, mcp_tool
+
+pytestmark = pytest.mark.legacy
 
 
 def test_register_and_list_tools():

@@ -1,5 +1,6 @@
 minimum_pre_commit_version: "3.5.0"
 default_install_hook_types: [pre-commit, pre-push]
+default_stages: [pre-commit]
 
 repos:
   - repo: https://github.com/pre-commit/pre-commit-hooks
@@ -26,3 +27,20 @@ repos:
       - id: ruff
         args: [--fix]
       - id: ruff-format
+
+  - repo: local
+    hooks:
+      - id: pytest
+        name: pytest (non-real-NX)
+        entry: python -m pytest -q -p no:cacheprovider -m "not real_nx"
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]
+      - id: mypy
+        name: mypy sidecar
+        entry: python -m mypy src/nx_mcp
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push]

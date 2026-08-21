@@ -10,7 +10,8 @@ bridge owns NXOpen and the current NX session.
 
 ```powershell
 python -m pip install -e ".[dev]"
-pytest -q -p no:cacheprovider --basetemp .pytest-tmp
+python -m pre_commit install --install-hooks
+python -m pytest -q -p no:cacheprovider -m "not real_nx" --basetemp .pytest-tmp
 python -m nx_mcp.real_smoke --workspace D:\NX_MCP_WORKSPACE --iterations 20
 ```
 
@@ -39,3 +40,5 @@ not import them; `experimental.py` may load them only behind explicit flags.
   codes for callers.
 - New default tools require local MCP/bridge tests and a real-NX test on the
   supported build.
+- `fake_nx` tests verify only the simulated NXOpen seam; the `real_nx` marker
+  is the release acceptance gate on the dedicated NX runner.

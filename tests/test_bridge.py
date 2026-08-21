@@ -9,8 +9,36 @@ from nx_mcp.bridge import (
     BridgeServer,
     DescriptorBridgeClient,
     MainThreadDispatcher,
+    default_descriptor_path,
 )
 from nx_mcp.contracts import NXToolError
+
+pytestmark = pytest.mark.integration
+
+
+def test_default_descriptor_path_prefers_local_app_data(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv("LOCALAPPDATA", "C:/nx-state")
+    monkeypatch.setenv("XDG_STATE_HOME", "/xdg-state")
+
+    assert default_descriptor_path() == Path("C:/nx-state") / "nx-mcp" / "bridge.json"
+
+
+def test_default_descriptor_path_uses_xdg_state_when_local_app_data_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.setenv("XDG_STATE_HOME", "/xdg-state")
+
+    assert default_descriptor_path() == Path("/xdg-state") / "nx-mcp" / "bridge.json"
+
+
+def test_default_descriptor_path_uses_home_state_as_final_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.delenv("LOCALAPPDATA", raising=False)
+    monkeypatch.delenv("XDG_STATE_HOME", raising=False)
+
+    assert default_descriptor_path() == Path.home() / ".local" / "state" / "nx-mcp" / "bridge.json"
 
 
 @pytest.mark.asyncio

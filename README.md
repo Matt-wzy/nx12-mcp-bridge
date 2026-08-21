@@ -96,13 +96,29 @@ agreed minimal C# NX-side bridge before enabling an interactive pilot.
   sidecar and NX bridge must receive the opt-in environment flags.
 - Object IDs are opaque and valid only for the current part session.
 
-## Local tests
+## Local quality gates
 
-Tests do not require NX:
+The ordinary suite does not require NX. Install the Git hooks once, then use
+the same checks as CI:
 
 ```powershell
-pytest -q -p no:cacheprovider --basetemp .pytest-tmp
+python -m pip install -e ".[dev]"
+python -m pre_commit install --install-hooks
+python -m pre_commit run --all-files
+python -m pytest -q -p no:cacheprovider -m "not real_nx" --basetemp .pytest-tmp
 ```
+
+The pre-commit hook runs file and style checks. The pre-push hook runs the
+non-real-NX pytest suite and the sidecar mypy gate. Tests marked `legacy` cover
+the opt-in 0.1 surface; tests marked `fake_nx` do not validate NXOpen itself.
+Hosted CI runs the core suite across supported Python and OS combinations,
+runs legacy mock-NX tests separately, and enforces at least 78% branch
+coverage in its canonical Ubuntu/Python 3.12 coverage job.
+
+Real NX acceptance is intentionally separate. Dispatch
+`.github/workflows/real-nx.yml` from a dedicated self-hosted Windows runner
+labelled `self-hosted`, `windows`, and `nx`, with `NX_RUN_JOURNAL` set to the
+absolute path of `run_journal.exe`.
 
 See [architecture](docs/architecture.md), [0.1 migration](docs/migration-0.2.md),
 and [real NX validation](docs/real-nx-validation.md) for implementation and

@@ -61,6 +61,12 @@ def load_legacy_handlers() -> dict[str, Callable[..., Awaitable[Any]]]:
     return handlers
 
 
+async def _run_legacy_handler(
+    handler: Callable[..., Awaitable[Any]], params: dict[str, Any]
+) -> Any:
+    return await handler(**params)
+
+
 def _secure_params(
     method: str,
     params: dict[str, Any],
@@ -152,7 +158,7 @@ def execute_legacy(
     if handler is None:
         raise NXToolError("NX_TOOL_NOT_FOUND", f"Unsupported bridge command: {method}")
     secured = _secure_params(method, params, workspace, already_resolved=True)
-    result = asyncio.run(handler(**secured))
+    result: Any = asyncio.run(_run_legacy_handler(handler, secured))
     if isinstance(result, ToolError):
         raise NXToolError(
             result.error_code,

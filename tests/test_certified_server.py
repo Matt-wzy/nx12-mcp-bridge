@@ -8,6 +8,8 @@ from nx_mcp.contracts import NXToolError
 from nx_mcp.server import create_server
 from nx_mcp.workspace import Workspace
 
+pytestmark = pytest.mark.integration
+
 
 class StubBridge:
     async def call(self, method: str, params: dict):

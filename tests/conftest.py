@@ -69,9 +69,16 @@ def create_mock_nxopen_modules() -> dict[str, types.ModuleType]:
     return modules
 
 
+def _uses_legacy_modules(request: pytest.FixtureRequest) -> bool:
+    return request.node.get_closest_marker("legacy") is not None
+
+
 @pytest.fixture(autouse=True)
-def _reset_registry():
+def _reset_registry(request: pytest.FixtureRequest):
     """Reset tool registry between tests."""
+    if not _uses_legacy_modules(request):
+        yield
+        return
     from nx_mcp.tools.registry import ToolRegistry
 
     ToolRegistry.clear()
@@ -80,8 +87,11 @@ def _reset_registry():
 
 
 @pytest.fixture(autouse=True)
-def _reset_session():
+def _reset_session(request: pytest.FixtureRequest):
     """Reset NX session singleton between tests."""
+    if not _uses_legacy_modules(request):
+        yield
+        return
     from nx_mcp.nx_session import NXSession
 
     NXSession._instance = None

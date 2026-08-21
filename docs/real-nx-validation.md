@@ -65,3 +65,17 @@ If clean unload or GUI responsiveness fails, do not remove the feasibility
 gate. Implement the minimal C# NX-side bridge or a non-blocking UI scheduler
 and rerun this entire matrix before changing the package version from
 `0.2.0.dev0` to `0.2.0`.
+
+## GitHub Actions self-hosted gate
+
+The repository provides `.github/workflows/real-nx.yml` for this acceptance
+gate. It is intentionally manual so ordinary pull requests are not blocked
+until a dedicated NX runner exists. The runner must have the labels
+`self-hosted`, `windows`, and `nx`, plus a runner-level `NX_RUN_JOURNAL`
+environment variable containing the absolute path to `run_journal.exe`.
+
+The workflow creates a disposable workspace, runs the embedded-runtime probe,
+starts the Python bridge, then runs `pytest -m real_nx`. It requests the bridge
+to stop even when acceptance fails. Once the runner is reliable, make this
+workflow a required release/branch gate in the repository settings; the normal
+hosted CI deliberately excludes `real_nx` because it cannot provide Siemens NX.

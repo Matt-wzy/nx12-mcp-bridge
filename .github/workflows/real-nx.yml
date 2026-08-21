@@ -1,0 +1,107 @@
+name: Real NX validation
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Number of acceptance iterations
+        required: true
+        default: 20
+        type: number
+
+concurrency:
+  group: real-nx-${{ github.repository }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  real-nx:
+    name: real NX acceptance
+    runs-on: [self-hosted, windows, nx]
+    timeout-minutes: 45
+    env:
+      NX_MCP_ALLOW_UNVERIFIED_PYTHON_BRIDGE: "1"
+      NX_MCP_REAL_NX: "1"
+      NX_MCP_REAL_NX_ITERATIONS: ${{ inputs.iterations }}
+      NX_MCP_REAL_NX_RUN_PREFIX: ci-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install package and dev dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Prepare dedicated NX workspace
+        shell: pwsh
+        run: |
+          if (-not $env:NX_RUN_JOURNAL) {
+            throw "Set NX_RUN_JOURNAL on the self-hosted runner to run_journal.exe."
+          }
+          if (-not (Test-Path -LiteralPath $env:NX_RUN_JOURNAL)) {
+            throw "NX_RUN_JOURNAL does not exist: $env:NX_RUN_JOURNAL"
+          }
+
+          $nxWorkspace = Join-Path $env:RUNNER_TEMP "nx-mcp-real-nx-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          New-Item -ItemType Directory -Force -Path $nxWorkspace | Out-Null
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "NX_MCP_WORKSPACE=$nxWorkspace"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "NX_MCP_BRIDGE_STOP_FILE=$(Join-Path $nxWorkspace 'stop-bridge')"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "NX_MCP_PROBE_OUTPUT=$(Join-Path $nxWorkspace 'nx-runtime-probe.json')"
+      - name: Verify NX embedded runtime
+        shell: pwsh
+        run: |
+          & $env:NX_RUN_JOURNAL -nx (Join-Path $PWD 'examples\nx_runtime_probe.py')
+          if ($LASTEXITCODE -ne 0) {
+            throw "NX runtime probe failed with exit code $LASTEXITCODE."
+          }
+
+          $probe = Get-Content -Raw -LiteralPath $env:NX_MCP_PROBE_OUTPUT | ConvertFrom-Json
+          if ($null -ne $probe.bridge_import_error) {
+            throw "NX bridge import failed: $($probe.bridge_import_error)"
+          }
+      - name: Start NX bridge
+        shell: pwsh
+        run: |
+          $startedAt = [DateTime]::UtcNow
+          $bridgeScript = Join-Path $PWD 'examples\start_nx_bridge.py'
+          $bridgeProcess = Start-Process -FilePath $env:NX_RUN_JOURNAL -ArgumentList @(
+            '-nx',
+            "`"$bridgeScript`""
+          ) -PassThru -WindowStyle Hidden
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "NX_MCP_BRIDGE_PID=$($bridgeProcess.Id)"
+
+          $descriptorPath = Join-Path $env:LOCALAPPDATA 'nx-mcp\bridge.json'
+          $deadline = [DateTime]::UtcNow.AddMinutes(2)
+          do {
+            if (Test-Path -LiteralPath $descriptorPath) {
+              $descriptor = Get-Item -LiteralPath $descriptorPath
+              if ($descriptor.LastWriteTimeUtc -ge $startedAt) {
+                break
+              }
+            }
+            Start-Sleep -Seconds 1
+          } while ([DateTime]::UtcNow -lt $deadline)
+
+          if (-not (Test-Path -LiteralPath $descriptorPath) -or $descriptor.LastWriteTimeUtc -lt $startedAt) {
+            throw "NX bridge did not write a fresh descriptor within two minutes."
+          }
+      - name: Run real NX acceptance test
+        run: python -m pytest -q -p no:cacheprovider -m real_nx tests/test_real_nx.py
+      - name: Stop NX bridge
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:NX_MCP_BRIDGE_STOP_FILE) {
+            New-Item -ItemType File -Force -Path $env:NX_MCP_BRIDGE_STOP_FILE | Out-Null
+          }
+          if ($env:NX_MCP_BRIDGE_PID) {
+            $bridgeProcess = Get-Process -Id $env:NX_MCP_BRIDGE_PID -ErrorAction SilentlyContinue
+            if ($bridgeProcess) {
+              $bridgeProcess.WaitForExit(120000)
+              if (-not $bridgeProcess.HasExited) {
+                throw "NX bridge process did not stop cleanly."
+              }
+            }
+          }

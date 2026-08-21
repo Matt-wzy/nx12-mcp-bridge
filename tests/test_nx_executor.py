@@ -11,6 +11,8 @@ from nx_mcp.real_smoke import run_iteration
 from nx_mcp.server import create_server
 from nx_mcp.workspace import Workspace
 
+pytestmark = [pytest.mark.integration, pytest.mark.fake_nx]
+
 
 class FakeObject:
     def __init__(self, tag: int, name: str):

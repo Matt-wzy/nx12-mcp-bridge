@@ -18,7 +18,8 @@ from mcp.client.stdio import stdio_client
 async def _call(client: ClientSession, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
     result = await client.call_tool(name, arguments)
     if result.isError:
-        message = result.content[0].text if result.content else "unknown error"
+        text = getattr(result.content[0], "text", None) if result.content else None
+        message = text if isinstance(text, str) else "unknown error"
         raise RuntimeError(f"{name} failed: {message}")
     if result.structuredContent is None:
         raise RuntimeError(f"{name} returned no structured content")
@@ -88,6 +89,8 @@ async def run_iteration(
 
 
 async def run(workspace: Path, iterations: int, prefix: str = "smoke") -> list[dict[str, Any]]:
+    if iterations < 1:
+        raise ValueError("iterations must be at least 1")
     environment = dict(os.environ)
     environment["NX_MCP_WORKSPACE"] = str(workspace)
     parameters = StdioServerParameters(

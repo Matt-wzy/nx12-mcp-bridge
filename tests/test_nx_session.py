@@ -6,6 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+pytestmark = [pytest.mark.legacy, pytest.mark.fake_nx]
+
 
 def _create_mock_nxopen():
     """Create a mock NXOpen module tree."""

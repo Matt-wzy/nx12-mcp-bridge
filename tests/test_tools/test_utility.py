@@ -12,6 +12,8 @@ import pytest
 from nx_mcp.nx_session import NXSession
 from nx_mcp.tools.registry import ToolRegistry
 
+pytestmark = [pytest.mark.legacy, pytest.mark.fake_nx]
+
 # ---------------------------------------------------------------------------
 # Reusable helpers
 # ---------------------------------------------------------------------------

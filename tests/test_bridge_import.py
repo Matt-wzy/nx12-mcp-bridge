@@ -1,4 +1,4 @@
-"""Checks for modules that must load in NX's embedded Python runtime."""
+"""Checks that the bridge source imports without third-party site packages."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ import sys
 from pathlib import Path
 
 
-def test_nx_bridge_import_has_no_third_party_runtime_dependency() -> None:
-    """NX 2506 ships Python without the sidecar's site-packages directory."""
+def test_nx_bridge_import_succeeds_without_site_packages() -> None:
+    """The bridge module must import using only the standard library and source tree."""
     source_root = Path(__file__).parents[1] / "src"
     environment = os.environ | {"PYTHONPATH": str(source_root)}
 

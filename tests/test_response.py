@@ -1,6 +1,10 @@
 """Tests for response types."""
 
+import pytest
+
 from nx_mcp.response import ToolError, ToolResult
+
+pytestmark = pytest.mark.legacy
 
 
 def test_tool_result_success():

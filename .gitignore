@@ -20,4 +20,5 @@ venv/
 *.whl
 .tox/
 .coverage
+coverage.xml
 htmlcov/
