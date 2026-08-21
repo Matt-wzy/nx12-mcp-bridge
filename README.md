@@ -1,37 +1,63 @@
 # NX MCP Server
 
-MCP (Model Context Protocol) server for Siemens NX (UG). Enables AI agents to
-programmatically control NX's GUI for CAD operations.
+NX MCP is a local Model Context Protocol server for Siemens NX automation. The
+`0.2.0.dev0` line replaces the unverified direct-attach design with two explicit
+processes:
 
-## Features
-
-- **47 MCP tools** covering core CAD operations
-- File operations: create, open, save, close, export, import
-- Sketching: lines, arcs, rectangles, constraints
-- Modeling: extrude, revolve, sweep, blend, chamfer, hole, pattern, boolean, mirror
-- Assembly: add components, mate, list, reposition
-- Drawing: create sheets, add views, dimensions, export PDF
-- Measurement: distance, angle, volume
-- Utility: view control, undo, screenshot, journal recording
-- Feature tree: list features, inspect parameters, bounding box
-
-## Prerequisites
-
-- Siemens NX 2300+ (2023+)
-- Python 3.10+
-- NX Open Python API (bundled with NX)
-
-## Installation
-
-```bash
-pip install -e .
+```text
+MCP client <--stdio--> Python sidecar <--authenticated loopback JSON-RPC--> NX bridge <--NXOpen--> NX
 ```
 
-## Configuration
+The sidecar can start without NX. Tool calls fail with `NX_BRIDGE_UNAVAILABLE`
+until an NX journal starts the bridge.
 
-### Claude Code
+## Current status
 
-Add to `.claude/settings.local.json`:
+The sidecar, bridge protocol, input/output schemas, workspace confinement, and
+core workflow have automated coverage. The Python bridge passed the documented
+20-run batch workflow on Siemens NX 2506 (`ugraf` 2506.4021) on 2026-08-21.
+It remains opt-in while a non-blocking NX GUI event pump is validated; the
+bundled Python Journal runner is intentionally batch-only.
+
+The default `tools/list` exposes only these 16 tools:
+
+- Status: `nx_status`
+- Files: `nx_create_part`, `nx_open_part`, `nx_save_part`, `nx_close_part`, `nx_export_step`
+- Queries: `nx_list_sketches`, `nx_list_bodies`, `nx_list_features`
+- Sketch: `nx_create_sketch`, `nx_sketch_line`, `nx_sketch_rectangle`, `nx_finish_sketch`
+- Modeling: `nx_extrude`
+- Recovery/view: `nx_undo`, `nx_fit_view`
+
+The 34 old tools outside the certified surface remain unverified and hidden by
+default. `NX_MCP_ENABLE_EXPERIMENTAL=1` registers them through the bridge;
+Journal tools additionally require `NX_MCP_ENABLE_JOURNAL=1`.
+
+## Requirements
+
+- Windows with a local native Siemens NX installation (validated on NX 2506)
+- Python 3.10+
+- The package installed in the sidecar interpreter
+- An NX journal that can import `nx_mcp` (the bundled Journal examples load
+  the checkout's `src` directory automatically; the NX side has no `mcp` or
+  `pydantic` dependency)
+- A dedicated test/project directory configured as `NX_MCP_WORKSPACE`
+
+Install the sidecar and development dependencies:
+
+```powershell
+python -m pip install -e ".[dev]"
+```
+
+## Internal feasibility run
+
+1. Set `NX_MCP_WORKSPACE` to a disposable directory.
+2. For the target-build feasibility test only, set
+   `NX_MCP_ALLOW_UNVERIFIED_PYTHON_BRIDGE=1` in the NX environment.
+3. Set `NX_MCP_BRIDGE_STOP_FILE` to a new path inside the workspace, then run
+   `examples/start_nx_bridge.py` with `run_journal.exe -nx`. The journal pumps
+   requests on NX's main thread and writes an authenticated session descriptor
+   to `%LOCALAPPDATA%\nx-mcp\bridge.json`.
+4. Configure the MCP client to launch the sidecar:
 
 ```json
 {
@@ -40,72 +66,44 @@ Add to `.claude/settings.local.json`:
       "command": "python",
       "args": ["-m", "nx_mcp.server"],
       "env": {
-        "UGII_BASE_DIR": "C:\\Program Files\\Siemens\\NX2300"
+        "NX_MCP_WORKSPACE": "D:\\NX_MCP_WORKSPACE"
       }
     }
   }
 }
 ```
 
-### Generic MCP Client
+5. Run the real-NX acceptance loop from an external PowerShell 7 terminal:
 
-Start the server via stdio:
-
-```bash
-python -m nx_mcp.server
+```powershell
+python -m nx_mcp.real_smoke --workspace D:\NX_MCP_WORKSPACE --iterations 20 --run-prefix acceptance
 ```
 
-## Usage
+6. Create the configured stop file when finished; the journal stops the bridge
+   cleanly.
 
-1. Start Siemens NX
-2. Ensure your MCP client has the server configured
-3. Ask your AI agent to perform NX operations
+Do not use production parts for this test. The batch bridge is not evidence of
+interactive GUI responsiveness; use a non-blocking NX UI scheduler or the
+agreed minimal C# NX-side bridge before enabling an interactive pilot.
 
-Example prompts:
-- "Create a new part called bracket.prt"
-- "Draw a 50x30 rectangle on the XY plane and extrude it 20mm"
-- "Add a 3mm fillet to all edges"
-- "Export the current part as STEP"
+## Security model
 
-## Testing
+- IPC binds only to `127.0.0.1` on a random port and requires a random 256-bit
+  session token.
+- Every file argument is relative to `NX_MCP_WORKSPACE`; traversal, absolute
+  paths, and resolved links outside the workspace are rejected.
+- Journal execution and all 34 legacy tools are disabled by default. Both the
+  sidecar and NX bridge must receive the opt-in environment flags.
+- Object IDs are opaque and valid only for the current part session.
 
-```bash
-pip install -e ".[dev]"
-pytest tests/ -v
+## Local tests
+
+Tests do not require NX:
+
+```powershell
+pytest -q -p no:cacheprovider --basetemp .pytest-tmp
 ```
 
-Tests run with mocked NX Open — no NX installation required.
-
-## Architecture
-
-```
-AI Agent <-> MCP Protocol (stdio) <-> MCP Server (Python) <-> NX Open API <-> NX Application
-```
-
-## Project Structure
-
-```
-src/nx_mcp/
-  server.py          # MCP server entry point
-  nx_session.py      # NX session wrapper (singleton)
-  response.py        # ToolResult / ToolError response types
-  tools/
-    registry.py      # @mcp_tool decorator and ToolRegistry
-    file_ops.py      # File operations (8 tools)
-    sketch.py        # Sketch tools (7 tools)
-    modeling.py      # Modeling features (11 tools)
-    feature_tree.py  # Feature queries (3 tools)
-    assembly.py      # Assembly tools (4 tools)
-    drawing.py       # Drawing tools (5 tools)
-    measure.py       # Measurement tools (3 tools)
-    utility.py       # View, undo, screenshot, journal (7 tools)
-  utils/
-    geometry.py      # Point3d, Vector3d, object resolution helpers
-    selection.py     # ScCollector creation helpers
-tests/
-  test_tools/        # Per-module test suites (120 tests, all mocked)
-```
-
-## License
-
-MIT
+See [architecture](docs/architecture.md), [0.1 migration](docs/migration-0.2.md),
+and [real NX validation](docs/real-nx-validation.md) for implementation and
+release gates.
