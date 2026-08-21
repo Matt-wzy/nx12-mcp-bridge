@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,8 @@ def test_workspace_accepts_relative_paths_inside_root(tmp_path: Path):
 
 @pytest.mark.parametrize("path", ["../outside.prt", "C:/outside.prt"])
 def test_workspace_rejects_paths_outside_root(tmp_path: Path, path: str):
+    if sys.platform != "win32" and path.startswith("C:/"):
+        pytest.skip("drive-letter paths are only absolute on Windows")
     workspace = Workspace(tmp_path)
 
     with pytest.raises(WorkspaceViolation, match="workspace"):

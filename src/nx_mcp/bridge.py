@@ -70,12 +70,12 @@ class BridgeDescriptor:
 
 def default_descriptor_path() -> Path:
     local_app_data = os.environ.get("LOCALAPPDATA")
-    if not local_app_data:
-        raise NXToolError(
-            "NX_BRIDGE_UNAVAILABLE",
-            "LOCALAPPDATA is unavailable; the NX bridge descriptor cannot be located.",
-        )
-    return Path(local_app_data) / "nx-mcp" / "bridge.json"
+    if local_app_data:
+        return Path(local_app_data) / "nx-mcp" / "bridge.json"
+    xdg_state_home = os.environ.get("XDG_STATE_HOME")
+    if xdg_state_home:
+        return Path(xdg_state_home) / "nx-mcp" / "bridge.json"
+    return Path.home() / ".local" / "state" / "nx-mcp" / "bridge.json"
 
 
 def _error_payload(error: NXToolError) -> dict[str, Any]:
