@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import os
-from pathlib import Path
 import secrets
-from typing import Any, Callable
+from collections.abc import Callable
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
 
 from nx_mcp.bridge import (
     BRIDGE_PROTOCOL_VERSION,
@@ -157,10 +158,7 @@ class NXOpenExecutor:
         collection = getattr(part, collection_name)
         values = list(collection)
         return {
-            "objects": [
-                self._reference(value, kind, part, kind.title())
-                for value in values
-            ],
+            "objects": [self._reference(value, kind, part, kind.title()) for value in values],
             "message": f"Found {len(values)} {kind}(s).",
         }
 
@@ -390,7 +388,9 @@ class NXOpenExecutor:
             builder.Direction = direction
             builder.Limits.StartExtend.Value.RightHandSide = "0"
             builder.Limits.EndExtend.Value.RightHandSide = str(distance)
-            builder.BooleanOperation.Type = self.nxopen.GeometricUtilities.BooleanOperation.BooleanType.Create
+            builder.BooleanOperation.Type = (
+                self.nxopen.GeometricUtilities.BooleanOperation.BooleanType.Create
+            )
             builder.AllowSelfIntersectingSection(True)
             feature = builder.CommitFeature()
         finally:
@@ -468,9 +468,10 @@ def start_bridge(
     global _runtime
     if _runtime is not None:
         return _runtime.descriptor
-    if not allow_unverified_threading and os.environ.get(
-        "NX_MCP_ALLOW_UNVERIFIED_PYTHON_BRIDGE"
-    ) != "1":
+    if (
+        not allow_unverified_threading
+        and os.environ.get("NX_MCP_ALLOW_UNVERIFIED_PYTHON_BRIDGE") != "1"
+    ):
         raise RuntimeError(
             "Python bridge execution has not been verified on this NX build. "
             "Set NX_MCP_ALLOW_UNVERIFIED_PYTHON_BRIDGE=1 only for the real-NX feasibility test."

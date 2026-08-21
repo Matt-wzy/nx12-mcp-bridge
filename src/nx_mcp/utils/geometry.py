@@ -8,18 +8,21 @@ from typing import Any
 def make_point3d(x: float, y: float, z: float) -> Any:
     """Create an NXOpen.Point3d."""
     import NXOpen
+
     return NXOpen.Point3d(x, y, z)
 
 
 def make_vector3d(x: float, y: float, z: float) -> Any:
     """Create an NXOpen.Vector3d."""
     import NXOpen
+
     return NXOpen.Vector3d(x, y, z)
 
 
 def make_matrix3x3_identity() -> Any:
     """Create an identity NXOpen.Matrix3x3."""
     import NXOpen
+
     m = NXOpen.Matrix3x3()
     m.Xx, m.Xy, m.Xz = 1.0, 0.0, 0.0
     m.Yx, m.Yy, m.Yz = 0.0, 1.0, 0.0

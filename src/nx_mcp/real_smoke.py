@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
-from pathlib import Path
 import sys
+from pathlib import Path
 from typing import Any
 
 from mcp import ClientSession, StdioServerParameters
@@ -65,10 +66,8 @@ async def run_iteration(
         await _call(client, "nx_save_part", {})
         await _call(client, "nx_close_part", {"save": False})
     except Exception:
-        try:
+        with contextlib.suppress(Exception):
             await _call(client, "nx_close_part", {"save": False})
-        except Exception:
-            pass
         raise
 
     if len(after["objects"]) != len(before["objects"]) + 1:
@@ -96,13 +95,15 @@ async def run(workspace: Path, iterations: int, prefix: str = "smoke") -> list[d
         args=["-m", "nx_mcp.server"],
         env=environment,
     )
-    async with stdio_client(parameters) as (read_stream, write_stream):
-        async with ClientSession(read_stream, write_stream) as client:
-            await client.initialize()
-            return [
-                await run_iteration(client, workspace, index, prefix=prefix)
-                for index in range(1, iterations + 1)
-            ]
+    async with (
+        stdio_client(parameters) as (read_stream, write_stream),
+        ClientSession(read_stream, write_stream) as client,
+    ):
+        await client.initialize()
+        return [
+            await run_iteration(client, workspace, index, prefix=prefix)
+            for index in range(1, iterations + 1)
+        ]
 
 
 def main() -> None:

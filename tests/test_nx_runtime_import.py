@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 
 def test_nx_bridge_import_has_no_third_party_runtime_dependency() -> None:

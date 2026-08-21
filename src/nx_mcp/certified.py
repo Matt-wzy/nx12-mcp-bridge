@@ -87,7 +87,9 @@ def create_certified_server(
     @mcp.tool()
     async def nx_create_part(path: str, units: Literal["mm", "inch"] = "mm") -> PartResult:
         """Create a part inside the configured workspace."""
-        return PartResult(**await call("nx_create_part", {"path": resolve_path(path), "units": units}))
+        return PartResult(
+            **await call("nx_create_part", {"path": resolve_path(path), "units": units})
+        )
 
     @mcp.tool()
     async def nx_open_part(path: str) -> PartResult:

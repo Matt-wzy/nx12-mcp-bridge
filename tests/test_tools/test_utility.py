@@ -12,10 +12,10 @@ import pytest
 from nx_mcp.nx_session import NXSession
 from nx_mcp.tools.registry import ToolRegistry
 
-
 # ---------------------------------------------------------------------------
 # Reusable helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_mock_nxopen():
     """Build a self-contained mock NXOpen module tree for utility tests."""
@@ -46,9 +46,7 @@ def _make_mock_nxopen():
     mock_image_builder = MagicMock()
     mock_image_builder.Commit = MagicMock()
     uf_session.Disp = MagicMock()
-    uf_session.Disp.CreateImageExportBuilder = MagicMock(
-        return_value=mock_image_builder
-    )
+    uf_session.Disp.CreateImageExportBuilder = MagicMock(return_value=mock_image_builder)
     uf.UFSession = uf_session
 
     # Image export builder file format enum
@@ -100,6 +98,7 @@ def _setup_nx():
 # nx_fit_view
 # ---------------------------------------------------------------------------
 
+
 class TestFitView:
     """Tests for nx_fit_view tool."""
 
@@ -120,9 +119,7 @@ class TestFitView:
         nxopen, work_part = _setup_nx
         NXSession._instance = MagicMock(spec=NXSession)
         NXSession._instance.is_connected = True
-        NXSession._instance.require_work_part.side_effect = RuntimeError(
-            "No work part is open."
-        )
+        NXSession._instance.require_work_part.side_effect = RuntimeError("No work part is open.")
 
         handler = ToolRegistry.get_handler("nx_fit_view")
         result = await handler()
@@ -134,6 +131,7 @@ class TestFitView:
 # ---------------------------------------------------------------------------
 # nx_set_view
 # ---------------------------------------------------------------------------
+
 
 class TestSetView:
     """Tests for nx_set_view tool."""
@@ -179,6 +177,7 @@ class TestSetView:
 # nx_undo
 # ---------------------------------------------------------------------------
 
+
 class TestUndo:
     """Tests for nx_undo tool."""
 
@@ -212,6 +211,7 @@ class TestUndo:
 # nx_screenshot
 # ---------------------------------------------------------------------------
 
+
 class TestScreenshot:
     """Tests for nx_screenshot tool."""
 
@@ -231,6 +231,7 @@ class TestScreenshot:
 # ---------------------------------------------------------------------------
 # nx_run_journal
 # ---------------------------------------------------------------------------
+
 
 class TestRunJournal:
     """Tests for nx_run_journal tool."""
@@ -288,6 +289,7 @@ class TestRunJournal:
 # nx_record_start
 # ---------------------------------------------------------------------------
 
+
 class TestRecordStart:
     """Tests for nx_record_start tool."""
 
@@ -307,6 +309,7 @@ class TestRecordStart:
 # ---------------------------------------------------------------------------
 # nx_record_stop
 # ---------------------------------------------------------------------------
+
 
 class TestRecordStop:
     """Tests for nx_record_stop tool."""
@@ -340,6 +343,7 @@ class TestRecordStop:
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
+
 
 class TestToolRegistration:
     """Verify all 7 utility tools are registered."""

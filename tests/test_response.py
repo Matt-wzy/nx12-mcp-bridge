@@ -1,6 +1,6 @@
 """Tests for response types."""
 
-from nx_mcp.response import ToolResult, ToolError
+from nx_mcp.response import ToolError, ToolResult
 
 
 def test_tool_result_success():

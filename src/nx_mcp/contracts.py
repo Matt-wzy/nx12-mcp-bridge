@@ -8,7 +8,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from nx_mcp.runtime import NXToolError, ObjectKind, ObjectRef
 
-
 __all__ = [
     "ExportResult",
     "ExtrudeResult",

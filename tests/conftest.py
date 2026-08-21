@@ -73,6 +73,7 @@ def create_mock_nxopen_modules() -> dict[str, types.ModuleType]:
 def _reset_registry():
     """Reset tool registry between tests."""
     from nx_mcp.tools.registry import ToolRegistry
+
     ToolRegistry.clear()
     yield
     ToolRegistry.clear()
@@ -82,6 +83,7 @@ def _reset_registry():
 def _reset_session():
     """Reset NX session singleton between tests."""
     from nx_mcp.nx_session import NXSession
+
     NXSession._instance = None
     yield
     NXSession._instance = None

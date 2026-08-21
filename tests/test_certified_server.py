@@ -133,7 +133,7 @@ async def test_experimental_tools_require_explicit_opt_in_and_keep_journals_disa
     async with create_connected_server_and_client_session(server) as client:
         names = {tool.name for tool in (await client.list_tools()).tools}
 
-    assert CERTIFIED_TOOL_NAMES < names
+    assert names > CERTIFIED_TOOL_NAMES
     assert "nx_blend" in names
     assert "nx_measure_distance" in names
     assert "nx_run_journal" not in names

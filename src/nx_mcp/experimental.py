@@ -3,21 +3,21 @@
 from __future__ import annotations
 
 import asyncio
-from functools import wraps
 import importlib
 import inspect
 import json
 import sys
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from functools import wraps
+from typing import Any
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError as MCPToolError
 
-from nx_mcp.runtime import NXToolError
 from nx_mcp.response import ToolError, ToolResult
+from nx_mcp.runtime import NXToolError
 from nx_mcp.tools.registry import ToolRegistry
 from nx_mcp.workspace import Workspace, WorkspaceViolation
-
 
 _LEGACY_MODULES = (
     "assembly",

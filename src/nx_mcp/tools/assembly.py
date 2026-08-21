@@ -50,7 +50,11 @@ async def nx_add_component(
         comp_assembly = work_part.ComponentAssembly
         component = comp_assembly.AddComponent(part_path, name or "")
 
-        comp_name = component.Name() if callable(getattr(component, "Name", None)) else getattr(component, "Name", name or part_path)
+        comp_name = (
+            component.Name()
+            if callable(getattr(component, "Name", None))
+            else getattr(component, "Name", name or part_path)
+        )
 
         return ToolResult.success(
             data={"component": comp_name, "part_path": part_path},
@@ -177,7 +181,11 @@ async def nx_list_components() -> ToolResult | ToolError:
         if root_component is not None:
             children = root_component.GetChildren()
             for child in children:
-                child_name = child.Name() if callable(getattr(child, "Name", None)) else getattr(child, "Name", "unknown")
+                child_name = (
+                    child.Name()
+                    if callable(getattr(child, "Name", None))
+                    else getattr(child, "Name", "unknown")
+                )
                 child_data: dict[str, Any] = {"name": str(child_name)}
                 components_list.append(child_data)
 
@@ -256,7 +264,11 @@ async def nx_reposition_component(
         target = None
         if root_component is not None:
             for child in root_component.GetChildren():
-                child_name = child.Name() if callable(getattr(child, "Name", None)) else getattr(child, "Name", "")
+                child_name = (
+                    child.Name()
+                    if callable(getattr(child, "Name", None))
+                    else getattr(child, "Name", "")
+                )
                 if child_name == component:
                     target = child
                     break
@@ -296,7 +308,7 @@ async def nx_reposition_component(
                 "rotation": [rx, ry, rz],
             },
             message=f"Repositioned component '{component}' "
-                    f"(dx={dx}, dy={dy}, dz={dz}, rx={rx}, ry={ry}, rz={rz}).",
+            f"(dx={dx}, dy={dy}, dz={dz}, rx={rx}, ry={ry}, rz={rz}).",
         )
 
     except Exception as exc:

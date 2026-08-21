@@ -65,7 +65,9 @@ def main() -> None:
     results.append(_attempt("CreateSimpleSketchInPlaceBuilder", create_simple))
     payload = {
         "sketch_collection_members": [
-            member for member in dir(sketches) if "sketch" in member.lower() or "builder" in member.lower()
+            member
+            for member in dir(sketches)
+            if "sketch" in member.lower() or "builder" in member.lower()
         ],
         "in_place_builder_members": [
             member
@@ -73,12 +75,16 @@ def main() -> None:
             if not member.startswith("_")
         ],
         "simple_builder_members": [
-            member for member in dir(sketches.CreateSimpleSketchInPlaceBuilder()) if not member.startswith("_")
+            member
+            for member in dir(sketches.CreateSimpleSketchInPlaceBuilder())
+            if not member.startswith("_")
         ],
         "close_whole_tree_members": [
             member for member in dir(NXOpen.BasePart.CloseWholeTree) if not member.startswith("_")
         ],
-        "part_close_members": [member for member in dir(part) if member.lower().startswith("close")],
+        "part_close_members": [
+            member for member in dir(part) if member.lower().startswith("close")
+        ],
         "attempts": results,
     }
     output.write_text(json.dumps(payload, indent=2), encoding="utf-8")

@@ -23,6 +23,7 @@ _PLANE_NORMALS: dict[str, tuple[float, float, float]] = {
 # 1. nx_create_sketch
 # ---------------------------------------------------------------------------
 
+
 @mcp_tool(
     name="nx_create_sketch",
     description="Create a new sketch on the specified reference plane (XY, XZ, or YZ).",
@@ -81,6 +82,7 @@ async def nx_create_sketch(
 # 2. nx_sketch_line
 # ---------------------------------------------------------------------------
 
+
 @mcp_tool(
     name="nx_sketch_line",
     description="Create a line in the active sketch from (x1, y1) to (x2, y2).",
@@ -125,6 +127,7 @@ async def nx_sketch_line(
 # 3. nx_sketch_arc
 # ---------------------------------------------------------------------------
 
+
 @mcp_tool(
     name="nx_sketch_arc",
     description="Create an arc in the active sketch given center, radius, start and end angles.",
@@ -132,7 +135,11 @@ async def nx_sketch_line(
         "cx": {"type": "number", "description": "Center X coordinate.", "required": True},
         "cy": {"type": "number", "description": "Center Y coordinate.", "required": True},
         "radius": {"type": "number", "description": "Arc radius.", "required": True},
-        "start_angle": {"type": "number", "description": "Start angle in degrees.", "required": True},
+        "start_angle": {
+            "type": "number",
+            "description": "Start angle in degrees.",
+            "required": True,
+        },
         "end_angle": {"type": "number", "description": "End angle in degrees.", "required": True},
     },
 )
@@ -169,7 +176,7 @@ async def nx_sketch_arc(
                 "end_angle": end_angle,
             },
             message=f"Created arc at ({cx}, {cy}) with radius {radius}, "
-                    f"from {start_angle} deg to {end_angle} deg.",
+            f"from {start_angle} deg to {end_angle} deg.",
         )
     except Exception as exc:
         return ToolResult.from_exception(exc)
@@ -178,6 +185,7 @@ async def nx_sketch_arc(
 # ---------------------------------------------------------------------------
 # 4. nx_sketch_rectangle
 # ---------------------------------------------------------------------------
+
 
 @mcp_tool(
     name="nx_sketch_rectangle",
@@ -360,6 +368,7 @@ async def nx_sketch_constraint(
 # ---------------------------------------------------------------------------
 # 6. nx_finish_sketch
 # ---------------------------------------------------------------------------
+
 
 @mcp_tool(
     name="nx_finish_sketch",

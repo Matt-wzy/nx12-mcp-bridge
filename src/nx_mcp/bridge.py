@@ -3,20 +3,21 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import asdict, dataclass, field
+import contextlib
 import hmac
 import json
 import os
-from pathlib import Path
-from queue import Empty, Queue
 import secrets
 import socketserver
+from collections.abc import Callable
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+from queue import Empty, Queue
 from threading import Event, Lock, Thread
-from typing import Any, Callable
+from typing import Any
 from uuid import uuid4
 
 from nx_mcp.runtime import NXToolError, ObjectKind, ObjectRef
-
 
 BRIDGE_PROTOCOL_VERSION = 1
 _MAX_MESSAGE_BYTES = 1024 * 1024
@@ -62,10 +63,8 @@ class BridgeDescriptor:
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = destination.with_suffix(destination.suffix + ".tmp")
         temporary.write_text(json.dumps(asdict(self), indent=2), encoding="utf-8")
-        try:
+        with contextlib.suppress(OSError):
             temporary.chmod(0o600)
-        except OSError:
-            pass
         temporary.replace(destination)
 
 
@@ -86,6 +85,9 @@ def _error_payload(error: NXToolError) -> dict[str, Any]:
 class _BridgeTCPServer(socketserver.TCPServer):
     allow_reuse_address = True
 
+    executor: Any
+    token: str
+
     def __init__(self, executor: Any, token: str) -> None:
         self.executor = executor
         self.token = token
@@ -93,6 +95,8 @@ class _BridgeTCPServer(socketserver.TCPServer):
 
 
 class _BridgeRequestHandler(socketserver.StreamRequestHandler):
+    server: _BridgeTCPServer
+
     def handle(self) -> None:
         raw = self.rfile.readline(_MAX_MESSAGE_BYTES + 1)
         request_id: str | None = None
@@ -104,7 +108,9 @@ class _BridgeRequestHandler(socketserver.StreamRequestHandler):
             if request.get("jsonrpc") != "2.0":
                 raise NXToolError("NX_PROTOCOL_ERROR", "Expected JSON-RPC 2.0")
             if request.get("protocol_version") != BRIDGE_PROTOCOL_VERSION:
-                raise NXToolError("NX_PROTOCOL_VERSION_MISMATCH", "Bridge protocol version does not match")
+                raise NXToolError(
+                    "NX_PROTOCOL_VERSION_MISMATCH", "Bridge protocol version does not match"
+                )
             if not hmac.compare_digest(str(request.get("token", "")), self.server.token):
                 raise NXToolError("NX_AUTH_FAILED", "Bridge authentication failed")
             method = request.get("method")
@@ -291,6 +297,7 @@ class BridgeClient:
                 ),
                 timeout=self.timeout,
             )
+            assert writer is not None
             writer.write(json.dumps(request, ensure_ascii=False).encode("utf-8") + b"\n")
             await writer.drain()
             raw = await asyncio.wait_for(reader.readline(), timeout=self.timeout)
@@ -303,28 +310,31 @@ class BridgeClient:
         finally:
             if writer is not None:
                 writer.close()
-                try:
+                with contextlib.suppress(OSError):
                     await writer.wait_closed()
-                except OSError:
-                    pass
 
         if not raw or len(raw) > _MAX_MESSAGE_BYTES:
             raise NXToolError("NX_PROTOCOL_ERROR", "NX bridge returned an invalid response size")
         try:
             response = json.loads(raw)
-        except (UnicodeDecodeError, json.JSONDecodeError) as error:
-            raise NXToolError("NX_PROTOCOL_ERROR", "NX bridge returned invalid JSON") from error
-        if response.get("id") != request_id or response.get("protocol_version") != BRIDGE_PROTOCOL_VERSION:
+        except (UnicodeDecodeError, json.JSONDecodeError) as parse_error:
+            raise NXToolError(
+                "NX_PROTOCOL_ERROR", "NX bridge returned invalid JSON"
+            ) from parse_error
+        if (
+            response.get("id") != request_id
+            or response.get("protocol_version") != BRIDGE_PROTOCOL_VERSION
+        ):
             raise NXToolError("NX_PROTOCOL_ERROR", "NX bridge returned an invalid response")
         if not response.get("ok"):
-            error = response.get("error", {})
+            error_payload = response.get("error", {})
             raise NXToolError(
-                error.get("code", "NX_OPERATION_FAILED"),
-                error.get("message", "NX operation failed"),
-                suggestion=error.get("suggestion"),
-                nx_code=error.get("nx_code"),
-                retryable=error.get("retryable", False),
-                details=error.get("details"),
+                error_payload.get("code", "NX_OPERATION_FAILED"),
+                error_payload.get("message", "NX operation failed"),
+                suggestion=error_payload.get("suggestion"),
+                nx_code=error_payload.get("nx_code"),
+                retryable=error_payload.get("retryable", False),
+                details=error_payload.get("details"),
             )
         result = response.get("result", {})
         if not isinstance(result, dict):
@@ -335,8 +345,12 @@ class BridgeClient:
 class DescriptorBridgeClient:
     """Reloads the bridge descriptor for every call so NX can restart independently."""
 
-    def __init__(self, descriptor_path: str | Path | None = None, *, timeout: float = 120.0) -> None:
-        self.descriptor_path = Path(descriptor_path) if descriptor_path else default_descriptor_path()
+    def __init__(
+        self, descriptor_path: str | Path | None = None, *, timeout: float = 120.0
+    ) -> None:
+        self.descriptor_path = (
+            Path(descriptor_path) if descriptor_path else default_descriptor_path()
+        )
         self.timeout = timeout
 
     async def call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -424,7 +438,5 @@ class ObjectRegistry:
             del self._objects[object_id]
             self._stale_ids.add(object_id)
         self._identities = {
-            key: object_id
-            for key, object_id in self._identities.items()
-            if key[0] != part_id
+            key: object_id for key, object_id in self._identities.items() if key[0] != part_id
         }

@@ -10,10 +10,10 @@ import pytest
 from nx_mcp.nx_session import NXSession
 from nx_mcp.tools.registry import ToolRegistry
 
-
 # ---------------------------------------------------------------------------
 # Reusable helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_mock_nxopen():
     """Build a self-contained mock NXOpen module tree for feature_tree tests."""
@@ -67,6 +67,7 @@ def _setup_nx():
 # nx_list_features
 # ---------------------------------------------------------------------------
 
+
 class TestListFeatures:
     """Tests for nx_list_features tool."""
 
@@ -113,9 +114,7 @@ class TestListFeatures:
         nxopen, work_part = _setup_nx
         NXSession._instance = MagicMock(spec=NXSession)
         NXSession._instance.is_connected = True
-        NXSession._instance.require_work_part.side_effect = RuntimeError(
-            "No work part is open."
-        )
+        NXSession._instance.require_work_part.side_effect = RuntimeError("No work part is open.")
 
         handler = ToolRegistry.get_handler("nx_list_features")
         result = await handler()
@@ -127,6 +126,7 @@ class TestListFeatures:
 # ---------------------------------------------------------------------------
 # nx_get_feature_info
 # ---------------------------------------------------------------------------
+
 
 class TestGetFeatureInfo:
     """Tests for nx_get_feature_info tool."""
@@ -174,6 +174,7 @@ class TestGetFeatureInfo:
 # ---------------------------------------------------------------------------
 # nx_get_bounding_box
 # ---------------------------------------------------------------------------
+
 
 class TestGetBoundingBox:
     """Tests for nx_get_bounding_box tool."""
@@ -247,6 +248,7 @@ class TestGetBoundingBox:
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
+
 
 class TestToolRegistration:
     """Verify all 3 feature tree tools are registered."""

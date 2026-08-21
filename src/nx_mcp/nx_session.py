@@ -94,7 +94,5 @@ class NXSession:
         """Return the work part or raise a clear error."""
         part = self.work_part
         if part is None:
-            raise RuntimeError(
-                "No work part is open. Use nx_open_part or nx_create_part first."
-            )
+            raise RuntimeError("No work part is open. Use nx_open_part or nx_create_part first.")
         return part

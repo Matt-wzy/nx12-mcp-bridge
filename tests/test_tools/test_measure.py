@@ -10,10 +10,10 @@ import pytest
 from nx_mcp.nx_session import NXSession
 from nx_mcp.tools.registry import ToolRegistry
 
-
 # ---------------------------------------------------------------------------
 # Reusable helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_mock_nxopen():
     """Build a self-contained mock NXOpen module tree for measurement tests."""
@@ -36,7 +36,9 @@ def _make_mock_nxopen():
         obj.Name = name
         return obj
 
-    mock_features = [_make_named(n) for n in ("Edge1", "Edge2", "Face1", "Face2", "PlaneA", "PlaneB")]
+    mock_features = [
+        _make_named(n) for n in ("Edge1", "Edge2", "Face1", "Face2", "PlaneA", "PlaneB")
+    ]
 
     # --- Features ---
     mock_work_part.Features = MagicMock()
@@ -101,6 +103,7 @@ def _setup_nx():
 # nx_measure_distance
 # ---------------------------------------------------------------------------
 
+
 class TestMeasureDistance:
     """Tests for nx_measure_distance tool."""
 
@@ -126,9 +129,7 @@ class TestMeasureDistance:
 
         NXSession._instance = MagicMock(spec=NXSession)
         NXSession._instance.is_connected = True
-        NXSession._instance.require_work_part.side_effect = RuntimeError(
-            "No work part is open."
-        )
+        NXSession._instance.require_work_part.side_effect = RuntimeError("No work part is open.")
 
         result = await handler(obj1="A", obj2="B")
         parsed = json.loads(result.to_text())
@@ -139,6 +140,7 @@ class TestMeasureDistance:
 # ---------------------------------------------------------------------------
 # nx_measure_angle
 # ---------------------------------------------------------------------------
+
 
 class TestMeasureAngle:
     """Tests for nx_measure_angle tool."""
@@ -175,6 +177,7 @@ class TestMeasureAngle:
 # ---------------------------------------------------------------------------
 # nx_measure_volume
 # ---------------------------------------------------------------------------
+
 
 class TestMeasureVolume:
     """Tests for nx_measure_volume tool."""
@@ -270,6 +273,7 @@ class TestMeasureVolume:
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
+
 
 class TestToolRegistration:
     """Verify all 3 measurement tools are registered."""

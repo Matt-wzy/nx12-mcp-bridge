@@ -13,9 +13,7 @@ def main() -> None:
     output = os.environ.get("NX_MCP_MAIN_THREAD_PROBE_OUTPUT")
     part_path = os.environ.get("NX_MCP_MAIN_THREAD_PROBE_PART")
     if not output or not part_path:
-        raise RuntimeError(
-            "Set NX_MCP_MAIN_THREAD_PROBE_OUTPUT and NX_MCP_MAIN_THREAD_PROBE_PART"
-        )
+        raise RuntimeError("Set NX_MCP_MAIN_THREAD_PROBE_OUTPUT and NX_MCP_MAIN_THREAD_PROBE_PART")
 
     session = NXOpen.Session.GetSession()
     destination = Path(part_path)

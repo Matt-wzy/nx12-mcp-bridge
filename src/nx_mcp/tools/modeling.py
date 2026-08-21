@@ -9,10 +9,10 @@ from nx_mcp.nx_session import NXSession
 from nx_mcp.response import ToolError, ToolResult
 from nx_mcp.tools.registry import mcp_tool
 
-
 # ---------------------------------------------------------------------------
 # Helper
 # ---------------------------------------------------------------------------
+
 
 def _direction_vector(direction: str):
     """Return an NXOpen Vector3 for a cardinal direction string."""
@@ -28,9 +28,7 @@ def _direction_vector(direction: str):
     }
     key = direction.strip().upper()
     if key not in table:
-        raise ValueError(
-            f"Invalid direction '{direction}'. Use one of: {', '.join(table)}"
-        )
+        raise ValueError(f"Invalid direction '{direction}'. Use one of: {', '.join(table)}")
     return table[key]
 
 
@@ -46,9 +44,7 @@ def _boolean_option(boolean: str):
     }
     key = boolean.strip().lower()
     if key not in mapping:
-        raise ValueError(
-            f"Invalid boolean type '{boolean}'. Use: none, unite, subtract, intersect"
-        )
+        raise ValueError(f"Invalid boolean type '{boolean}'. Use: none, unite, subtract, intersect")
     return mapping[key]
 
 
@@ -56,14 +52,27 @@ def _boolean_option(boolean: str):
 # 1. nx_extrude
 # ---------------------------------------------------------------------------
 
+
 @mcp_tool(
     name="nx_extrude",
     description="Extrude a section or sketch by a given distance.",
     params={
         "distance": {"type": "number", "description": "Extrusion distance", "required": True},
-        "direction": {"type": "string", "description": "Extrusion direction (X, Y, Z, -X, -Y, -Z)", "required": False},
-        "boolean": {"type": "string", "description": "Boolean operation: none, unite, subtract, intersect", "required": False},
-        "sketch_name": {"type": "string", "description": "Name of the sketch to extrude (optional)", "required": False},
+        "direction": {
+            "type": "string",
+            "description": "Extrusion direction (X, Y, Z, -X, -Y, -Z)",
+            "required": False,
+        },
+        "boolean": {
+            "type": "string",
+            "description": "Boolean operation: none, unite, subtract, intersect",
+            "required": False,
+        },
+        "sketch_name": {
+            "type": "string",
+            "description": "Name of the sketch to extrude (optional)",
+            "required": False,
+        },
     },
 )
 async def nx_extrude(
@@ -95,7 +104,9 @@ async def nx_extrude(
         bool_type = _boolean_option(boolean)
 
         builder = work_part.Features.CreateExtrudeBuilder(None)
-        builder.SetDistance(NXOpen.Expression.ValueType.Double, distance, NXOpen.Unit.CollectionType.Millimeter)
+        builder.SetDistance(
+            NXOpen.Expression.ValueType.Double, distance, NXOpen.Unit.CollectionType.Millimeter
+        )
         builder.SetDirection(dir_vec)
         if bool_type is not None:
             builder.SetBooleanOperation(bool_type)
@@ -118,14 +129,31 @@ async def nx_extrude(
 # 2. nx_revolve
 # ---------------------------------------------------------------------------
 
+
 @mcp_tool(
     name="nx_revolve",
     description="Revolve a section or sketch around an axis.",
     params={
-        "angle": {"type": "number", "description": "Revolution angle in degrees (default 360)", "required": False},
-        "axis": {"type": "string", "description": "Axis of revolution (X, Y, Z)", "required": False},
-        "sketch_name": {"type": "string", "description": "Name of the sketch to revolve", "required": False},
-        "boolean": {"type": "string", "description": "Boolean operation: none, unite, subtract, intersect", "required": False},
+        "angle": {
+            "type": "number",
+            "description": "Revolution angle in degrees (default 360)",
+            "required": False,
+        },
+        "axis": {
+            "type": "string",
+            "description": "Axis of revolution (X, Y, Z)",
+            "required": False,
+        },
+        "sketch_name": {
+            "type": "string",
+            "description": "Name of the sketch to revolve",
+            "required": False,
+        },
+        "boolean": {
+            "type": "string",
+            "description": "Boolean operation: none, unite, subtract, intersect",
+            "required": False,
+        },
     },
 )
 async def nx_revolve(
@@ -157,7 +185,9 @@ async def nx_revolve(
         bool_type = _boolean_option(boolean)
 
         builder = work_part.Features.CreateRevolveBuilder(None)
-        builder.SetAngle(NXOpen.Expression.ValueType.Double, angle, NXOpen.Unit.CollectionType.Degree)
+        builder.SetAngle(
+            NXOpen.Expression.ValueType.Double, angle, NXOpen.Unit.CollectionType.Degree
+        )
         builder.SetAxis(axis_vec)
         if bool_type is not None:
             builder.SetBooleanOperation(bool_type)
@@ -180,13 +210,18 @@ async def nx_revolve(
 # 3. nx_sweep
 # ---------------------------------------------------------------------------
 
+
 @mcp_tool(
     name="nx_sweep",
     description="Sweep a section along a guide curve.",
     params={
         "section": {"type": "string", "description": "Name of the section curve", "required": True},
         "guide": {"type": "string", "description": "Name of the guide curve", "required": True},
-        "boolean": {"type": "string", "description": "Boolean operation: none, unite, subtract, intersect", "required": False},
+        "boolean": {
+            "type": "string",
+            "description": "Boolean operation: none, unite, subtract, intersect",
+            "required": False,
+        },
     },
 )
 async def nx_sweep(
@@ -209,9 +244,7 @@ async def nx_sweep(
                 suggestion="Use nx_list_sketches to see available sketches.",
             )
 
-        guide_obj = resolve_object_by_name(
-            work_part, guide, work_part.Sketches, work_part.Curves
-        )
+        guide_obj = resolve_object_by_name(work_part, guide, work_part.Sketches, work_part.Curves)
         if guide_obj is None:
             return ToolError(
                 error_code="NX_NOT_FOUND",
@@ -243,6 +276,7 @@ async def nx_sweep(
 # 4. nx_blend
 # ---------------------------------------------------------------------------
 
+
 @mcp_tool(
     name="nx_blend",
     description="Create an edge blend (fillet) on specified edges.",
@@ -265,7 +299,9 @@ async def nx_blend(
         work_part = NXSession.get_instance().require_work_part()
 
         builder = work_part.Features.CreateEdgeBlendBuilder(None)
-        builder.SetRadius(NXOpen.Expression.ValueType.Double, radius, NXOpen.Unit.CollectionType.Millimeter)
+        builder.SetRadius(
+            NXOpen.Expression.ValueType.Double, radius, NXOpen.Unit.CollectionType.Millimeter
+        )
         for edge_name in edges:
             builder.AddEdge(edge_name)
 
@@ -284,6 +320,7 @@ async def nx_blend(
 # ---------------------------------------------------------------------------
 # 5. nx_chamfer
 # ---------------------------------------------------------------------------
+
 
 @mcp_tool(
     name="nx_chamfer",
@@ -307,7 +344,9 @@ async def nx_chamfer(
         work_part = NXSession.get_instance().require_work_part()
 
         builder = work_part.Features.CreateChamferBuilder(None)
-        builder.SetOffset(NXOpen.Expression.ValueType.Double, offset, NXOpen.Unit.CollectionType.Millimeter)
+        builder.SetOffset(
+            NXOpen.Expression.ValueType.Double, offset, NXOpen.Unit.CollectionType.Millimeter
+        )
         for edge_name in edges:
             builder.AddEdge(edge_name)
 
@@ -326,6 +365,7 @@ async def nx_chamfer(
 # ---------------------------------------------------------------------------
 # 6. nx_hole
 # ---------------------------------------------------------------------------
+
 
 @mcp_tool(
     name="nx_hole",
@@ -351,8 +391,12 @@ async def nx_hole(
         work_part = NXSession.get_instance().require_work_part()
 
         builder = work_part.Features.CreateHoleBuilder(None)
-        builder.SetDiameter(NXOpen.Expression.ValueType.Double, diameter, NXOpen.Unit.CollectionType.Millimeter)
-        builder.SetDepth(NXOpen.Expression.ValueType.Double, depth, NXOpen.Unit.CollectionType.Millimeter)
+        builder.SetDiameter(
+            NXOpen.Expression.ValueType.Double, diameter, NXOpen.Unit.CollectionType.Millimeter
+        )
+        builder.SetDepth(
+            NXOpen.Expression.ValueType.Double, depth, NXOpen.Unit.CollectionType.Millimeter
+        )
         builder.SetLocation(x, y, z)
 
         feature = builder.Commit()
@@ -360,7 +404,12 @@ async def nx_hole(
         builder.Destroy()
 
         return ToolResult.success(
-            data={"feature": feature_name, "diameter": diameter, "depth": depth, "location": [x, y, z]},
+            data={
+                "feature": feature_name,
+                "diameter": diameter,
+                "depth": depth,
+                "location": [x, y, z],
+            },
             message=f"Created hole '{feature_name}' (dia={diameter}, depth={depth}) at ({x}, {y}, {z}).",
         )
     except Exception as exc:
@@ -371,6 +420,7 @@ async def nx_hole(
 # 7. nx_pattern
 # ---------------------------------------------------------------------------
 
+
 @mcp_tool(
     name="nx_pattern",
     description="Create a linear pattern of features.",
@@ -380,10 +430,18 @@ async def nx_hole(
             "description": "List of feature names to pattern",
             "required": True,
         },
-        "pattern_type": {"type": "string", "description": "Pattern type (e.g. linear, circular)", "required": True},
+        "pattern_type": {
+            "type": "string",
+            "description": "Pattern type (e.g. linear, circular)",
+            "required": True,
+        },
         "count": {"type": "integer", "description": "Number of instances", "required": True},
         "spacing": {"type": "number", "description": "Spacing between instances", "required": True},
-        "direction": {"type": "string", "description": "Pattern direction (X, Y, Z)", "required": True},
+        "direction": {
+            "type": "string",
+            "description": "Pattern direction (X, Y, Z)",
+            "required": True,
+        },
     },
 )
 async def nx_pattern(
@@ -402,7 +460,9 @@ async def nx_pattern(
         builder = work_part.Features.CreatePatternBuilder(None)
         builder.SetPatternType(pattern_type)
         builder.SetCount(count)
-        builder.SetSpacing(NXOpen.Expression.ValueType.Double, spacing, NXOpen.Unit.CollectionType.Millimeter)
+        builder.SetSpacing(
+            NXOpen.Expression.ValueType.Double, spacing, NXOpen.Unit.CollectionType.Millimeter
+        )
         builder.SetDirection(dir_vec)
         for feat_name in features:
             builder.AddFeature(feat_name)
@@ -428,6 +488,7 @@ async def nx_pattern(
 # ---------------------------------------------------------------------------
 # 8. nx_boolean
 # ---------------------------------------------------------------------------
+
 
 @mcp_tool(
     name="nx_boolean",
@@ -487,11 +548,16 @@ async def nx_boolean(
 # 9. nx_delete_feature
 # ---------------------------------------------------------------------------
 
+
 @mcp_tool(
     name="nx_delete_feature",
     description="Delete a feature by name. Returns available features if not found.",
     params={
-        "name": {"type": "string", "description": "Name of the feature to delete", "required": True},
+        "name": {
+            "type": "string",
+            "description": "Name of the feature to delete",
+            "required": True,
+        },
     },
 )
 async def nx_delete_feature(name: str) -> ToolResult | ToolError:
@@ -525,6 +591,7 @@ async def nx_delete_feature(name: str) -> ToolResult | ToolError:
 # ---------------------------------------------------------------------------
 # 10. nx_edit_feature
 # ---------------------------------------------------------------------------
+
 
 @mcp_tool(
     name="nx_edit_feature",
@@ -575,12 +642,17 @@ async def nx_edit_feature(
 # 11. nx_mirror_body
 # ---------------------------------------------------------------------------
 
+
 @mcp_tool(
     name="nx_mirror_body",
     description="Mirror a body across a datum plane.",
     params={
         "body": {"type": "string", "description": "Name of the body to mirror", "required": True},
-        "plane": {"type": "string", "description": "Name of the datum plane for mirroring", "required": True},
+        "plane": {
+            "type": "string",
+            "description": "Name of the datum plane for mirroring",
+            "required": True,
+        },
     },
 )
 async def nx_mirror_body(

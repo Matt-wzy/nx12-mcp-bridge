@@ -6,10 +6,10 @@ from nx_mcp.nx_session import NXSession
 from nx_mcp.response import ToolError, ToolResult
 from nx_mcp.tools.registry import mcp_tool
 
-
 # ---------------------------------------------------------------------------
 # 1. nx_measure_distance
 # ---------------------------------------------------------------------------
+
 
 @mcp_tool(
     name="nx_measure_distance",
@@ -77,6 +77,7 @@ async def nx_measure_distance(obj1: str, obj2: str) -> ToolResult | ToolError:
 # 2. nx_measure_angle
 # ---------------------------------------------------------------------------
 
+
 @mcp_tool(
     name="nx_measure_angle",
     description="Measure the angle between two objects in the work part.",
@@ -143,6 +144,7 @@ async def nx_measure_angle(obj1: str, obj2: str) -> ToolResult | ToolError:
 # 3. nx_measure_volume
 # ---------------------------------------------------------------------------
 
+
 @mcp_tool(
     name="nx_measure_volume",
     description="Measure the volume of a body (or all bodies) in the work part. Returns volume in mm3 and cm3.",
@@ -195,11 +197,13 @@ async def nx_measure_volume(body: str | None = None) -> ToolResult | ToolError:
             volume_mm3 = mass_props.Volume
             volume_cm3 = volume_mm3 / 1000.0
             total_volume_mm3 += volume_mm3
-            results.append({
-                "body": b.Name,
-                "volume_mm3": volume_mm3,
-                "volume_cm3": volume_cm3,
-            })
+            results.append(
+                {
+                    "body": b.Name,
+                    "volume_mm3": volume_mm3,
+                    "volume_cm3": volume_cm3,
+                }
+            )
 
         data: dict = {"bodies": results}
         if len(target_bodies) > 1:

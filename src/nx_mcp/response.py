@@ -68,7 +68,7 @@ class ToolResult:
         )
 
     def to_text(self) -> str:
-        output = {"status": self.status, "message": self.message}
+        output: dict[str, Any] = {"status": self.status, "message": self.message}
         if self.data:
             output["data"] = self.data
         return json.dumps(output, indent=2, ensure_ascii=False)

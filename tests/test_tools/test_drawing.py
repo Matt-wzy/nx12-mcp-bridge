@@ -10,10 +10,10 @@ import pytest
 from nx_mcp.nx_session import NXSession
 from nx_mcp.tools.registry import ToolRegistry
 
-
 # ---------------------------------------------------------------------------
 # Reusable helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_mock_nxopen():
     """Build a self-contained mock NXOpen module tree for drawing tests."""
@@ -70,17 +70,13 @@ def _make_mock_nxopen():
     mock_dim_builder.Commit = MagicMock(return_value=mock_dim)
     mock_dim_builder.Destroy = MagicMock()
     mock_work_part.Annotations = MagicMock()
-    mock_work_part.Annotations.CreateDimensionBuilder = MagicMock(
-        return_value=mock_dim_builder
-    )
+    mock_work_part.Annotations.CreateDimensionBuilder = MagicMock(return_value=mock_dim_builder)
 
     # --- ExportManager ---
     mock_pdf_exporter = MagicMock()
     mock_pdf_exporter.Apply = MagicMock()
     mock_work_part.ExportManager = MagicMock()
-    mock_work_part.ExportManager.CreatePdfExporter = MagicMock(
-        return_value=mock_pdf_exporter
-    )
+    mock_work_part.ExportManager.CreatePdfExporter = MagicMock(return_value=mock_pdf_exporter)
 
     # --- UF ---
     uf = types.ModuleType("NXOpen.UF")
@@ -117,6 +113,7 @@ def _setup_nx():
 # ---------------------------------------------------------------------------
 # nx_create_drawing
 # ---------------------------------------------------------------------------
+
 
 class TestCreateDrawing:
     """Tests for nx_create_drawing tool."""
@@ -163,6 +160,7 @@ class TestCreateDrawing:
 # nx_add_base_view
 # ---------------------------------------------------------------------------
 
+
 class TestAddBaseView:
     """Tests for nx_add_base_view tool."""
 
@@ -207,6 +205,7 @@ class TestAddBaseView:
 # nx_add_projection_view
 # ---------------------------------------------------------------------------
 
+
 class TestAddProjectionView:
     """Tests for nx_add_projection_view tool."""
 
@@ -250,6 +249,7 @@ class TestAddProjectionView:
 # ---------------------------------------------------------------------------
 # nx_add_dimension
 # ---------------------------------------------------------------------------
+
 
 class TestAddDimension:
     """Tests for nx_add_dimension tool."""
@@ -330,6 +330,7 @@ class TestAddDimension:
 # nx_export_drawing_pdf
 # ---------------------------------------------------------------------------
 
+
 class TestExportDrawingPdf:
     """Tests for nx_export_drawing_pdf tool."""
 
@@ -351,9 +352,7 @@ class TestExportDrawingPdf:
         NXSession._instance = MagicMock(spec=NXSession)
         NXSession._instance.is_connected = True
         NXSession._instance.require.return_value = nxopen._mock_session
-        NXSession._instance.require_work_part.side_effect = RuntimeError(
-            "No work part is open."
-        )
+        NXSession._instance.require_work_part.side_effect = RuntimeError("No work part is open.")
 
         handler = ToolRegistry.get_handler("nx_export_drawing_pdf")
         result = await handler(path=r"C:\output\drawing.pdf")
@@ -365,6 +364,7 @@ class TestExportDrawingPdf:
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
+
 
 class TestToolRegistration:
     """Verify all 5 drawing tools are registered."""

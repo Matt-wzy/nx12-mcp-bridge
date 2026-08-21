@@ -78,8 +78,6 @@ async def nx_create_part(path: str, units: str = "mm") -> ToolResult | ToolError
 async def nx_open_part(path: str) -> ToolResult | ToolError:
     """Open an existing NX part file."""
     try:
-        import NXOpen
-
         session = NXSession.get_instance().require()
 
         _base_part, _load_status = session.Parts.OpenBaseDisplay(path)
@@ -109,7 +107,9 @@ async def nx_save_part() -> ToolResult | ToolError:
 
         part = NXSession.get_instance().require_work_part()
 
-        part.Save(NXOpen.BasePart.SaveComponents.TrueValue, NXOpen.BasePart.CloseAfterSave.FalseValue)
+        part.Save(
+            NXOpen.BasePart.SaveComponents.TrueValue, NXOpen.BasePart.CloseAfterSave.FalseValue
+        )
 
         return ToolResult.success(
             data={"path": part.FullPath, "name": part.Name},
@@ -176,7 +176,9 @@ async def nx_close_part(save: bool = True) -> ToolResult | ToolError:
         part_path = part.FullPath
 
         if save:
-            part.Save(NXOpen.BasePart.SaveComponents.TrueValue, NXOpen.BasePart.CloseAfterSave.FalseValue)
+            part.Save(
+                NXOpen.BasePart.SaveComponents.TrueValue, NXOpen.BasePart.CloseAfterSave.FalseValue
+            )
 
         session.Parts.CloseDisplay(part, NXOpen.BasePart.CloseModified.CloseModified, None)
 
@@ -219,8 +221,6 @@ _EXPORT_FORMATS = {
 async def nx_export_step(path: str, format: str = "step") -> ToolResult | ToolError:  # noqa: A002
     """Export the current work part to a CAD interchange format."""
     try:
-        import NXOpen
-
         fmt_key = format.lower().strip()
         if fmt_key not in _EXPORT_FORMATS:
             valid = ", ".join(_EXPORT_FORMATS.keys())
@@ -281,8 +281,6 @@ _IMPORT_EXTENSIONS = {".stp", ".step", ".igs", ".iges", ".x_t", ".x_b"}
 async def nx_import_geometry(path: str) -> ToolResult | ToolError:
     """Import geometry from an external CAD file into the current work part."""
     try:
-        import NXOpen
-
         ext = os.path.splitext(path)[1].lower()
         if ext not in _IMPORT_EXTENSIONS:
             valid = ", ".join(sorted(_IMPORT_EXTENSIONS))
@@ -328,19 +326,19 @@ async def nx_import_geometry(path: str) -> ToolResult | ToolError:
 async def nx_list_open_parts() -> ToolResult | ToolError:
     """List all currently open parts."""
     try:
-        import NXOpen
-
         session = NXSession.get_instance().require()
 
         parts_array = session.Parts.ToArray()
         work_name = session.Parts.Work.Name if session.Parts.Work is not None else None
         parts_list = []
         for p in parts_array:
-            parts_list.append({
-                "name": p.Name,
-                "path": p.FullPath,
-                "is_work": p.Name == work_name if work_name is not None else False,
-            })
+            parts_list.append(
+                {
+                    "name": p.Name,
+                    "path": p.FullPath,
+                    "is_work": p.Name == work_name if work_name is not None else False,
+                }
+            )
 
         return ToolResult.success(
             data={"parts": parts_list, "count": len(parts_list)},

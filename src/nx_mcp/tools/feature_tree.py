@@ -21,11 +21,13 @@ async def nx_list_features() -> ToolResult | ToolError:
         features = work_part.Features.ToArray()
         feature_list = []
         for f in features:
-            feature_list.append({
-                "name": f.Name,
-                "type": f.FeatureType,
-                "timestamp": f.Timestamp,
-            })
+            feature_list.append(
+                {
+                    "name": f.Name,
+                    "type": f.FeatureType,
+                    "timestamp": f.Timestamp,
+                }
+            )
 
         return ToolResult.success(
             data={"features": feature_list, "count": len(feature_list)},
@@ -69,10 +71,12 @@ async def nx_get_feature_info(name: str) -> ToolResult | ToolError:
 
         expressions = []
         for expr in target.GetExpressions():
-            expressions.append({
-                "name": expr.Name,
-                "value": expr.Value,
-            })
+            expressions.append(
+                {
+                    "name": expr.Name,
+                    "value": expr.Value,
+                }
+            )
 
         return ToolResult.success(
             data={

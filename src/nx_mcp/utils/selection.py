@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 from typing import Any
 
 
@@ -48,10 +49,8 @@ def create_collector_from_names(
     for collection_name in ("Features", "Bodies", "Curves"):
         collection = getattr(work_part, collection_name, None)
         if collection is not None:
-            try:
+            with contextlib.suppress(Exception):
                 all_objects.extend(collection.ToArray())
-            except Exception:
-                pass
 
     resolved: list[Any] = []
     for name in names:

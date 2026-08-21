@@ -394,7 +394,10 @@ def test_explicit_sketch_workflow_adds_geometry_to_the_referenced_sketch(tmp_pat
     sketch = session.Parts.Work.Sketches.values[-1]
     assert created["object"]["name"] == "PROFILE"
     assert session.Parts.Work.Planes.last_plane.normal == (0.0, 0.0, 1.0)
-    assert session.Parts.Work.Sketches.last_builder.PlaneReference is session.Parts.Work.Planes.last_plane
+    assert (
+        session.Parts.Work.Sketches.last_builder.PlaneReference
+        is session.Parts.Work.Planes.last_plane
+    )
     assert line["object"]["kind"] == "curve"
     assert len(rectangle["objects"]) == 4
     assert len(sketch.geometry) == 5

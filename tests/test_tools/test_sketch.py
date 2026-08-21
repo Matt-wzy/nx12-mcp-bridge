@@ -10,10 +10,10 @@ import pytest
 from nx_mcp.nx_session import NXSession
 from nx_mcp.tools.registry import ToolRegistry
 
-
 # ---------------------------------------------------------------------------
 # Reusable helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_mock_nxopen():
     """Build a self-contained mock NXOpen module tree for sketch tests."""
@@ -165,6 +165,7 @@ def _setup_nx():
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestCreateSketch:
     """Test nx_create_sketch tool."""

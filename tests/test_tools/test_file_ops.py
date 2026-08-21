@@ -10,10 +10,10 @@ import pytest
 from nx_mcp.nx_session import NXSession
 from nx_mcp.tools.registry import ToolRegistry
 
-
 # ---------------------------------------------------------------------------
 # Reusable helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_mock_nxopen():
     """Build a self-contained mock NXOpen module tree for file_ops tests."""
@@ -52,9 +52,7 @@ def _make_mock_nxopen():
     # --- OpenBaseDisplay ---
     mock_base_part = MagicMock()
     mock_load_status = MagicMock()
-    mock_session.Parts.OpenBaseDisplay = MagicMock(
-        return_value=(mock_base_part, mock_load_status)
-    )
+    mock_session.Parts.OpenBaseDisplay = MagicMock(return_value=(mock_base_part, mock_load_status))
 
     # --- DexManager ---
     dex_manager = MagicMock()
@@ -120,6 +118,7 @@ def _setup_nx():
 # nx_create_part
 # ---------------------------------------------------------------------------
 
+
 class TestCreatePart:
     """Test nx_create_part tool."""
 
@@ -151,6 +150,7 @@ class TestCreatePart:
 # nx_open_part
 # ---------------------------------------------------------------------------
 
+
 class TestOpenPart:
     """Test nx_open_part tool."""
 
@@ -171,6 +171,7 @@ class TestOpenPart:
 # ---------------------------------------------------------------------------
 # nx_list_open_parts
 # ---------------------------------------------------------------------------
+
 
 class TestListOpenParts:
     """Tests for nx_list_open_parts tool."""
@@ -219,6 +220,7 @@ class TestListOpenParts:
 # nx_save_part
 # ---------------------------------------------------------------------------
 
+
 class TestSavePart:
     """Tests for nx_save_part tool."""
 
@@ -238,6 +240,7 @@ class TestSavePart:
 # ---------------------------------------------------------------------------
 # nx_export_step
 # ---------------------------------------------------------------------------
+
 
 class TestExportStep:
     """Tests for nx_export_step tool."""
@@ -281,6 +284,7 @@ class TestExportStep:
 # ---------------------------------------------------------------------------
 # Tool registration
 # ---------------------------------------------------------------------------
+
 
 class TestToolRegistration:
     """Verify all 8 file_ops tools are registered."""

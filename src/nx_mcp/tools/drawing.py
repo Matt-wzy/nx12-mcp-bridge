@@ -6,7 +6,6 @@ from nx_mcp.nx_session import NXSession
 from nx_mcp.response import ToolError, ToolResult
 from nx_mcp.tools.registry import mcp_tool
 
-
 # ---------------------------------------------------------------------------
 # Valid lookup tables
 # ---------------------------------------------------------------------------

@@ -10,10 +10,10 @@ import pytest
 from nx_mcp.nx_session import NXSession
 from nx_mcp.tools.registry import ToolRegistry
 
-
 # ---------------------------------------------------------------------------
 # Reusable helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_mock_nxopen():
     """Build a self-contained mock NXOpen module tree for assembly tests."""
@@ -117,6 +117,7 @@ def _setup_nx():
 # Tests
 # ---------------------------------------------------------------------------
 
+
 class TestAddComponent:
     """Test nx_add_component tool."""
 
@@ -196,7 +197,6 @@ class TestMateComponent:
 
         for mtype in ("touch", "align", "orient", "center", "align_angle"):
             ToolRegistry.clear()
-            import nx_mcp.tools.assembly as mod
             result = await handler(component="Bracket", mate_type=mtype)
             parsed = json.loads(result.to_text())
             assert parsed["status"] == "success", f"mate_type={mtype} should succeed"

@@ -14,6 +14,7 @@ from nx_mcp.tools.registry import ToolRegistry
 # Reusable helpers
 # ---------------------------------------------------------------------------
 
+
 def _make_mock_nxopen():
     """Build a self-contained mock NXOpen module tree."""
     nxopen = types.ModuleType("NXOpen")
@@ -148,6 +149,7 @@ def _setup_nx():
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
+
 
 class TestExtrude:
     """Test nx_extrude tool."""

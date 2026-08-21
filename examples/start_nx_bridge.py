@@ -3,9 +3,8 @@
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import sys
-
+from pathlib import Path
 
 source_root = Path(__file__).resolve().parents[1] / "src"
 if source_root.is_dir():
