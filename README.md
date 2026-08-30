@@ -123,3 +123,16 @@ absolute path of `run_journal.exe`.
 See [architecture](docs/architecture.md), [0.1 migration](docs/migration-0.2.md),
 and [real NX validation](docs/real-nx-validation.md) for implementation and
 release gates.
+
+## Star History
+
+<picture>
+  <source
+    media="(prefers-color-scheme: dark)"
+    srcset="https://raw.githubusercontent.com/DreamEnding/NX_MCP/star-history/assets/star-history-dark.svg"
+  />
+  <img
+    alt="Star History Chart"
+    src="https://raw.githubusercontent.com/DreamEnding/NX_MCP/star-history/assets/star-history.svg"
+  />
+</picture>
