@@ -27,6 +27,7 @@
 //   nx_edge_blend <body_id> <radius> [edge_indices csv]
 //   nx_chamfer <body_id> <offset> [edge_indices csv]
 //   nx_unite <target_body_id> <tool_body_ids csv>
+//   nx_revolve <sketch_id> <ax> <ay> <bx> <by> <angle> [reverse=0|1]
 //   nx_fit_view
 //   nx_export_step <step-path>
 //   nx_build_plate_test           (single-command acceptance part)
@@ -287,6 +288,8 @@ public static class NX_MCP_Loader
                 return Chamfer(parts);
             case "nx_unite":
                 return Unite(parts);
+            case "nx_revolve":
+                return Revolve(parts);
             case "nx_fit_view":
                 return FitView();
             case "nx_export_step":
@@ -523,6 +526,68 @@ public static class NX_MCP_Loader
             return OkJson("body_id", bid, "extruded " + dist + (reverse ? " (rev)" : ""));
         }
         return OkJson("extruded subtract ok");
+    }
+
+    private static string Revolve(string[] parts)
+    {
+        if (parts.Length < 7) return ErrJson("usage: nx_revolve <sketch_id> <ax> <ay> <bx> <by> <angle> [reverse]");
+        var sk = GetSketch(parts[1]);
+        double ax = D(parts[2]), ay = D(parts[3]);
+        double bx = D(parts[4]), by = D(parts[5]);
+        double angle = D(parts[6]);
+        bool reverse = parts.Length > 7 && parts[7] == "1";
+
+        double vx = bx - ax, vy = by - ay;
+        double len = Math.Sqrt(vx * vx + vy * vy);
+        if (len < 1e-9) return ErrJson("revolve axis has zero length");
+        vx /= len; vy /= len;
+        if (reverse) { vx = -vx; vy = -vy; }
+
+        var section = _part.Sections.CreateSection();
+        var rule = _part.ScRuleFactory.CreateRuleCurveFeature(new Feature[] { sk.Feature });
+        section.AddToSection(
+            new SelectionIntentRule[] { rule }, null, null, null,
+            new Point3d(0.0, 0.0, 0.0), Section.Mode.Create, false);
+
+        NXOpen.Axis axis;
+        try
+        {
+            NXOpen.Point axisPoint = _part.Points.CreatePoint(new Point3d(ax, ay, 0.0));
+            NXOpen.Direction axisDir = _part.Directions.CreateDirection(
+                axisPoint, new Vector3d(vx, vy, 0.0));
+            axis = _part.Axes.CreateAxis(axisPoint, axisDir, SmartObject.UpdateOption.WithinModeling);
+        }
+        catch (Exception e) { return ErrJson("revolve[axis] failed: " + e.Message); }
+
+        var b = _part.Features.CreateRevolveBuilder(null);
+        Feature feature;
+        try
+        {
+            b.Section = section;
+            b.Axis = axis;
+            b.Limits.StartExtend.Value.RightHandSide = "0";
+            b.Limits.EndExtend.Value.RightHandSide = angle.ToString("0.###", CultureInfo.InvariantCulture);
+            b.BooleanOperation.Type = BooleanOperation.BooleanType.Create;
+            feature = b.CommitFeature();
+        }
+        catch (Exception e)
+        {
+            try { b.Destroy(); } catch { }
+            return ErrJson("revolve[commit] failed: " + e.Message);
+        }
+        b.Destroy();
+
+        Body[] bodies = _part.Bodies.ToArray();
+        Body newBody = null;
+        if (bodies.Length > 0) newBody = bodies[bodies.Length - 1];
+        if (newBody != null)
+        {
+            _bodyCounter++;
+            string bid = "BODY_" + _bodyCounter;
+            _bodies[bid] = newBody;
+            return OkJson("body_id", bid, "revolved " + angle + " deg");
+        }
+        return ErrJson("revolve produced no body");
     }
 
     private static string Hole(string[] parts)

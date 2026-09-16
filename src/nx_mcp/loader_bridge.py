@@ -125,6 +125,12 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
         else:
             csv = ",".join(str(i) for i in ids)
         return "nx_unite %s %s" % (params["target_body_id"], csv)
+    if method == "nx_revolve":
+        sx, sy = _p2(params, "axis_start")
+        ex, ey = _p2(params, "axis_end")
+        return "nx_revolve %s %s %s %s %s %s %s" % (
+            params["sketch_id"], _fmt(sx), _fmt(sy), _fmt(ex), _fmt(ey),
+            _fmt(params.get("angle", 360.0)), _fmt(params.get("reverse", False)))
     if method == "nx_fit_view":
         return "nx_fit_view"
     return None  # unsupported by the phase-1 Loader
@@ -275,7 +281,7 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
         }
     if method in ("nx_create_sketch", "nx_sketch_line", "nx_sketch_circle",
                   "nx_sketch_arc", "nx_finish_sketch", "nx_hole",
-                  "nx_edge_blend", "nx_chamfer"):
+                  "nx_edge_blend", "nx_chamfer", "nx_revolve"):
         obj_id = (
             resp.get("sketch_id")
             or resp.get("body_id")
@@ -283,7 +289,7 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
             or params.get("body_id")
             or ""
         )
-        kind: ObjectKind = "body" if method in ("nx_hole", "nx_edge_blend", "nx_chamfer") else "sketch"
+        kind: ObjectKind = "body" if method in ("nx_hole", "nx_edge_blend", "nx_chamfer", "nx_revolve") else "sketch"
         return {"status": "success", "object": _ref(kind, obj_id, part_id), "message": msg}
     return {"status": "success", "message": msg}
 

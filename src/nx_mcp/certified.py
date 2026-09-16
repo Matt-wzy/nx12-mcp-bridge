@@ -49,6 +49,7 @@ CERTIFIED_TOOL_NAMES = {
     "nx_edge_blend",
     "nx_chamfer",
     "nx_unite",
+    "nx_revolve",
     "nx_undo",
     "nx_fit_view",
     "nx_release",
@@ -300,6 +301,33 @@ def create_certified_server(
             **await call(
                 "nx_unite",
                 {"target_body_id": target_body_id, "tool_body_ids": tool_body_ids},
+            )
+        )
+
+    @mcp.tool()
+    async def nx_revolve(
+        sketch_id: str,
+        axis_start: Point2D,
+        axis_end: Point2D,
+        angle: Annotated[float, Field(gt=0, le=360, allow_inf_nan=False)] = 360.0,
+        reverse: bool = False,
+    ) -> ObjectResult:
+        """Revolve a closed sketch section around an in-sketch 2D axis.
+
+        Creates a new solid only (no unite/subtract). ``axis_start`` and
+        ``axis_end`` are sketch XY coordinates defining the revolution axis;
+        ``angle`` is the sweep angle in degrees (0 < angle <= 360).
+        """
+        return ObjectResult(
+            **await call(
+                "nx_revolve",
+                {
+                    "sketch_id": sketch_id,
+                    "axis_start": axis_start.model_dump(),
+                    "axis_end": axis_end.model_dump(),
+                    "angle": angle,
+                    "reverse": reverse,
+                },
             )
         )
 
