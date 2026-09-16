@@ -24,9 +24,10 @@ installation; no cloud service is involved.
 ### 1. Visual bridge mode (interactive, step by step)
 
 Start a persistent bridge inside NX, then drive modeling from an MCP client.
-Each tool call executes in the visible NX window; after every call the bridge
-releases the NX GUI so the part stays manually editable between steps. Finish
-with the `nx_release` tool to stop the bridge and keep editing normally.
+Each tool call executes in the visible NX window so the modeling process is
+clearly visible. The NX journal stays active while the bridge is up; finish
+with the `nx_release` tool to stop the bridge and restore normal manual
+editing in NX.
 
 **Start** — inside NX press `Alt+F8`, pick
 `examples/start_nx_bridge_gui.py`, run. The journal auto-detects the workspace
@@ -46,12 +47,13 @@ file is created.
 ```
 
 **End** — call the `nx_release` tool; the bridge stops about a second later and
-the NX GUI is fully editable without restarting NX.
+NX returns to normal manual editing without restarting the application.
 
-### 2. Batch mode (scripted, no bridge, no lock)
+### 2. Batch mode (scripted, no persistent bridge)
 
-Define a model as JSON, run one journal, get `.prt` + `.step`. No bridge, no
-persistent process, NX is never locked.
+Define a model as JSON, run one journal, get `.prt` + `.step`. There is no
+persistent bridge lock; the journal completes and NX automatically returns to
+normal.
 
 1. Write `batch_task.json` in the workspace (see
    [examples/batch_task.sample.json](examples/batch_task.sample.json)).
@@ -88,7 +90,7 @@ All machine-specific paths are auto-detected; nothing is hardcoded.
 
 | Item | Resolution order |
 | --- | --- |
-| NX install (`UGII_BASE_DIR`) | `UGII_BASE_DIR` env → `PATH` (`ugraf.exe` / `run_journal.exe`) → `%ProgramFiles%\Siemens\NX*` / `%ProgramW6432%\Siemens\NX*` |
+| NX install (`UGII_BASE_DIR`) | `UGII_BASE_DIR` env → Machine-level registry (`HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment`) → `PATH` (`ugraf.exe` / `run_journal.exe`) → `%ProgramFiles%\Siemens\NX*` / `%ProgramW6432%\Siemens\NX*` |
 | Workspace (`NX_MCP_WORKSPACE`) | `NX_MCP_WORKSPACE` env → `%USERPROFILE%\NX_MCP_WORKSPACE` |
 | License server | `UGS_LICENSE_SERVER` env → `27800@localhost` default |
 
@@ -126,7 +128,7 @@ Automated regression run on 2026-09-17, Siemens NX 2506, batch + visual bridge:
 
 | Check | Result |
 | --- | --- |
-| Batch mode: `batch_build_gui.py` (100×60×10 base, 60×40×30 boss, Ø12 hole, 24×16×6 subtract, C2 chamfer ×38 edges, R3 blend ×79 edges) | ✅ PRT 913 KB + STEP 227 KB, auto workspace detection |
+| Batch mode: `batch_build_gui.py` (100×60×10 base, 60×40×30 boss, Ø12 hole, 24×16×6 subtract, C2 chamfer ×38 edges, R3 blend ×80 edges) | ✅ PRT 922 KB + STEP 234 KB, auto workspace detection |
 | Visual bridge: circle sketch + cylinder | ✅ |
 | Visual bridge: arc sketch | ✅ |
 | Visual bridge: boolean subtract | ✅ |
@@ -150,9 +152,10 @@ covered by CI.
   edges produces many small features in the part navigator. Edges that NX
   rejects (e.g. already-blended edges) are skipped and reported in the journal.
   Prefer chamfer before blend when both target the same edges.
-- **Visual bridge is a journal**: NX shows a "working" indicator while the
-  bridge is up. The GUI remains responsive and editable between MCP calls; the
-  indicator disappears after `nx_release`.
+- **Visual bridge is a journal**: while the bridge is up, NX shows a "working"
+  indicator and the Journal keeps control of the session; the modeling steps
+  are visible in the window. After `nx_release` the bridge stops and NX
+  returns to normal manual editing.
 - **Units**: always pass `units="mm"` (or inch) explicitly when creating a part.
   NX_MCP does not guess units.
 - **Object IDs** are session-scoped, not persistent asset IDs; re-query after

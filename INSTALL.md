@@ -58,9 +58,9 @@ to start the sidecar:
 ```
 
 Use the client to call `nx_create_part`, sketch/extrude, etc. When done, call
-`nx_release` to unlock the NX GUI.
+`nx_release` to stop the bridge and restore normal manual editing in NX.
 
-## 4. Batch mode (no bridge, no lock)
+## 4. Batch mode (no persistent bridge)
 
 1. Write `batch_task.json` in the workspace (copy
    `examples\batch_task.sample.json` and edit it).

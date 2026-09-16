@@ -1,10 +1,11 @@
 """Batch model builder for Siemens NX - runs once, outputs PRT + STEP, exits.
 
-BATCH MODE (no bridge, no NX lock):
+BATCH MODE (no persistent bridge lock):
   - Run via Alt+F8 (pick this file) or place a copy in <user_dir>/startup for
     automatic execution at NX launch.
   - Reads batch_task.json from the workspace, builds the model, saves PRT,
-    exports STEP, writes batch_result.json, then exits. NX is never locked.
+    exports STEP, writes batch_result.json, then exits. There is no persistent
+    bridge lock; the journal completes and NX returns to normal.
 
 Workspace resolution order:
   1. NX_MCP_WORKSPACE environment variable
