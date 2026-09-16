@@ -45,7 +45,7 @@ Set `$workspace` to the disposable directory whose **current** NX acceptance
 passed. Both input and output arguments are relative to this directory:
 
 ```powershell
-$workspace = "D:\NX_MCP_WORKSPACE" # Replace with this run's actual workspace.
+$workspace = "<workspace>" # Replace with this run's actual workspace.
 & $usdPython examples/validate_step_to_usd.py --workspace $workspace `
     --input acceptance/run-01.stp --output-dir usd-check-a
 if ($LASTEXITCODE -ne 0) { throw "First USD validation failed; inspect its report/logs." }

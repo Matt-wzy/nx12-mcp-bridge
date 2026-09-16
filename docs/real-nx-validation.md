@@ -99,7 +99,7 @@ this batch mode.
 ## Acceptance command
 
 ```powershell
-python -m nx_mcp.real_smoke --workspace D:\NX_MCP_WORKSPACE --iterations 20 --run-prefix acceptance
+python -m nx_mcp.real_smoke --workspace <workspace> --iterations 20 --run-prefix acceptance
 ```
 
 Every iteration must connect, create a metric part, create and finish an XY

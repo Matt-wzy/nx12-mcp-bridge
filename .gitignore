@@ -22,3 +22,13 @@ venv/
 .coverage
 coverage.xml
 htmlcov/
+
+# runtime artifacts, logs, NX parts and local configs (never commit)
+*.log
+*.prt
+*.step
+*.stp
+*.dlx
+bridge.json
+mcp-client-config.json
+*.nx-mcp-workspace/

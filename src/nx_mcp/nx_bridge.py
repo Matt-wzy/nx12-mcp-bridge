@@ -9,6 +9,7 @@ import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from nx_mcp.bridge import (
@@ -30,8 +31,13 @@ class NXOpenExecutor:
         "nx_create_sketch",
         "nx_sketch_line",
         "nx_sketch_rectangle",
+        "nx_sketch_circle",
+        "nx_sketch_arc",
         "nx_finish_sketch",
         "nx_extrude",
+        "nx_hole",
+        "nx_edge_blend",
+        "nx_chamfer",
     }
 
     def __init__(
@@ -67,10 +73,16 @@ class NXOpenExecutor:
             "nx_create_sketch": self._create_sketch,
             "nx_sketch_line": self._sketch_line,
             "nx_sketch_rectangle": self._sketch_rectangle,
+            "nx_sketch_circle": self._sketch_circle,
+            "nx_sketch_arc": self._sketch_arc,
             "nx_finish_sketch": self._finish_sketch,
             "nx_extrude": self._extrude,
+            "nx_hole": self._hole,
+            "nx_edge_blend": self._edge_blend,
+            "nx_chamfer": self._chamfer,
             "nx_undo": self._undo,
             "nx_fit_view": self._fit_view,
+            "nx_release": self._release,
         }
 
     def execute(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -335,12 +347,39 @@ class NXOpenExecutor:
         return {"message": f"Closed part: {part_name}"}
 
     def _export_step(self, path: str) -> dict[str, Any]:
-        self._work_part()
+        part = self._work_part()
         destination = self.workspace.ensure_inside(path)
         destination.parent.mkdir(parents=True, exist_ok=True)
+        part_path = getattr(part, "FullPath", "")
+        if not isinstance(part_path, str) or not part_path or not Path(part_path).is_absolute():
+            raise NXToolError(
+                "NX_INVALID_ARGUMENT",
+                "The work part has no absolute save path; save the part before exporting STEP.",
+            )
+        if not Path(part_path).is_file():
+            save_status = None
+            try:
+                save_status = part.Save(
+                    self.nxopen.BasePart.SaveComponents.FalseValue,
+                    self.nxopen.BasePart.CloseAfterSave.FalseValue,
+                )
+            finally:
+                if save_status is not None:
+                    save_status.Dispose()
         builder = self.session.DexManager.CreateStepCreator()
         try:
             builder.OutputFile = str(destination)
+            builder.InputFile = str(part_path)
+            if hasattr(builder, "ObjectTypes"):
+                builder.ObjectTypes.Solids = True
+            step_creator = getattr(self.nxopen, "StepCreator", None)
+            if step_creator is not None and hasattr(step_creator, "ExportAsOption"):
+                builder.ExportAs = step_creator.ExportAsOption.Ap214
+            base_dir = os.environ.get("UGII_BASE_DIR")
+            if base_dir:
+                settings_file = Path(base_dir) / "STEP214UG" / "ugstep214.def"
+                if settings_file.is_file():
+                    builder.SettingsFile = str(settings_file)
             builder.Commit()
         finally:
             builder.Destroy()
@@ -455,9 +494,21 @@ class NXOpenExecutor:
         )
         return {"object": reference.model_dump(), "message": f"Finished sketch: {reference.name}"}
 
-    def _extrude(self, sketch_id: str, distance: float, reverse: bool = False) -> dict[str, Any]:
+    def _extrude(
+        self,
+        sketch_id: str,
+        distance: float,
+        reverse: bool = False,
+        start_offset: float = 0.0,
+        operation: str = "create",
+        target_body_id: str | None = None,
+    ) -> dict[str, Any]:
         if distance <= 0:
             raise NXToolError("NX_INVALID_ARGUMENT", "distance must be greater than zero")
+        if start_offset < 0:
+            raise NXToolError("NX_INVALID_ARGUMENT", "start_offset must be non-negative")
+        if operation not in {"create", "subtract"}:
+            raise NXToolError("NX_INVALID_ARGUMENT", "operation must be 'create' or 'subtract'")
         part = self._work_part()
         sketch = self.objects.resolve(
             sketch_id,
@@ -489,11 +540,25 @@ class NXOpenExecutor:
         try:
             builder.Section = section
             builder.Direction = direction
-            builder.Limits.StartExtend.Value.RightHandSide = "0"
-            builder.Limits.EndExtend.Value.RightHandSide = str(distance)
-            builder.BooleanOperation.Type = (
-                self.nxopen.GeometricUtilities.BooleanOperation.BooleanType.Create
-            )
+            builder.Limits.StartExtend.Value.RightHandSide = f"{start_offset:g}"
+            builder.Limits.EndExtend.Value.RightHandSide = f"{start_offset + distance:g}"
+            bool_operation = self.nxopen.GeometricUtilities.BooleanOperation.BooleanType
+            boolean_type = bool_operation.Create
+            if operation == "subtract":
+                if not target_body_id:
+                    raise NXToolError(
+                        "NX_INVALID_ARGUMENT",
+                        "target_body_id is required when operation is 'subtract'",
+                    )
+                target_body = self.objects.resolve(
+                    target_body_id,
+                    expected_kind="body",
+                    part_id=self._part_id(part),
+                )
+                boolean_type = bool_operation.Subtract
+            builder.BooleanOperation.Type = boolean_type
+            if operation == "subtract":
+                builder.BooleanOperation.SetTargetBodies([target_body])
             builder.AllowSelfIntersectingSection(True)
             feature = builder.CommitFeature()
         finally:
@@ -512,6 +577,198 @@ class NXOpenExecutor:
             "message": f"Extruded {self._name(sketch, 'Sketch')} by {distance}",
         }
 
+    def _sketch_circle(
+        self,
+        sketch_id: str,
+        center: dict[str, Any],
+        diameter: float,
+    ) -> dict[str, Any]:
+        part = self._work_part()
+        sketch = self.objects.resolve(
+            sketch_id,
+            expected_kind="sketch",
+            part_id=self._part_id(part),
+        )
+        if diameter <= 0:
+            raise NXToolError("NX_INVALID_ARGUMENT", "diameter must be greater than zero")
+        sketch.Activate(self.nxopen.Sketch.ViewReorient.TrueValue)
+        builder = part.Sketches.CreateCircleBuilder()
+        try:
+            builder.SetCenterPoint(
+                self.nxopen.Point3d(float(center["x"]), float(center["y"]), 0.0)
+            )
+            builder.SetSizePoint(
+                self.nxopen.Point3d(
+                    float(center["x"]) + float(diameter) / 2.0,
+                    float(center["y"]),
+                    0.0,
+                )
+            )
+            circle = builder.Commit()
+        finally:
+            builder.Destroy()
+        reference = self.objects.register(
+            circle,
+            kind="curve",
+            name=self._name(circle, "Circle"),
+            part_id=self._part_id(part),
+        )
+        return {
+            "object": reference.model_dump(),
+            "message": f"Created sketch circle (diameter={diameter})",
+        }
+
+    def _sketch_arc(
+        self,
+        sketch_id: str,
+        center: dict[str, Any],
+        radius: float,
+        start_angle: float,
+        end_angle: float,
+    ) -> dict[str, Any]:
+        part = self._work_part()
+        sketch = self.objects.resolve(
+            sketch_id,
+            expected_kind="sketch",
+            part_id=self._part_id(part),
+        )
+        if radius <= 0:
+            raise NXToolError("NX_INVALID_ARGUMENT", "radius must be greater than zero")
+        arc = part.Curves.CreateArc(
+            self.nxopen.Point3d(float(center["x"]), float(center["y"]), 0.0),
+            self.nxopen.Vector3d(1.0, 0.0, 0.0),
+            self.nxopen.Vector3d(0.0, 1.0, 0.0),
+            float(radius),
+            float(start_angle),
+            float(end_angle),
+        )
+        sketch.AddGeometry(
+            arc, self.nxopen.Sketch.InferConstraintsOption.InferNoConstraints
+        )
+        reference = self.objects.register(
+            arc,
+            kind="curve",
+            name=self._name(arc, "Arc"),
+            part_id=self._part_id(part),
+        )
+        return {
+            "object": reference.model_dump(),
+            "message": f"Created sketch arc (radius={radius}, {start_angle}-{end_angle} deg)",
+        }
+
+    def _hole(
+        self,
+        body_id: str,
+        center: dict[str, Any],
+        diameter: float,
+        depth: float,
+        start_offset: float = 0.0,
+    ) -> dict[str, Any]:
+        """Create a hole on a target body via a circle sketch + boolean-subtract extrude."""
+        part = self._work_part()
+        self.objects.resolve(
+            body_id,
+            expected_kind="body",
+            part_id=self._part_id(part),
+        )
+        if diameter <= 0 or depth <= 0:
+            raise NXToolError("NX_INVALID_ARGUMENT", "diameter and depth must be greater than zero")
+        sketch = self._create_sketch("XY", name=None)
+        sketch_id = sketch["object"]["id"]
+        self._sketch_circle(sketch_id, center, diameter)
+        self._finish_sketch(sketch_id)
+        result = self._extrude(
+            sketch_id,
+            distance=depth,
+            start_offset=start_offset,
+            operation="subtract",
+            target_body_id=body_id,
+        )
+        return {
+            "object": result["feature"],
+            "message": f"Created hole d={diameter} at ({center['x']},{center['y']}) depth {depth}",
+        }
+
+    def _select_edges(
+        self,
+        part: Any,
+        body_id: str,
+        edge_indices: list[int] | None,
+    ) -> Any:
+        body = self.objects.resolve(
+            body_id,
+            expected_kind="body",
+            part_id=self._part_id(part),
+        )
+        edges = list(body.GetEdges())
+        if not edges:
+            raise NXToolError("NX_OPERATION_FAILED", "Body has no edges")
+        if edge_indices:
+            selected = []
+            for index in edge_indices:
+                if index < 0 or index >= len(edges):
+                    raise NXToolError(
+                        "NX_INVALID_ARGUMENT",
+                        f"edge index {index} out of range (0-{len(edges)-1})",
+                    )
+                selected.append(edges[index])
+        else:
+            selected = edges
+        collector = part.ScCollectors.CreateCollector()
+        rule = part.ScRuleFactory.CreateRuleEdgeDumb(selected)
+        collector.ReplaceRules([rule], False)
+        return collector, body
+
+    def _edge_blend(
+        self,
+        body_id: str,
+        radius: float,
+        edge_indices: list[int] | None = None,
+    ) -> dict[str, Any]:
+        part = self._work_part()
+        if radius <= 0:
+            raise NXToolError("NX_INVALID_ARGUMENT", "radius must be greater than zero")
+        collector, body = self._select_edges(part, body_id, edge_indices)
+        builder = part.Features.CreateEdgeBlendBuilder(
+            self.nxopen.Features.Feature.Null
+        )
+        try:
+            builder.AddChainset(collector, str(float(radius)))
+            feature = builder.CommitFeature()
+        finally:
+            builder.Destroy()
+        return {
+            "object": self._reference(feature, "feature", part, "EdgeBlend"),
+            "message": f"Created edge blend (radius={radius}) on {self._name(body, 'Body')}",
+        }
+
+    def _chamfer(
+        self,
+        body_id: str,
+        offset: float,
+        edge_indices: list[int] | None = None,
+    ) -> dict[str, Any]:
+        part = self._work_part()
+        if offset <= 0:
+            raise NXToolError("NX_INVALID_ARGUMENT", "offset must be greater than zero")
+        collector, body = self._select_edges(part, body_id, edge_indices)
+        builder = part.Features.CreateChamferBuilder(
+            self.nxopen.Features.Feature.Null
+        )
+        try:
+            builder.SmartCollector = collector
+            builder.FirstOffset = str(float(offset))
+            builder.Option = (
+                self.nxopen.Features.ChamferBuilder.ChamferOption.SymmetricOffsets
+            )
+            feature = builder.CommitFeature()
+        finally:
+            builder.Destroy()
+        return {
+            "object": self._reference(feature, "feature", part, "Chamfer"),
+            "message": f"Created chamfer (offset={offset}) on {self._name(body, 'Body')}",
+        }
+
     def _undo(self) -> dict[str, Any]:
         if not self._undo_marks:
             raise NXToolError("NX_UNDO_UNAVAILABLE", "No NX MCP operation is available to undo")
@@ -525,6 +782,20 @@ class NXOpenExecutor:
         part = self._work_part()
         part.ModelingViews.WorkView.Fit()
         return {"message": "View fitted"}
+
+    def _release(self) -> dict[str, Any]:
+        """Request graceful shutdown: end the journal loop and unlock NX.
+
+        The release is marked now and takes effect about a second later so
+        this response is fully delivered; the journal main loop then calls
+        stop_bridge() and returns, which ends the journal and releases the
+        NX GUI for manual editing. The bridge can be restarted with the same
+        launcher journal.
+        """
+        global _release_requested, _release_at
+        _release_requested = True
+        _release_at = monotonic() + 1.0
+        return {"message": "Release requested: bridge will stop after this call"}
 
 
 @dataclass
@@ -546,6 +817,22 @@ class BridgeRuntime:
 
 
 _runtime: BridgeRuntime | None = None
+_release_requested: bool = False
+_release_at: float | None = None
+
+
+def bridge_is_active() -> bool:
+    """True while the bridge runtime exists and no release was requested.
+
+    A release takes effect slightly after the flag is set so the in-flight
+    response for the release call is fully written to the socket before the
+    journal main loop stops the server.
+    """
+    if _runtime is None:
+        return False
+    if _release_requested:
+        return _release_at is not None and monotonic() < _release_at
+    return True
 
 
 def _detect_nx_version(session: Any) -> str:
@@ -569,7 +856,9 @@ def start_bridge(
     NXOpen threading must be validated on the target build before this gate is
     enabled for a pilot. If it fails, the agreed fallback is a minimal C# bridge.
     """
-    global _runtime
+    global _runtime, _release_requested, _release_at
+    _release_requested = False
+    _release_at = None
     if _runtime is not None:
         return _runtime.descriptor
     if (
@@ -582,6 +871,14 @@ def start_bridge(
         )
 
     import NXOpen
+    # NXOpen.Features (and GeometricUtilities) are subpackages, not top-level
+    # attributes; in some NX journal environments `import NXOpen` alone does not
+    # populate them. Import them explicitly so extrusion always works.
+    try:
+        import NXOpen.Features
+        import NXOpen.GeometricUtilities
+    except ImportError:
+        pass
 
     session = NXOpen.Session.GetSession()
     executor = NXOpenExecutor(
@@ -620,7 +917,9 @@ def pump_bridge(timeout: float = 0.1) -> int:
 
 
 def stop_bridge() -> None:
-    global _runtime
+    global _runtime, _release_requested, _release_at
+    _release_requested = False
+    _release_at = None
     if _runtime is not None:
         _runtime.stop()
         _runtime = None

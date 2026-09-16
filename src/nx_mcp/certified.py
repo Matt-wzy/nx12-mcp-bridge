@@ -41,10 +41,16 @@ CERTIFIED_TOOL_NAMES = {
     "nx_create_sketch",
     "nx_sketch_line",
     "nx_sketch_rectangle",
+    "nx_sketch_circle",
+    "nx_sketch_arc",
     "nx_finish_sketch",
     "nx_extrude",
+    "nx_hole",
+    "nx_edge_blend",
+    "nx_chamfer",
     "nx_undo",
     "nx_fit_view",
+    "nx_release",
 }
 
 
@@ -165,6 +171,42 @@ def create_certified_server(
         )
 
     @mcp.tool()
+    async def nx_sketch_circle(
+        sketch_id: str,
+        center: Point2D,
+        diameter: Annotated[float, Field(gt=0, allow_inf_nan=False)],
+    ) -> ObjectResult:
+        """Add a circle (center + diameter) to an explicit sketch reference."""
+        return ObjectResult(
+            **await call(
+                "nx_sketch_circle",
+                {"sketch_id": sketch_id, "center": center.model_dump(), "diameter": diameter},
+            )
+        )
+
+    @mcp.tool()
+    async def nx_sketch_arc(
+        sketch_id: str,
+        center: Point2D,
+        radius: Annotated[float, Field(gt=0, allow_inf_nan=False)],
+        start_angle: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.0,
+        end_angle: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 90.0,
+    ) -> ObjectResult:
+        """Add an arc (center, radius, start/end degrees) to an explicit sketch reference."""
+        return ObjectResult(
+            **await call(
+                "nx_sketch_arc",
+                {
+                    "sketch_id": sketch_id,
+                    "center": center.model_dump(),
+                    "radius": radius,
+                    "start_angle": start_angle,
+                    "end_angle": end_angle,
+                },
+            )
+        )
+
+    @mcp.tool()
     async def nx_finish_sketch(sketch_id: str) -> ObjectResult:
         """Deactivate and finish an explicit sketch reference."""
         return ObjectResult(**await call("nx_finish_sketch", {"sketch_id": sketch_id}))
@@ -174,12 +216,72 @@ def create_certified_server(
         sketch_id: str,
         distance: Annotated[float, Field(gt=0, allow_inf_nan=False)],
         reverse: bool = False,
+        start_offset: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.0,
+        operation: Literal["create", "subtract"] = "create",
+        target_body_id: str | None = None,
     ) -> ExtrudeResult:
-        """Extrude a sketch into a new body."""
+        """Extrude a sketch into a new body, or subtract it from an existing target body."""
         return ExtrudeResult(
             **await call(
                 "nx_extrude",
-                {"sketch_id": sketch_id, "distance": distance, "reverse": reverse},
+                {
+                    "sketch_id": sketch_id,
+                    "distance": distance,
+                    "reverse": reverse,
+                    "start_offset": start_offset,
+                    "operation": operation,
+                    "target_body_id": target_body_id,
+                },
+            )
+        )
+
+    @mcp.tool()
+    async def nx_hole(
+        body_id: str,
+        center: Point2D,
+        diameter: Annotated[float, Field(gt=0, allow_inf_nan=False)],
+        depth: Annotated[float, Field(gt=0, allow_inf_nan=False)],
+        start_offset: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.0,
+    ) -> ObjectResult:
+        """Create a hole on a target body (circle sketch + boolean subtract)."""
+        return ObjectResult(
+            **await call(
+                "nx_hole",
+                {
+                    "body_id": body_id,
+                    "center": center.model_dump(),
+                    "diameter": diameter,
+                    "depth": depth,
+                    "start_offset": start_offset,
+                },
+            )
+        )
+
+    @mcp.tool()
+    async def nx_edge_blend(
+        body_id: str,
+        radius: Annotated[float, Field(gt=0, allow_inf_nan=False)],
+        edge_indices: list[int] | None = None,
+    ) -> ObjectResult:
+        """Create an edge blend (fillet) on edges of a body; default all edges."""
+        return ObjectResult(
+            **await call(
+                "nx_edge_blend",
+                {"body_id": body_id, "radius": radius, "edge_indices": edge_indices},
+            )
+        )
+
+    @mcp.tool()
+    async def nx_chamfer(
+        body_id: str,
+        offset: Annotated[float, Field(gt=0, allow_inf_nan=False)],
+        edge_indices: list[int] | None = None,
+    ) -> ObjectResult:
+        """Create a symmetric chamfer on edges of a body; default all edges."""
+        return ObjectResult(
+            **await call(
+                "nx_chamfer",
+                {"body_id": body_id, "offset": offset, "edge_indices": edge_indices},
             )
         )
 
@@ -192,6 +294,16 @@ def create_certified_server(
     async def nx_fit_view() -> OperationResult:
         """Fit the active modeling view."""
         return OperationResult(**await call("nx_fit_view", {}))
+
+    @mcp.tool()
+    async def nx_release() -> OperationResult:
+        """Gracefully stop the bridge and release the NX GUI for manual editing.
+
+        The current command completes, then the journal ends and NX becomes
+        fully interactive (no restart of NX required). Start the bridge again
+        later by running the launcher journal (Alt+F8) again.
+        """
+        return OperationResult(**await call("nx_release", {}))
 
     if enable_experimental:
         from nx_mcp.experimental import add_experimental_tools

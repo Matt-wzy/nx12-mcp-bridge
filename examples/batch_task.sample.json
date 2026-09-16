@@ -1,0 +1,13 @@
+{
+  "part": "sample_part.prt",
+  "units": "mm",
+  "export_step": true,
+  "features": [
+    { "type": "rect_extrude", "w": 100, "h": 60, "d": 10, "name": "BASE" },
+    { "type": "rect_extrude", "w": 60, "h": 40, "d": 30, "name": "BOSS" },
+    { "type": "hole", "diameter": 12, "depth": 8, "x": 0, "y": 0, "name": "HOLE" },
+    { "type": "rect_extrude", "w": 24, "h": 16, "d": 6, "x": -30, "y": 0, "subtract": true, "name": "SLOT" },
+    { "type": "chamfer", "offset": 2, "name": "CHAMFER" },
+    { "type": "edge_blend", "radius": 3, "name": "BLEND" }
+  ]
+}

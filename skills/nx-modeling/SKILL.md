@@ -52,6 +52,29 @@ that runner deliberately exports the solid, then undoes it before saving the
 operate on the work part, not its entire assembly tree; `nx_close_part` saves by
 default, so always choose its `save` argument deliberately when closing is requested.
 
+## Extended modeling tools
+
+Beyond sketch/extrude, the certified tool list includes:
+
+- `nx_sketch_circle(sketch_id, center, diameter)` — circle in an active sketch.
+- `nx_sketch_arc(sketch_id, center, radius, start_angle, end_angle)` — arc in
+  an active sketch (degrees).
+- `nx_extrude(..., operation="create"|"subtract", target_body_id=...)` —
+  boolean subtract for cutting features.
+- `nx_hole(body_id, center, diameter, depth, start_offset=0)` — circle sketch
+  + boolean-subtract extrude.
+- `nx_edge_blend(body_id, radius, edge_indices=None)` — blends all (or listed)
+  edges; NX-rejected edges are skipped and reported.
+- `nx_chamfer(body_id, offset, edge_indices=None)` — symmetric-offset chamfer,
+  all (or listed) edges, per-edge tolerant.
+- `nx_release()` — stop the visual bridge and unlock the NX GUI.
+
+The batch workflow (`examples/batch_build_gui.py`) accepts a JSON task
+(`batch_task.json`) with `rect_extrude`, `hole`, `edge_blend`, `chamfer`
+features and produces `.prt` + `.step` without a bridge. See
+[README](../../README.md#two-workflows) and
+[examples/batch_task.sample.json](../../examples/batch_task.sample.json).
+
 ## Recovery and stopping conditions
 
 - On validation errors, correct the inputs; do not repeat an unchanged request.

@@ -12,7 +12,7 @@ bridge owns NXOpen and the current NX session.
 python -m pip install -e ".[dev]"
 python -m pre_commit install --install-hooks
 python -m pytest -q -p no:cacheprovider -m "not real_nx" --basetemp .pytest-tmp
-python -m nx_mcp.real_smoke --workspace D:\NX_MCP_WORKSPACE --iterations 20
+python -m nx_mcp.real_smoke --workspace <workspace> --iterations 20
 ```
 
 ## Production path
