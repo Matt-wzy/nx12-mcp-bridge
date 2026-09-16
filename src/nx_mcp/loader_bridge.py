@@ -118,6 +118,13 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
         if idx:
             cmd += " " + ",".join(str(int(i)) for i in idx)
         return cmd
+    if method == "nx_unite":
+        ids = params["tool_body_ids"]
+        if isinstance(ids, str):
+            csv = ids
+        else:
+            csv = ",".join(str(i) for i in ids)
+        return "nx_unite %s %s" % (params["target_body_id"], csv)
     if method == "nx_fit_view":
         return "nx_fit_view"
     return None  # unsupported by the phase-1 Loader
@@ -250,6 +257,13 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
             "status": "success",
             "feature": _ref("feature", body_id, part_id),
             "body": _ref("body", body_id, part_id),
+            "message": msg,
+        }
+    if method == "nx_unite":
+        body_id = resp.get("body_id", params.get("target_body_id", ""))
+        return {
+            "status": "success",
+            "object": _ref("body", body_id, part_id),
             "message": msg,
         }
     if method == "nx_sketch_rectangle":

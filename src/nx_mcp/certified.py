@@ -48,6 +48,7 @@ CERTIFIED_TOOL_NAMES = {
     "nx_hole",
     "nx_edge_blend",
     "nx_chamfer",
+    "nx_unite",
     "nx_undo",
     "nx_fit_view",
     "nx_release",
@@ -282,6 +283,23 @@ def create_certified_server(
             **await call(
                 "nx_chamfer",
                 {"body_id": body_id, "offset": offset, "edge_indices": edge_indices},
+            )
+        )
+
+    @mcp.tool()
+    async def nx_unite(
+        target_body_id: str,
+        tool_body_ids: list[str],
+    ) -> ObjectResult:
+        """Boolean-unite one or more tool bodies into the target body.
+
+        The target body keeps its id; the tool bodies are consumed and
+        disappear from ``nx_list_bodies`` after the boolean.
+        """
+        return ObjectResult(
+            **await call(
+                "nx_unite",
+                {"target_body_id": target_body_id, "tool_body_ids": tool_body_ids},
             )
         )
 

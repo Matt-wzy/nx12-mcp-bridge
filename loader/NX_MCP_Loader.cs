@@ -26,6 +26,7 @@
 //   nx_hole <body_id> <cx> <cy> <diameter> <depth> [start_offset]
 //   nx_edge_blend <body_id> <radius> [edge_indices csv]
 //   nx_chamfer <body_id> <offset> [edge_indices csv]
+//   nx_unite <target_body_id> <tool_body_ids csv>
 //   nx_fit_view
 //   nx_export_step <step-path>
 //   nx_build_plate_test           (single-command acceptance part)
@@ -284,6 +285,8 @@ public static class NX_MCP_Loader
                 return EdgeBlend(parts);
             case "nx_chamfer":
                 return Chamfer(parts);
+            case "nx_unite":
+                return Unite(parts);
             case "nx_fit_view":
                 return FitView();
             case "nx_export_step":
@@ -576,6 +579,54 @@ public static class NX_MCP_Loader
         int[] idx = parts.Length > 3 ? ParseIndices(parts[3]) : null;
         int done = BlendChamfer(body, off, idx, false);
         return OkJson("chamfer done=" + done);
+    }
+
+    private static string Unite(string[] parts)
+    {
+        if (parts.Length < 3) return ErrJson("usage: nx_unite <target_body_id> <tool_body_ids csv>");
+        Body target;
+        try { target = GetBody(parts[1]); }
+        catch (Exception e) { return ErrJson(e.Message); }
+        List<Body> tools = new List<Body>();
+        string[] ids = parts[2].Split(',');
+        foreach (string id in ids)
+        {
+            string t = id.Trim();
+            if (t.Length == 0) continue;
+            try { tools.Add(GetBody(t)); }
+            catch (Exception e) { return ErrJson(e.Message); }
+        }
+        if (tools.Count == 0) return ErrJson("no tool bodies given");
+        try
+        {
+            if (_session == null) _session = Session.GetSession();
+            NXOpen.Features.BooleanBuilder bld = null;
+            try { bld = _part.Features.CreateBooleanBuilder(null); }
+            catch (Exception e) { return ErrJson("unite[create] failed: " + e.Message); }
+            try { bld.Operation = NXOpen.Features.Feature.BooleanType.Unite; }
+            catch (Exception e) { return ErrJson("unite[op] failed: " + e.Message); }
+            try { bld.Target = target; }
+            catch (Exception e) { return ErrJson("unite[target] failed: " + e.Message); }
+            NXOpen.DisplayableObject[] objs = new NXOpen.DisplayableObject[tools.Count];
+            for (int i = 0; i < tools.Count; i++) objs[i] = tools[i];
+            try { bld.Tools.Add(objs); }
+            catch (Exception e) { return ErrJson("unite[tools] failed: " + e.Message); }
+            NXOpen.NXObject obj = null;
+            try { obj = bld.Commit(); }
+            catch (Exception e) { return ErrJson("unite[commit] failed: " + e.Message); }
+            try { bld.Destroy(); } catch { }
+            // tool bodies are consumed by the boolean; drop their stale ids
+            foreach (string id in ids)
+            {
+                string t = id.Trim();
+                if (t.Length > 0) _bodies.Remove(t);
+            }
+            return OkJson("body_id", parts[1], "united " + tools.Count + " tool body(ies)");
+        }
+        catch (Exception e)
+        {
+            return ErrJson("unite failed: " + e.Message);
+        }
     }
 
     private static string FitView()
