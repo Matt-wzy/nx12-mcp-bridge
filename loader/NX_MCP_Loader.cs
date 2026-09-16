@@ -28,6 +28,7 @@
 //   nx_chamfer <body_id> <offset> [edge_indices csv]
 //   nx_unite <target_body_id> <tool_body_ids csv>
 //   nx_revolve <sketch_id> <ax> <ay> <bx> <by> <angle> [reverse=0|1]
+//   nx_mirror <body_id> <XY|XZ|YZ> [offset]
 //   nx_fit_view
 //   nx_export_step <step-path>
 //   nx_build_plate_test           (single-command acceptance part)
@@ -290,6 +291,8 @@ public static class NX_MCP_Loader
                 return Unite(parts);
             case "nx_revolve":
                 return Revolve(parts);
+            case "nx_mirror":
+                return Mirror(parts);
             case "nx_fit_view":
                 return FitView();
             case "nx_export_step":
@@ -588,6 +591,72 @@ public static class NX_MCP_Loader
             return OkJson("body_id", bid, "revolved " + angle + " deg");
         }
         return ErrJson("revolve produced no body");
+    }
+
+    private static string Mirror(string[] parts)
+    {
+        if (parts.Length < 3) return ErrJson("usage: nx_mirror <body_id> <XY|XZ|YZ> [offset]");
+        Body body = GetBody(parts[1]);
+        string planeName = parts[2].ToUpperInvariant();
+        double offset = parts.Length > 3 ? D(parts[3]) : 0.0;
+
+        Point3d origin;
+        Vector3d mx, my, mz;
+        switch (planeName)
+        {
+            case "XY":
+                origin = new Point3d(0.0, 0.0, offset);
+                mx = new Vector3d(1, 0, 0); my = new Vector3d(0, 1, 0); mz = new Vector3d(0, 0, 1);
+                break;
+            case "XZ":
+                origin = new Point3d(0.0, offset, 0.0);
+                mx = new Vector3d(0, 0, 1); my = new Vector3d(1, 0, 0); mz = new Vector3d(0, 1, 0);
+                break;
+            case "YZ":
+                origin = new Point3d(offset, 0.0, 0.0);
+                mx = new Vector3d(0, 1, 0); my = new Vector3d(0, 0, 1); mz = new Vector3d(1, 0, 0);
+                break;
+            default:
+                return ErrJson("plane must be XY, XZ or YZ");
+        }
+        var m = new Matrix3x3();
+        m.Xx = mx.X; m.Xy = mx.Y; m.Xz = mx.Z;
+        m.Yx = my.X; m.Yy = my.Y; m.Yz = my.Z;
+        m.Zx = mz.X; m.Zy = mz.Y; m.Zz = mz.Z;
+
+        var before = new HashSet<Tag>();
+        foreach (Body b in _part.Bodies) before.Add(b.Tag);
+
+        DatumPlane datumPlane;
+        var mb = _part.Features.CreateMirrorBodyBuilder(null);
+        try
+        {
+            datumPlane = _part.Datums.CreateFixedDatumPlane(origin, m);
+            mb.MirrorBodyList.SetArray(new Body[] { body });
+            mb.Plane.SetValue(datumPlane, null, new Point3d(0.0, 0.0, 0.0));
+            mb.DeleteSourceBody = false;
+            mb.CommitFeature();
+        }
+        catch (Exception e)
+        {
+            try { mb.Destroy(); } catch { }
+            return ErrJson("mirror failed: " + e.Message);
+        }
+        mb.Destroy();
+
+        Body newBody = null;
+        foreach (Body b in _part.Bodies)
+        {
+            if (!before.Contains(b.Tag)) { newBody = b; break; }
+        }
+        if (newBody != null)
+        {
+            _bodyCounter++;
+            string bid = "BODY_" + _bodyCounter;
+            _bodies[bid] = newBody;
+            return OkJson("body_id", bid, "mirrored about " + planeName);
+        }
+        return ErrJson("mirror produced no new body");
     }
 
     private static string Hole(string[] parts)

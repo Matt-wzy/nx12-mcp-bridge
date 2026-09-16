@@ -50,6 +50,7 @@ CERTIFIED_TOOL_NAMES = {
     "nx_chamfer",
     "nx_unite",
     "nx_revolve",
+    "nx_mirror",
     "nx_undo",
     "nx_fit_view",
     "nx_release",
@@ -328,6 +329,26 @@ def create_certified_server(
                     "angle": angle,
                     "reverse": reverse,
                 },
+            )
+        )
+
+    @mcp.tool()
+    async def nx_mirror(
+        body_id: str,
+        plane: Literal["XY", "XZ", "YZ"],
+        offset: Annotated[float, Field(allow_inf_nan=False)] = 0.0,
+    ) -> ObjectResult:
+        """Mirror a body about a datum plane.
+
+        ``plane`` selects the mirror datum plane (XY/XZ/YZ); ``offset`` shifts
+        that plane along its normal by the given mm value (default 0). The
+        mirrored body is created as an independent body and is NOT united with
+        the source; use ``nx_unite`` if merging is required.
+        """
+        return ObjectResult(
+            **await call(
+                "nx_mirror",
+                {"body_id": body_id, "plane": plane, "offset": offset},
             )
         )
 
