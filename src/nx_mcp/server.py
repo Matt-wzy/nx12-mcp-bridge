@@ -17,6 +17,34 @@ from nx_mcp.workspace import Workspace
 logger = logging.getLogger("nx_mcp")
 
 
+def _select_backend() -> BridgeCaller:
+    """Prefer the resident C# Loader (V2) when ready; else fall back to the
+    Python bridge. Tool names and parameter formats are unchanged.
+
+    Override with NX_MCP_BACKEND=python|loader|auto (default auto).
+    """
+    forced = os.environ.get("NX_MCP_BACKEND", "auto")
+    if forced == "python":
+        logger.info("NX MCP: backend forced to Python bridge")
+        return DescriptorBridgeClient()
+    if forced == "loader":
+        from nx_mcp.loader_bridge import LoaderBridge
+
+        logger.info("NX MCP: backend forced to C# Loader")
+        return LoaderBridge()
+    try:
+        from nx_mcp.loader_bridge import LoaderBridge
+
+        loader = LoaderBridge()
+        if loader.ping():
+            logger.info("NX MCP: using C# Loader backend (resident, no Alt+F8)")
+            return loader
+        logger.info("NX MCP: Loader pipe not ready; falling back to Python bridge")
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.info("NX MCP: Loader backend unavailable (%s); falling back to Python bridge", exc)
+    return DescriptorBridgeClient()
+
+
 def create_server(
     bridge: BridgeCaller | None = None,
     workspace: Workspace | None = None,
@@ -32,7 +60,7 @@ def create_server(
     if enable_journal is None:
         enable_journal = os.environ.get("NX_MCP_ENABLE_JOURNAL") == "1"
     return create_certified_server(
-        bridge or DescriptorBridgeClient(),
+        bridge or _select_backend(),
         workspace,
         enable_experimental=enable_experimental,
         enable_journal=enable_experimental and enable_journal,

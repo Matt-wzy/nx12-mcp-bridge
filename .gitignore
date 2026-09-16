@@ -32,3 +32,6 @@ htmlcov/
 bridge.json
 mcp-client-config.json
 *.nx-mcp-workspace/
+
+# C# Loader build artifact (never commit)
+loader/*.dll
