@@ -39,7 +39,7 @@ async def test_default_server_lists_only_certified_tools():
         response = await client.list_tools()
 
     assert {tool.name for tool in response.tools} == CERTIFIED_TOOL_NAMES
-    assert len(response.tools) == 29
+    assert len(response.tools) == 30
 
 
 @pytest.mark.asyncio

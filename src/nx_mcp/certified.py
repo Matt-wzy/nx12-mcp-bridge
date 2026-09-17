@@ -56,6 +56,7 @@ CERTIFIED_TOOL_NAMES = {
     "nx_hole",
     "nx_counterbore_hole",
     "nx_countersink_hole",
+    "nx_shell",
     "nx_edge_blend",
     "nx_chamfer",
     "nx_unite",
@@ -329,6 +330,28 @@ def create_certified_server(
                     "countersink_diameter": countersink_diameter,
                     "countersink_angle": countersink_angle,
                     "start_offset": start_offset,
+                },
+            )
+        )
+
+    @mcp.tool()
+    async def nx_shell(
+        body_id: str,
+        thickness: Annotated[float, Field(gt=0, allow_inf_nan=False)],
+        remove_face_index: int,
+        inward: bool = True,
+    ) -> ObjectResult:
+        """Shell (hollow) a body: remove one face as an opening and keep a
+        constant wall thickness. First version removes a single face; inward=True
+        keeps the outer dimensions."""
+        return ObjectResult(
+            **await call(
+                "nx_shell",
+                {
+                    "body_id": body_id,
+                    "thickness": thickness,
+                    "remove_face_index": remove_face_index,
+                    "inward": inward,
                 },
             )
         )

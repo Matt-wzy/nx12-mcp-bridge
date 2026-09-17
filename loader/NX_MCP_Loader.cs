@@ -301,6 +301,8 @@ public static class NX_MCP_Loader
                 return CounterboreHole(parts);
             case "nx_countersink_hole":
                 return CountersinkHole(parts);
+            case "nx_shell":
+                return Shell(parts);
             case "nx_edge_blend":
                 return EdgeBlend(parts);
             case "nx_chamfer":
@@ -1044,6 +1046,50 @@ public static class NX_MCP_Loader
         return OkJson("countersink hole d=" + holeDia + " depth=" + holeDepth
             + " cs_d=" + csDia + " angle=" + csAngle + " depth=" + csDepth.ToString("0.###")
             + " at " + cx + "," + cy);
+    }
+
+    private static string Shell(string[] parts)
+    {
+        if (parts.Length < 4)
+            return ErrJson("usage: nx_shell <body_id> <thickness> <remove_face_index> [inward=1]");
+        Body body = GetBody(parts[1]);
+        double thickness = D(parts[2]);
+        int removeIdx;
+        if (!int.TryParse(parts[3], out removeIdx))
+            return ErrJson("remove_face_index must be an integer");
+        bool inward = parts.Length < 5 || parts[4] != "0";
+
+        if (double.IsNaN(thickness) || double.IsInfinity(thickness) || thickness <= 0)
+            return ErrJson("thickness must be > 0");
+        Face[] faces = body.GetFaces();
+        if (removeIdx < 0 || removeIdx >= faces.Length)
+            return ErrJson("remove_face_index out of range (0.." + (faces.Length - 1) + ")");
+
+        var coll = _part.ScCollectors.CreateCollector();
+        var faceRule = _part.ScRuleFactory.CreateRuleFaceDumb(new Face[] { faces[removeIdx] });
+        coll.AddRules(new SelectionIntentRule[] { faceRule });
+
+        var sb = _part.Features.CreateShellBuilder(null);
+        try
+        {
+            sb.Body = body;
+            sb.Tolerance = 0.0254;
+            sb.DefaultThickness.RightHandSide = thickness.ToString("0.###", CultureInfo.InvariantCulture);
+            sb.DefaultThicknessFlip = inward;
+            sb.RemovedFacesCollector = coll;
+            sb.CommitFeature();
+        }
+        catch (Exception e)
+        {
+            try { sb.Destroy(); } catch { }
+            try { coll.Destroy(); } catch { }
+            return ErrJson("shell failed: " + e.Message);
+        }
+        sb.Destroy();
+        try { coll.Destroy(); } catch { }
+
+        return OkJson("body_id", parts[1],
+            "shell t=" + thickness + " face=" + removeIdx + " inward=" + inward);
     }
 
     private static string EdgeBlend(string[] parts)

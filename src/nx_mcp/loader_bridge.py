@@ -120,6 +120,11 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
             _fmt(params["hole_diameter"]), _fmt(params["hole_depth"]),
             _fmt(params["countersink_diameter"]), _fmt(params["countersink_angle"]),
             _fmt(params.get("start_offset", 0.0)))
+    if method == "nx_shell":
+        inward = "0" if params.get("inward", True) is False else "1"
+        return "nx_shell %s %s %s %s" % (
+            params["body_id"], _fmt(params["thickness"]),
+            int(params["remove_face_index"]), inward)
     if method == "nx_edge_blend":
         cmd = "nx_edge_blend %s %s" % (params["body_id"], _fmt(params["radius"]))
         idx = params.get("edge_indices")
@@ -324,6 +329,7 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
     if method in ("nx_create_sketch", "nx_sketch_line", "nx_sketch_circle",
                   "nx_sketch_arc", "nx_finish_sketch", "nx_hole",
                   "nx_counterbore_hole", "nx_countersink_hole",
+                  "nx_shell",
                   "nx_edge_blend", "nx_chamfer", "nx_revolve", "nx_mirror"):
         obj_id = (
             resp.get("sketch_id")
@@ -332,7 +338,7 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
             or params.get("body_id")
             or ""
         )
-        kind: ObjectKind = "body" if method in ("nx_hole", "nx_counterbore_hole", "nx_countersink_hole", "nx_edge_blend", "nx_chamfer", "nx_revolve", "nx_mirror") else "sketch"
+        kind: ObjectKind = "body" if method in ("nx_hole", "nx_counterbore_hole", "nx_countersink_hole", "nx_shell", "nx_edge_blend", "nx_chamfer", "nx_revolve", "nx_mirror") else "sketch"
         return {"status": "success", "object": _ref(kind, obj_id, part_id), "message": msg}
     return {"status": "success", "message": msg}
 
