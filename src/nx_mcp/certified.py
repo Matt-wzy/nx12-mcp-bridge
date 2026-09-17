@@ -46,6 +46,7 @@ CERTIFIED_TOOL_NAMES = {
     "nx_list_sketches",
     "nx_list_bodies",
     "nx_list_features",
+    "nx_list_edges",
     "nx_create_sketch",
     "nx_sketch_line",
     "nx_sketch_rectangle",
@@ -152,6 +153,12 @@ def create_certified_server(
     async def nx_list_features() -> ObjectListResult:
         """List features in the active work part."""
         return ObjectListResult(**await call("nx_list_features", {}))
+
+    @mcp.tool()
+    async def nx_list_edges(body_id: str) -> dict[str, Any]:
+        """Inspect every edge of a body: index, curve type, endpoints, midpoint,
+        length, bounding box, direction and adjacent face count. Read-only."""
+        return await call("nx_list_edges", {"body_id": body_id})
 
     @mcp.tool()
     async def nx_create_sketch(

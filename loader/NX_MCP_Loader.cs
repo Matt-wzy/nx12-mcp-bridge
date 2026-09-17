@@ -331,6 +331,8 @@ public static class NX_MCP_Loader
                 return ListObjects("Bodies", "body");
             case "nx_list_features":
                 return ListObjects("Features", "feature");
+            case "nx_list_edges":
+                return ListEdges(parts);
             case "nx_undo":
                 return Undo();
             case "nx_build_plate_test":
@@ -1092,6 +1094,88 @@ public static class NX_MCP_Loader
             "shell t=" + thickness + " face=" + removeIdx + " inward=" + inward);
     }
 
+    private static string ListEdges(string[] parts)
+    {
+        if (parts.Length < 2) return ErrJson("usage: nx_list_edges <body_id>");
+        Body body;
+        try { body = GetBody(parts[1]); }
+        catch
+        {
+            // open-part sessions do not repopulate _bodies; fall back to the
+            // first solid body in the work part.
+            Body[] all = _part.Bodies.ToArray();
+            body = null;
+            foreach (Body b in all) if (b.IsSolidBody) { body = b; break; }
+            if (body == null && all.Length > 0) body = all[0];
+            if (body == null) return ErrJson("no body in work part");
+        }
+        Edge[] edges = body.GetEdges();
+        var sb = new StringBuilder();
+        sb.Append("{\"ok\":true,\"body_id\":\"").Append(Esc(parts[1])).Append("\",\"edge_count\":").Append(edges.Length).Append(",\"edges\":[");
+        for (int i = 0; i < edges.Length; i++)
+        {
+            Edge e = edges[i];
+            if (i > 0) sb.Append(",");
+            string ctype = "Other";
+            try { ctype = e.SolidEdgeType.ToString(); } catch { }
+            Point3d s = new Point3d(), en = new Point3d();
+            try { e.GetVertices(out s, out en); } catch { }
+            double mx = (s.X + en.X) / 2.0, my = (s.Y + en.Y) / 2.0, mz = (s.Z + en.Z) / 2.0;
+            bool linear = (ctype == "Linear");
+            // bbox: exact for linear edges (start/end min/max); for curves the
+            // endpoint min/max is NOT the true bounding box, so return null
+            // rather than misleading geometry.
+            string bbMinStr = "null", bbMaxStr = "null";
+            if (linear)
+            {
+                Point3d bbmin = new Point3d(
+                    Math.Min(s.X, en.X), Math.Min(s.Y, en.Y), Math.Min(s.Z, en.Z));
+                Point3d bbmax = new Point3d(
+                    Math.Max(s.X, en.X), Math.Max(s.Y, en.Y), Math.Max(s.Z, en.Z));
+                bbMinStr = "[" + F(bbmin.X) + "," + F(bbmin.Y) + "," + F(bbmin.Z) + "]";
+                bbMaxStr = "[" + F(bbmax.X) + "," + F(bbmax.Y) + "," + F(bbmax.Z) + "]";
+            }
+            double length = 0.0;
+            try { length = e.GetLength(); } catch { }
+            // direction: only for linear edges
+            string dir = "OTHER";
+            try
+            {
+                if (ctype == "Linear")
+                {
+                    double dx = Math.Abs(en.X - s.X), dy = Math.Abs(en.Y - s.Y), dz = Math.Abs(en.Z - s.Z);
+                    if (dx > 1e-6 && dy < 1e-6 && dz < 1e-6) dir = "X";
+                    else if (dy > 1e-6 && dx < 1e-6 && dz < 1e-6) dir = "Y";
+                    else if (dz > 1e-6 && dx < 1e-6 && dy < 1e-6) dir = "Z";
+                }
+            }
+            catch { }
+            int nAdj = 0;
+            try { Face[] af = e.GetFaces(); nAdj = (af != null) ? af.Length : 0; } catch { }
+            string tagStr = "0";
+            try { tagStr = e.Tag.ToString(); } catch { }
+            sb.Append("{\"index\":").Append(i)
+              .Append(",\"tag\":").Append(tagStr)
+              .Append(",\"curve_type\":\"").Append(ctype).Append("\"")
+              .Append(",\"start\":[").Append(F(s.X)).Append(",").Append(F(s.Y)).Append(",").Append(F(s.Z)).Append("]")
+              .Append(",\"end\":[").Append(F(en.X)).Append(",").Append(F(en.Y)).Append(",").Append(F(en.Z)).Append("]")
+              .Append(",\"midpoint\":[").Append(F(mx)).Append(",").Append(F(my)).Append(",").Append(F(mz)).Append("]")
+              .Append(",\"length\":").Append(F(length))
+              .Append(",\"bbox_min\":").Append(bbMinStr)
+              .Append(",\"bbox_max\":").Append(bbMaxStr)
+              .Append(",\"direction\":\"").Append(dir).Append("\"")
+              .Append(",\"adjacent_faces\":").Append(nAdj)
+              .Append("}");
+        }
+        sb.Append("]}");
+        return sb.ToString();
+    }
+
+    private static string F(double v)
+    {
+        return v.ToString("0.###", CultureInfo.InvariantCulture);
+    }
+
     private static string EdgeBlend(string[] parts)
     {
         if (parts.Length < 3) return ErrJson("usage: nx_edge_blend <body_id> <radius> [edge_indices csv]");
@@ -1421,6 +1505,19 @@ public static class NX_MCP_Loader
             _part = part;
             _partPath = part.FullPath;
             ResetTaskState();
+            // register existing bodies so GetBody works after nx_open_part
+            try
+            {
+                foreach (Body b in _part.Bodies.ToArray())
+                {
+                    string bid = "";
+                    try { bid = b.Name; } catch { }
+                    if (string.IsNullOrEmpty(bid)) { try { bid = b.JournalIdentifier; } catch { } }
+                    if (string.IsNullOrEmpty(bid)) bid = "BODY_" + (++_bodyCounter);
+                    _bodies[bid] = b;
+                }
+            }
+            catch { }
             return OkJson("part", _partPath, "opened");
         }
         finally

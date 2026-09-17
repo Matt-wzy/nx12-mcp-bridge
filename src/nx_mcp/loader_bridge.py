@@ -65,6 +65,8 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
         return "nx_export_step " + params["path"]
     if method in ("nx_list_sketches", "nx_list_bodies", "nx_list_features"):
         return method
+    if method == "nx_list_edges":
+        return "nx_list_edges " + params["body_id"]
     if method == "nx_undo":
         return "nx_undo"
     if method == "nx_release":
@@ -288,6 +290,13 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
         return {
             "status": "success",
             "objects": [_ref(kind, str(name), part_id) for name in names],
+            "message": msg,
+        }
+    if method == "nx_list_edges":
+        return {
+            "status": "success",
+            "edges": resp.get("edges") or [],
+            "edge_count": resp.get("edge_count", 0),
             "message": msg,
         }
     if method == "nx_extrude":
