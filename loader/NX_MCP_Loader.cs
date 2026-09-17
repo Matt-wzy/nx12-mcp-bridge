@@ -297,6 +297,8 @@ public static class NX_MCP_Loader
                 return Extrude(parts);
             case "nx_hole":
                 return Hole(parts);
+            case "nx_counterbore_hole":
+                return CounterboreHole(parts);
             case "nx_edge_blend":
                 return EdgeBlend(parts);
             case "nx_chamfer":
@@ -898,6 +900,71 @@ public static class NX_MCP_Loader
         ExtrudeSketchCore(sk, startOff, startOff + depth,
             BooleanOperation.BooleanType.Subtract, body);
         return OkJson("hole d=" + dia + " depth=" + depth + " at " + cx + "," + cy);
+    }
+
+    private static string CounterboreHole(string[] parts)
+    {
+        if (parts.Length < 8)
+            return ErrJson("usage: nx_counterbore_hole <body_id> cx cy hole_dia hole_depth cb_dia cb_depth [start_offset]");
+        Body body = GetBody(parts[1]);
+        double cx = D(parts[2]), cy = D(parts[3]);
+        double holeDia = D(parts[4]), holeDepth = D(parts[5]);
+        double cbDia = D(parts[6]), cbDepth = D(parts[7]);
+        double startOff = parts.Length > 8 ? D(parts[8]) : 0.0;
+
+        if (double.IsNaN(holeDia) || double.IsInfinity(holeDia) || holeDia <= 0)
+            return ErrJson("hole_diameter must be a positive finite number");
+        if (double.IsNaN(holeDepth) || double.IsInfinity(holeDepth) || holeDepth <= 0)
+            return ErrJson("hole_depth must be a positive finite number");
+        if (double.IsNaN(cbDia) || double.IsInfinity(cbDia) || cbDia <= 0)
+            return ErrJson("counterbore_diameter must be a positive finite number");
+        if (double.IsNaN(cbDepth) || double.IsInfinity(cbDepth) || cbDepth <= 0)
+            return ErrJson("counterbore_depth must be > 0");
+        if (cbDia <= holeDia)
+            return ErrJson("counterbore_diameter must be > hole_diameter");
+        if (cbDepth >= holeDepth)
+            return ErrJson("counterbore_depth must be < hole_depth");
+
+        // 1) main through hole (smaller dia, deeper)
+        double rHole = holeDia / 2.0;
+        _sketchCounter++;
+        var b1 = _part.Sketches.CreateSketchInPlaceBuilder2(null);
+        Sketch sk1;
+        try { sk1 = (Sketch)b1.Commit(); }
+        finally { b1.Destroy(); }
+        try { sk1.SetName("SKETCH_CB_HOLE_" + _sketchCounter); } catch { }
+        try { sk1.Activate(Sketch.ViewReorient.True); } catch { }
+        _sketches["SKETCH_CB_HOLE_" + _sketchCounter] = sk1;
+        var ellHole = _part.Curves.CreateEllipse(
+            new Point3d(cx, cy, 0.0),
+            new Vector3d(1.0, 0.0, 0.0), new Vector3d(0.0, 1.0, 0.0),
+            rHole, rHole, 0.0, 2.0 * Math.PI);
+        sk1.AddGeometry(ellHole, Sketch.InferConstraintsOption.InferNoConstraints);
+        try { sk1.Deactivate(Sketch.ViewReorient.True, Sketch.UpdateLevel.Model); } catch { }
+        ExtrudeSketchCore(sk1, startOff, startOff + holeDepth,
+            BooleanOperation.BooleanType.Subtract, body);
+
+        // 2) counterbore (larger dia, shallower, coaxial, from top surface down cbDepth)
+        double rCb = cbDia / 2.0;
+        _sketchCounter++;
+        var b2 = _part.Sketches.CreateSketchInPlaceBuilder2(null);
+        Sketch sk2;
+        try { sk2 = (Sketch)b2.Commit(); }
+        finally { b2.Destroy(); }
+        try { sk2.SetName("SKETCH_CB_" + _sketchCounter); } catch { }
+        try { sk2.Activate(Sketch.ViewReorient.True); } catch { }
+        _sketches["SKETCH_CB_" + _sketchCounter] = sk2;
+        var ellCb = _part.Curves.CreateEllipse(
+            new Point3d(cx, cy, 0.0),
+            new Vector3d(1.0, 0.0, 0.0), new Vector3d(0.0, 1.0, 0.0),
+            rCb, rCb, 0.0, 2.0 * Math.PI);
+        sk2.AddGeometry(ellCb, Sketch.InferConstraintsOption.InferNoConstraints);
+        try { sk2.Deactivate(Sketch.ViewReorient.True, Sketch.UpdateLevel.Model); } catch { }
+        ExtrudeSketchCore(sk2, startOff, startOff + cbDepth,
+            BooleanOperation.BooleanType.Subtract, body);
+
+        return OkJson("counterbore hole d=" + holeDia + " depth=" + holeDepth
+            + " cb_d=" + cbDia + " cb_depth=" + cbDepth + " at " + cx + "," + cy);
     }
 
     private static string EdgeBlend(string[] parts)

@@ -54,6 +54,7 @@ CERTIFIED_TOOL_NAMES = {
     "nx_finish_sketch",
     "nx_extrude",
     "nx_hole",
+    "nx_counterbore_hole",
     "nx_edge_blend",
     "nx_chamfer",
     "nx_unite",
@@ -265,6 +266,37 @@ def create_certified_server(
                     "center": center.model_dump(),
                     "diameter": diameter,
                     "depth": depth,
+                    "start_offset": start_offset,
+                },
+            )
+        )
+
+    @mcp.tool()
+    async def nx_counterbore_hole(
+        body_id: str,
+        center: Point2D,
+        hole_diameter: Annotated[float, Field(gt=0, allow_inf_nan=False)],
+        hole_depth: Annotated[float, Field(gt=0, allow_inf_nan=False)],
+        counterbore_diameter: Annotated[float, Field(gt=0, allow_inf_nan=False)],
+        counterbore_depth: Annotated[float, Field(gt=0, allow_inf_nan=False)],
+        start_offset: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.0,
+    ) -> ObjectResult:
+        """Create a coaxial counterbore hole: a smaller deep through hole plus a
+        larger shallow counterbore from the top face. Independent from nx_hole."""
+        if counterbore_diameter <= hole_diameter:
+            raise ValueError("counterbore_diameter must be > hole_diameter")
+        if counterbore_depth >= hole_depth:
+            raise ValueError("counterbore_depth must be < hole_depth")
+        return ObjectResult(
+            **await call(
+                "nx_counterbore_hole",
+                {
+                    "body_id": body_id,
+                    "center": center.model_dump(),
+                    "hole_diameter": hole_diameter,
+                    "hole_depth": hole_depth,
+                    "counterbore_diameter": counterbore_diameter,
+                    "counterbore_depth": counterbore_depth,
                     "start_offset": start_offset,
                 },
             )
