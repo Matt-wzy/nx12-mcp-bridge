@@ -67,6 +67,8 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
         return method
     if method == "nx_list_edges":
         return "nx_list_edges " + params["body_id"]
+    if method == "nx_list_faces":
+        return "nx_list_faces " + params["body_id"]
     if method == "nx_undo":
         return "nx_undo"
     if method == "nx_release":
@@ -297,6 +299,13 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
             "status": "success",
             "edges": resp.get("edges") or [],
             "edge_count": resp.get("edge_count", 0),
+            "message": msg,
+        }
+    if method == "nx_list_faces":
+        return {
+            "status": "success",
+            "faces": resp.get("faces") or [],
+            "face_count": resp.get("face_count", 0),
             "message": msg,
         }
     if method == "nx_extrude":

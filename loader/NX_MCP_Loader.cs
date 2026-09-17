@@ -333,6 +333,8 @@ public static class NX_MCP_Loader
                 return ListObjects("Features", "feature");
             case "nx_list_edges":
                 return ListEdges(parts);
+            case "nx_list_faces":
+                return ListFaces(parts);
             case "nx_undo":
                 return Undo();
             case "nx_build_plate_test":
@@ -1165,6 +1167,111 @@ public static class NX_MCP_Loader
               .Append(",\"bbox_max\":").Append(bbMaxStr)
               .Append(",\"direction\":\"").Append(dir).Append("\"")
               .Append(",\"adjacent_faces\":").Append(nAdj)
+              .Append("}");
+        }
+        sb.Append("]}");
+        return sb.ToString();
+    }
+
+    private static string ListFaces(string[] parts)
+    {
+        if (parts.Length < 2) return ErrJson("usage: nx_list_faces <body_id>");
+        Body body;
+        try { body = GetBody(parts[1]); }
+        catch
+        {
+            Body[] all = _part.Bodies.ToArray();
+            body = null;
+            foreach (Body b in all) if (b.IsSolidBody) { body = b; break; }
+            if (body == null && all.Length > 0) body = all[0];
+            if (body == null) return ErrJson("no body in work part");
+        }
+        Face[] faces = body.GetFaces();
+        var sb = new StringBuilder();
+        sb.Append("{\"ok\":true,\"body_id\":\"").Append(Esc(parts[1])).Append("\",\"face_count\":").Append(faces.Length).Append(",\"faces\":[");
+        for (int i = 0; i < faces.Length; i++)
+        {
+            Face fc = faces[i];
+            if (i > 0) sb.Append(",");
+            string ftype = "Other";
+            try { ftype = fc.SolidFaceType.ToString(); } catch { }
+            string tagStr = "0";
+            try { tagStr = fc.Tag.ToString(); } catch { }
+            double area = 0.0;
+            Point3d cent = new Point3d();
+            Point3d normalP = new Point3d();
+            bool planar = (ftype == "Planar");
+            string faceErr = "";
+            bool measured = false;
+            try
+            {
+                var measProp = _session.GetType().GetProperty("Measurement",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                object meas = (measProp != null) ? measProp.GetValue(_session, null) : null;
+                if (meas != null)
+                {
+                    var measType = meas.GetType();
+                    var mGetFP = measType.GetMethod("GetFaceProperties");
+                    if (mGetFP != null)
+                    {
+                        var par = mGetFP.GetParameters();
+                    object alt = 0;
+                    foreach (var pp in par)
+                    {
+                        if (pp.IsOut) continue;
+                        if (pp.ParameterType.IsEnum) alt = System.Enum.Parse(pp.ParameterType, "Radius");
+                    }
+                    object[] margs = new object[] {
+                        new ISurface[] { fc },
+                        0.0,
+                        alt,
+                        false,
+                        0.0, 0.0, null, new Point3d(), 0.0, 0.0, new Point3d(), false
+                    };
+                    mGetFP.Invoke(meas, margs);
+                    area = (double)margs[4];
+                    cent = (Point3d)margs[7];
+                    measured = true;
+                    }
+                }
+            }
+            catch (System.Exception ex) { faceErr = ex.Message; }
+            if (!measured)
+            {
+                area = 0.0; cent = new Point3d();
+            }
+            // normal for planar
+            if (planar)
+            {
+                var t = fc.GetType();
+                var surfProp = t.GetProperty("Surface");
+                object surf = (surfProp != null) ? surfProp.GetValue(fc, null) : null;
+                if (surf == null)
+                {
+                    var mGetSurf = t.GetMethod("GetSurface", new System.Type[0]);
+                    if (mGetSurf != null) surf = mGetSurf.Invoke(fc, null);
+                }
+                if (surf is NXOpen.Plane)
+                {
+                    NXOpen.Vector3d nv = ((NXOpen.Plane)surf).Normal;
+                    normalP = new Point3d(nv.X, nv.Y, nv.Z);
+                }
+            }
+            string normalStr = "null";
+            if (planar && (normalP.X != 0 || normalP.Y != 0 || normalP.Z != 0))
+            {
+                normalStr = "[" + F(normalP.X) + "," + F(normalP.Y) + "," + F(normalP.Z) + "]";
+            }
+            int nAdj = 0;
+            try { Edge[] ed = fc.GetEdges(); nAdj = (ed != null) ? ed.Length : 0; } catch { }
+            sb.Append("{\"index\":").Append(i)
+              .Append(",\"tag\":").Append(tagStr)
+              .Append(",\"face_type\":\"").Append(ftype).Append("\"")
+              .Append(",\"centroid\":[").Append(F(cent.X)).Append(",").Append(F(cent.Y)).Append(",").Append(F(cent.Z)).Append("]")
+              .Append(",\"area\":").Append(F(area))
+              .Append(",\"normal\":").Append(normalStr)
+              .Append(",\"adjacent_edges\":").Append(nAdj)
+              .Append(",\"err\":\"").Append(Esc(faceErr)).Append("\"")
               .Append("}");
         }
         sb.Append("]}");
