@@ -44,7 +44,8 @@ starts, so there is no `Alt+F8` and no Journal in the normal flow.
 .\loader\build.bat
 
 # 3b. deploy into your NX user startup directory
-#     default NX user dir is %USERPROFILE%\nx_mcp_user (or your UGII_USER_DIR)
+#     default: %USERPROFILE%\.nx_mcp_user\startup
+#     if UGII_USER_DIR is set, use %UGII_USER_DIR%\startup instead
 copy loader\NX_MCP_Loader.dll  %USERPROFILE%\.nx_mcp_user\startup\
 ```
 
