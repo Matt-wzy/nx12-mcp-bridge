@@ -55,6 +55,7 @@ CERTIFIED_TOOL_NAMES = {
     "nx_extrude",
     "nx_hole",
     "nx_counterbore_hole",
+    "nx_countersink_hole",
     "nx_edge_blend",
     "nx_chamfer",
     "nx_unite",
@@ -297,6 +298,36 @@ def create_certified_server(
                     "hole_depth": hole_depth,
                     "counterbore_diameter": counterbore_diameter,
                     "counterbore_depth": counterbore_depth,
+                    "start_offset": start_offset,
+                },
+            )
+        )
+
+    @mcp.tool()
+    async def nx_countersink_hole(
+        body_id: str,
+        center: Point2D,
+        hole_diameter: Annotated[float, Field(gt=0, allow_inf_nan=False)],
+        hole_depth: Annotated[float, Field(gt=0, allow_inf_nan=False)],
+        countersink_diameter: Annotated[float, Field(gt=0, allow_inf_nan=False)],
+        countersink_angle: Annotated[float, Field(gt=0, lt=180, allow_inf_nan=False)] = 90.0,
+        start_offset: Annotated[float, Field(ge=0, allow_inf_nan=False)] = 0.0,
+    ) -> ObjectResult:
+        """Create a coaxial countersink (conical) hole: a smaller deep through
+        cylinder plus a conical countersink from the top face. Independent of
+        nx_hole / nx_counterbore_hole."""
+        if countersink_diameter <= hole_diameter:
+            raise ValueError("countersink_diameter must be > hole_diameter")
+        return ObjectResult(
+            **await call(
+                "nx_countersink_hole",
+                {
+                    "body_id": body_id,
+                    "center": center.model_dump(),
+                    "hole_diameter": hole_diameter,
+                    "hole_depth": hole_depth,
+                    "countersink_diameter": countersink_diameter,
+                    "countersink_angle": countersink_angle,
                     "start_offset": start_offset,
                 },
             )

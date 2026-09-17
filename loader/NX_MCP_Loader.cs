@@ -299,6 +299,8 @@ public static class NX_MCP_Loader
                 return Hole(parts);
             case "nx_counterbore_hole":
                 return CounterboreHole(parts);
+            case "nx_countersink_hole":
+                return CountersinkHole(parts);
             case "nx_edge_blend":
                 return EdgeBlend(parts);
             case "nx_chamfer":
@@ -965,6 +967,83 @@ public static class NX_MCP_Loader
 
         return OkJson("counterbore hole d=" + holeDia + " depth=" + holeDepth
             + " cb_d=" + cbDia + " cb_depth=" + cbDepth + " at " + cx + "," + cy);
+    }
+
+    private static string CountersinkHole(string[] parts)
+    {
+        if (parts.Length < 8)
+            return ErrJson("usage: nx_countersink_hole <body_id> cx cy hole_dia hole_depth cs_dia cs_angle [start_offset]");
+        Body body = GetBody(parts[1]);
+        double cx = D(parts[2]), cy = D(parts[3]);
+        double holeDia = D(parts[4]), holeDepth = D(parts[5]);
+        double csDia = D(parts[6]), csAngle = D(parts[7]);
+        double startOff = parts.Length > 8 ? D(parts[8]) : 0.0;
+
+        if (double.IsNaN(holeDia) || double.IsInfinity(holeDia) || holeDia <= 0)
+            return ErrJson("hole_diameter must be a positive finite number");
+        if (double.IsNaN(holeDepth) || double.IsInfinity(holeDepth) || holeDepth <= 0)
+            return ErrJson("hole_depth must be a positive finite number");
+        if (double.IsNaN(csDia) || double.IsInfinity(csDia) || csDia <= 0)
+            return ErrJson("countersink_diameter must be a positive finite number");
+        if (double.IsNaN(csAngle) || double.IsInfinity(csAngle) || csAngle <= 0.0 || csAngle >= 180.0)
+            return ErrJson("countersink_angle must be in (0,180)");
+        if (csDia <= holeDia)
+            return ErrJson("countersink_diameter must be > hole_diameter");
+
+        // countersink depth from included angle:
+        // depth = ((cs_dia - hole_dia)/2) / tan(cs_angle/2)
+        double csDepth = ((csDia - holeDia) / 2.0) / Math.Tan(csAngle / 2.0 * Math.PI / 180.0);
+        if (csDepth >= holeDepth)
+            return ErrJson("computed countersink depth must be < hole_depth");
+
+        // 1) main through hole (smaller dia, deeper cylinder subtract)
+        double rHole = holeDia / 2.0;
+        _sketchCounter++;
+        var b1 = _part.Sketches.CreateSketchInPlaceBuilder2(null);
+        Sketch sk1;
+        try { sk1 = (Sketch)b1.Commit(); }
+        finally { b1.Destroy(); }
+        try { sk1.SetName("SKETCH_CS_HOLE_" + _sketchCounter); } catch { }
+        try { sk1.Activate(Sketch.ViewReorient.True); } catch { }
+        _sketches["SKETCH_CS_HOLE_" + _sketchCounter] = sk1;
+        var ellHole = _part.Curves.CreateEllipse(
+            new Point3d(cx, cy, 0.0),
+            new Vector3d(1.0, 0.0, 0.0), new Vector3d(0.0, 1.0, 0.0),
+            rHole, rHole, 0.0, 2.0 * Math.PI);
+        sk1.AddGeometry(ellHole, Sketch.InferConstraintsOption.InferNoConstraints);
+        try { sk1.Deactivate(Sketch.ViewReorient.True, Sketch.UpdateLevel.Model); } catch { }
+        ExtrudeSketchCore(sk1, startOff, startOff + holeDepth,
+            BooleanOperation.BooleanType.Subtract, body);
+
+        // 2) conical countersink (cone, large top dia -> small bottom dia, subtract)
+        NXOpen.Point axisPt = _part.Points.CreatePoint(new Point3d(cx, cy, startOff));
+        NXOpen.Direction axisDir = _part.Directions.CreateDirection(
+            new Point3d(cx, cy, startOff), new Vector3d(0.0, 0.0, 1.0),
+            SmartObject.UpdateOption.WithinModeling);
+        Axis coneAxis = _part.Axes.CreateAxis(axisPt, axisDir, SmartObject.UpdateOption.WithinModeling);
+
+        var cb = _part.Features.CreateConeBuilder(null);
+        try
+        {
+            cb.Type = NXOpen.Features.ConeBuilder.Types.DiametersAndHeight;
+            cb.Axis = coneAxis;
+            cb.BaseDiameter.RightHandSide = csDia.ToString("0.###", CultureInfo.InvariantCulture);
+            cb.TopDiameter.RightHandSide = holeDia.ToString("0.###", CultureInfo.InvariantCulture);
+            cb.Height.RightHandSide = csDepth.ToString("0.###", CultureInfo.InvariantCulture);
+            cb.BooleanOption.Type = BooleanOperation.BooleanType.Subtract;
+            cb.BooleanOption.SetTargetBodies(new Body[] { body });
+            cb.CommitFeature();
+        }
+        catch (Exception e)
+        {
+            try { cb.Destroy(); } catch { }
+            return ErrJson("countersink cone failed: " + e.Message);
+        }
+        cb.Destroy();
+
+        return OkJson("countersink hole d=" + holeDia + " depth=" + holeDepth
+            + " cs_d=" + csDia + " angle=" + csAngle + " depth=" + csDepth.ToString("0.###")
+            + " at " + cx + "," + cy);
     }
 
     private static string EdgeBlend(string[] parts)
