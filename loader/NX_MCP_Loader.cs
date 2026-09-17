@@ -29,6 +29,7 @@
 //   nx_unite <target_body_id> <tool_body_ids csv>
 //   nx_revolve <sketch_id> <ax> <ay> <bx> <by> <angle> [reverse=0|1]
 //   nx_mirror <body_id> <XY|XZ|YZ> [offset]
+//   nx_linear_pattern <body_id> <X|Y|Z> <count> <spacing> [reverse=0|1]
 //   nx_fit_view
 //   nx_export_step <step-path>
 //   nx_build_plate_test           (single-command acceptance part)
@@ -114,6 +115,19 @@ public static class NX_MCP_Loader
     private static string OkJson(string key, string value, string result)
     {
         return "{\"ok\":true,\"" + Esc(key) + "\":\"" + Esc(value) + "\",\"result\":\"" + Esc(result) + "\"}";
+    }
+
+    private static string OkJsonList(string key, List<string> values, string result)
+    {
+        var sb = new StringBuilder();
+        sb.Append("{\"ok\":true,\"").Append(Esc(key)).Append("\":[");
+        for (int i = 0; i < values.Count; i++)
+        {
+            if (i > 0) sb.Append(",");
+            sb.Append("\"").Append(Esc(values[i])).Append("\"");
+        }
+        sb.Append("],\"result\":\"").Append(Esc(result)).Append("\"}");
+        return sb.ToString();
     }
 
     private static string ErrJson(string msg)
@@ -293,6 +307,8 @@ public static class NX_MCP_Loader
                 return Revolve(parts);
             case "nx_mirror":
                 return Mirror(parts);
+            case "nx_linear_pattern":
+                return LinearPattern(parts);
             case "nx_fit_view":
                 return FitView();
             case "nx_export_step":
@@ -657,6 +673,94 @@ public static class NX_MCP_Loader
             return OkJson("body_id", bid, "mirrored about " + planeName);
         }
         return ErrJson("mirror produced no new body");
+    }
+
+    private static string LinearPattern(string[] parts)
+    {
+        if (parts.Length < 5)
+            return ErrJson("usage: nx_linear_pattern <body_id> <X|Y|Z> <count> <spacing> [reverse]");
+        Body body = GetBody(parts[1]);
+        string dirName = parts[2].ToUpperInvariant();
+        int count;
+        double spacing;
+        if (!int.TryParse(parts[3], NumberStyles.Integer, CultureInfo.InvariantCulture, out count))
+            return ErrJson("count must be an integer >= 2");
+        if (!double.TryParse(parts[4], NumberStyles.Float, CultureInfo.InvariantCulture, out spacing))
+            return ErrJson("bad spacing");
+        bool reverse = parts.Length > 5 && parts[5] == "1";
+        if (count < 2) return ErrJson("count must be >= 2");
+        if (double.IsNaN(spacing) || double.IsInfinity(spacing) || spacing <= 0.0)
+            return ErrJson("spacing must be > 0");
+
+        Vector3d vec;
+        switch (dirName)
+        {
+            case "X": vec = new Vector3d(1, 0, 0); break;
+            case "Y": vec = new Vector3d(0, 1, 0); break;
+            case "Z": vec = new Vector3d(0, 0, 1); break;
+            default: return ErrJson("direction must be X, Y or Z");
+        }
+
+        var before = new HashSet<Tag>();
+        foreach (Body b in _part.Bodies) before.Add(b.Tag);
+
+        // Linear pattern via Move-Object copy: NumberOfCopies is the number of
+        // NEW instances (excluding the seed), each translated by `spacing` along
+        // the direction vector, so count/spacing/reverse semantics are exact and
+        // every copy is an independent non-associative body.
+        var mb = _part.BaseFeatures.CreateMoveObjectBuilder(null);
+        try
+        {
+            try { mb.ObjectToMoveObject.SetArray(new NXObject[] { body }); }
+            catch (Exception e) { throw new Exception("step Objects: " + e.Message, e); }
+            try
+            {
+                mb.Associative = false;
+                mb.MoveObjectResult = MoveObjectBuilder.MoveObjectResultOptions.CopyOriginal;
+                mb.NumberOfCopies = count - 1;
+            }
+            catch (Exception e) { throw new Exception("step Options: " + e.Message, e); }
+
+            try
+            {
+                Vector3d dirVec = reverse
+                    ? new Vector3d(-vec.X, -vec.Y, -vec.Z)
+                    : vec;
+                Direction dirObj = _part.Directions.CreateDirection(
+                    new Point3d(0.0, 0.0, 0.0), dirVec,
+                    SmartObject.UpdateOption.WithinModeling);
+                ModlMotion motion = mb.TransformMotion;
+                motion.Option = ModlMotion.Options.Distance;
+                motion.DistanceVector = dirObj;
+                motion.DistanceValue.RightHandSide =
+                    spacing.ToString("0.###", CultureInfo.InvariantCulture);
+            }
+            catch (Exception e) { throw new Exception("step Motion: " + e.Message, e); }
+
+            try { mb.Commit(); }
+            catch (Exception e) { throw new Exception("step Commit: " + e.Message, e); }
+        }
+        catch (Exception e)
+        {
+            try { mb.Destroy(); } catch { }
+            return ErrJson("linear pattern failed: " + e.Message);
+        }
+        mb.Destroy();
+
+        var newIds = new List<string>();
+        foreach (Body b in _part.Bodies)
+        {
+            if (!before.Contains(b.Tag))
+            {
+                _bodyCounter++;
+                string bid = "BODY_" + _bodyCounter;
+                _bodies[bid] = b;
+                newIds.Add(bid);
+            }
+        }
+        if (newIds.Count == 0) return ErrJson("linear pattern produced no new bodies");
+        return OkJsonList("body_ids", newIds,
+            "linear pattern " + count + " along " + dirName + (reverse ? " (reverse)" : ""));
     }
 
     private static string Hole(string[] parts)

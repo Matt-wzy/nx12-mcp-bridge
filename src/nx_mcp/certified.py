@@ -51,6 +51,7 @@ CERTIFIED_TOOL_NAMES = {
     "nx_unite",
     "nx_revolve",
     "nx_mirror",
+    "nx_linear_pattern",
     "nx_undo",
     "nx_fit_view",
     "nx_release",
@@ -349,6 +350,34 @@ def create_certified_server(
             **await call(
                 "nx_mirror",
                 {"body_id": body_id, "plane": plane, "offset": offset},
+            )
+        )
+
+    @mcp.tool()
+    async def nx_linear_pattern(
+        body_id: str,
+        direction: Literal["X", "Y", "Z"],
+        count: Annotated[int, Field(ge=2, le=1000)],
+        spacing: Annotated[float, Field(gt=0, allow_inf_nan=False)],
+        reverse: bool = False,
+    ) -> ObjectListResult:
+        """Pattern a body linearly along X/Y/Z.
+
+        ``count`` is the total number of instances including the original
+        (count=4 yields 4 bodies); ``spacing`` is the per-instance delta in mm.
+        The original body is kept and new instances are independent bodies
+        (NOT united); use ``nx_unite`` if merging is required.
+        """
+        return ObjectListResult(
+            **await call(
+                "nx_linear_pattern",
+                {
+                    "body_id": body_id,
+                    "direction": direction,
+                    "count": count,
+                    "spacing": spacing,
+                    "reverse": reverse,
+                },
             )
         )
 

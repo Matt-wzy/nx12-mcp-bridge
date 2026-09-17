@@ -134,6 +134,10 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
     if method == "nx_mirror":
         return "nx_mirror %s %s %s" % (
             params["body_id"], params["plane"], _fmt(params.get("offset", 0.0)))
+    if method == "nx_linear_pattern":
+        return "nx_linear_pattern %s %s %s %s %s" % (
+            params["body_id"], params["direction"], int(params["count"]),
+            _fmt(params["spacing"]), _fmt(params.get("reverse", False)))
     if method == "nx_fit_view":
         return "nx_fit_view"
     return None  # unsupported by the phase-1 Loader
@@ -280,6 +284,13 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
         return {
             "status": "success",
             "objects": [_ref("curve", obj_id, part_id)],
+            "message": msg,
+        }
+    if method == "nx_linear_pattern":
+        ids = resp.get("body_ids") or []
+        return {
+            "status": "success",
+            "objects": [_ref("body", str(i), part_id) for i in ids],
             "message": msg,
         }
     if method in ("nx_create_sketch", "nx_sketch_line", "nx_sketch_circle",
