@@ -309,6 +309,8 @@ public static class NX_MCP_Loader
                 return Mirror(parts);
             case "nx_linear_pattern":
                 return LinearPattern(parts);
+            case "nx_circular_pattern":
+                return CircularPattern(parts);
             case "nx_fit_view":
                 return FitView();
             case "nx_export_step":
@@ -761,6 +763,105 @@ public static class NX_MCP_Loader
         if (newIds.Count == 0) return ErrJson("linear pattern produced no new bodies");
         return OkJsonList("body_ids", newIds,
             "linear pattern " + count + " along " + dirName + (reverse ? " (reverse)" : ""));
+    }
+
+    private static string CircularPattern(string[] parts)
+    {
+        // nx_circular_pattern <body_id> <X|Y|Z> <cx> <cy> <cz> <count> <angle> [reverse]
+        if (parts.Length < 8)
+            return ErrJson("usage: nx_circular_pattern <body_id> <X|Y|Z> <cx> <cy> <cz> <count> <angle> [reverse]");
+        Body body = GetBody(parts[1]);
+        string axisName = parts[2].ToUpperInvariant();
+        double cx = D(parts[3]), cy = D(parts[4]), cz = D(parts[5]);
+        int count;
+        double totalAngle;
+        if (!int.TryParse(parts[6], NumberStyles.Integer, CultureInfo.InvariantCulture, out count))
+            return ErrJson("count must be an integer >= 2");
+        if (!double.TryParse(parts[7], NumberStyles.Float, CultureInfo.InvariantCulture, out totalAngle))
+            return ErrJson("bad angle");
+        bool reverse = parts.Length > 8 && parts[8] == "1";
+        if (count < 2) return ErrJson("count must be >= 2");
+        if (double.IsNaN(totalAngle) || double.IsInfinity(totalAngle)
+            || totalAngle <= 0.0 || totalAngle > 360.0)
+            return ErrJson("angle must be in (0, 360]");
+
+        Vector3d axisVec;
+        switch (axisName)
+        {
+            case "X": axisVec = new Vector3d(1, 0, 0); break;
+            case "Y": axisVec = new Vector3d(0, 1, 0); break;
+            case "Z": axisVec = new Vector3d(0, 0, 1); break;
+            default: return ErrJson("axis must be X, Y or Z");
+        }
+        // Angle step semantics:
+        //  - angle == 360: step = 360/count (full circle, instances at 0..360-step)
+        //  - angle <  360: step = angle/(count-1) (seed at 0, last instance at `angle`)
+        double stepAngle = (Math.Abs(totalAngle - 360.0) < 1e-9)
+            ? totalAngle / count
+            : totalAngle / (count - 1);
+
+        var before = new HashSet<Tag>();
+        foreach (Body b in _part.Bodies) before.Add(b.Tag);
+
+        // Circular pattern by rigid rotation copy. Each copy is an independent
+        // rigid rotation of the seed about the axis through `center`, by the
+        // absolute angle theta_i = sign * i * stepAngle. We set the 3x3 rotation
+        // matrix on the Move-Object manipulator so the solid's position AND
+        // own orientation both rotate (point-to-point translation kept position
+        // but never rotated the body). Matrix convention: local axes rotate by
+        // theta, i.e. point P -> R * P about the pivot (WCS origin == center).
+        double sign = reverse ? -1.0 : 1.0;
+
+        for (int i = 1; i < count; i++)
+        {
+            double th = sign * i * stepAngle * Math.PI / 180.0;
+            double c = Math.Cos(th), s = Math.Sin(th);
+            Matrix3x3 mat = new Matrix3x3();
+            mat.Xx = 1.0; mat.Xy = 0.0; mat.Xz = 0.0;
+            mat.Yx = 0.0; mat.Yy = 1.0; mat.Yz = 0.0;
+            mat.Zx = 0.0; mat.Zy = 0.0; mat.Zz = 1.0;
+            switch (axisName)
+            {
+                case "Z": mat.Xx = c; mat.Xy = -s; mat.Yx = s; mat.Yy = c; mat.Zz = 1.0; break;
+                case "X": mat.Xx = 1.0; mat.Yy = c; mat.Yz = -s; mat.Zy = s; mat.Zz = c; break;
+                case "Y": mat.Xx = c; mat.Xz = s; mat.Yy = 1.0; mat.Zx = -s; mat.Zz = c; break;
+            }
+
+            var mb = _part.BaseFeatures.CreateMoveObjectBuilder(null);
+            try
+            {
+                mb.ObjectToMoveObject.SetArray(new NXObject[] { body });
+                mb.Associative = false;
+                mb.MoveObjectResult = MoveObjectBuilder.MoveObjectResultOptions.CopyOriginal;
+                mb.NumberOfCopies = 1;
+                ModlMotion motion = mb.TransformMotion;
+                motion.Option = ModlMotion.Options.Dynamic;
+                motion.ManipulatorMatrix = mat;
+                mb.Commit();
+            }
+            catch (Exception e)
+            {
+                try { mb.Destroy(); } catch { }
+                return ErrJson("circular pattern failed at instance " + i + ": " + e.Message);
+            }
+            mb.Destroy();
+        }
+
+        var newIds = new List<string>();
+        foreach (Body b in _part.Bodies)
+        {
+            if (!before.Contains(b.Tag))
+            {
+                _bodyCounter++;
+                string bid = "BODY_" + _bodyCounter;
+                _bodies[bid] = b;
+                newIds.Add(bid);
+            }
+        }
+        if (newIds.Count == 0) return ErrJson("circular pattern produced no new bodies");
+        return OkJsonList("body_ids", newIds,
+            "circular pattern " + count + " about " + axisName
+            + " sweep " + totalAngle + (reverse ? " (reverse)" : ""));
     }
 
     private static string Hole(string[] parts)

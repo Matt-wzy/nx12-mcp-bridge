@@ -7,7 +7,7 @@ from typing import Annotated, Any, Literal, Protocol
 
 from mcp.server.mcpserver import MCPServer
 from mcp.server.mcpserver.exceptions import ToolError as MCPToolError
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 from nx_mcp import __version__
 from nx_mcp.contracts import (
@@ -22,6 +22,14 @@ from nx_mcp.contracts import (
     StatusResult,
 )
 from nx_mcp.workspace import Workspace, WorkspaceViolation
+
+
+class Point3D(BaseModel):
+    """A 3D point in model space (mm)."""
+
+    x: float = Field(allow_inf_nan=False)
+    y: float = Field(allow_inf_nan=False)
+    z: float = Field(allow_inf_nan=False)
 
 
 class BridgeCaller(Protocol):
@@ -52,6 +60,7 @@ CERTIFIED_TOOL_NAMES = {
     "nx_revolve",
     "nx_mirror",
     "nx_linear_pattern",
+    "nx_circular_pattern",
     "nx_undo",
     "nx_fit_view",
     "nx_release",
@@ -376,6 +385,37 @@ def create_certified_server(
                     "direction": direction,
                     "count": count,
                     "spacing": spacing,
+                    "reverse": reverse,
+                },
+            )
+        )
+
+    @mcp.tool()
+    async def nx_circular_pattern(
+        body_id: str,
+        axis: Literal["X", "Y", "Z"],
+        center: Point3D,
+        count: Annotated[int, Field(ge=2, le=1000)],
+        angle: Annotated[float, Field(gt=0, le=360, allow_inf_nan=False)],
+        reverse: bool = False,
+    ) -> ObjectListResult:
+        """Pattern a body circularly about an axis through ``center``.
+
+        ``count`` is the total number of instances including the original
+        (count=4 yields 4 bodies); ``angle`` is the total sweep in degrees
+        (360.0 distributes evenly around a full circle). The original body is
+        kept and new instances are independent bodies (NOT united); use
+        ``nx_unite`` if merging is required.
+        """
+        return ObjectListResult(
+            **await call(
+                "nx_circular_pattern",
+                {
+                    "body_id": body_id,
+                    "axis": axis,
+                    "center": {"x": center.x, "y": center.y, "z": center.z},
+                    "count": count,
+                    "angle": angle,
                     "reverse": reverse,
                 },
             )

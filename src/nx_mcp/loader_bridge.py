@@ -138,6 +138,13 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
         return "nx_linear_pattern %s %s %s %s %s" % (
             params["body_id"], params["direction"], int(params["count"]),
             _fmt(params["spacing"]), _fmt(params.get("reverse", False)))
+    if method == "nx_circular_pattern":
+        c = params["center"]
+        return "nx_circular_pattern %s %s %s %s %s %s %s %s" % (
+            params["body_id"], params["axis"],
+            _fmt(c["x"]), _fmt(c["y"]), _fmt(c["z"]),
+            int(params["count"]), _fmt(params["angle"]),
+            _fmt(params.get("reverse", False)))
     if method == "nx_fit_view":
         return "nx_fit_view"
     return None  # unsupported by the phase-1 Loader
@@ -287,6 +294,13 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
             "message": msg,
         }
     if method == "nx_linear_pattern":
+        ids = resp.get("body_ids") or []
+        return {
+            "status": "success",
+            "objects": [_ref("body", str(i), part_id) for i in ids],
+            "message": msg,
+        }
+    if method == "nx_circular_pattern":
         ids = resp.get("body_ids") or []
         return {
             "status": "success",
