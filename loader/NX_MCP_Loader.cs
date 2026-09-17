@@ -331,6 +331,10 @@ public static class NX_MCP_Loader
                 return ListObjects("Bodies", "body");
             case "nx_list_features":
                 return ListObjects("Features", "feature");
+            case "nx_list_edges":
+                return ListEdges(parts);
+            case "nx_list_faces":
+                return ListFaces(parts);
             case "nx_undo":
                 return Undo();
             case "nx_build_plate_test":
@@ -1092,6 +1096,193 @@ public static class NX_MCP_Loader
             "shell t=" + thickness + " face=" + removeIdx + " inward=" + inward);
     }
 
+    private static string ListEdges(string[] parts)
+    {
+        if (parts.Length < 2) return ErrJson("usage: nx_list_edges <body_id>");
+        Body body;
+        try { body = GetBody(parts[1]); }
+        catch
+        {
+            // open-part sessions do not repopulate _bodies; fall back to the
+            // first solid body in the work part.
+            Body[] all = _part.Bodies.ToArray();
+            body = null;
+            foreach (Body b in all) if (b.IsSolidBody) { body = b; break; }
+            if (body == null && all.Length > 0) body = all[0];
+            if (body == null) return ErrJson("no body in work part");
+        }
+        Edge[] edges = body.GetEdges();
+        var sb = new StringBuilder();
+        sb.Append("{\"ok\":true,\"body_id\":\"").Append(Esc(parts[1])).Append("\",\"edge_count\":").Append(edges.Length).Append(",\"edges\":[");
+        for (int i = 0; i < edges.Length; i++)
+        {
+            Edge e = edges[i];
+            if (i > 0) sb.Append(",");
+            string ctype = "Other";
+            try { ctype = e.SolidEdgeType.ToString(); } catch { }
+            Point3d s = new Point3d(), en = new Point3d();
+            try { e.GetVertices(out s, out en); } catch { }
+            double mx = (s.X + en.X) / 2.0, my = (s.Y + en.Y) / 2.0, mz = (s.Z + en.Z) / 2.0;
+            bool linear = (ctype == "Linear");
+            // bbox: exact for linear edges (start/end min/max); for curves the
+            // endpoint min/max is NOT the true bounding box, so return null
+            // rather than misleading geometry.
+            string bbMinStr = "null", bbMaxStr = "null";
+            if (linear)
+            {
+                Point3d bbmin = new Point3d(
+                    Math.Min(s.X, en.X), Math.Min(s.Y, en.Y), Math.Min(s.Z, en.Z));
+                Point3d bbmax = new Point3d(
+                    Math.Max(s.X, en.X), Math.Max(s.Y, en.Y), Math.Max(s.Z, en.Z));
+                bbMinStr = "[" + F(bbmin.X) + "," + F(bbmin.Y) + "," + F(bbmin.Z) + "]";
+                bbMaxStr = "[" + F(bbmax.X) + "," + F(bbmax.Y) + "," + F(bbmax.Z) + "]";
+            }
+            double length = 0.0;
+            try { length = e.GetLength(); } catch { }
+            // direction: only for linear edges
+            string dir = "OTHER";
+            try
+            {
+                if (ctype == "Linear")
+                {
+                    double dx = Math.Abs(en.X - s.X), dy = Math.Abs(en.Y - s.Y), dz = Math.Abs(en.Z - s.Z);
+                    if (dx > 1e-6 && dy < 1e-6 && dz < 1e-6) dir = "X";
+                    else if (dy > 1e-6 && dx < 1e-6 && dz < 1e-6) dir = "Y";
+                    else if (dz > 1e-6 && dx < 1e-6 && dy < 1e-6) dir = "Z";
+                }
+            }
+            catch { }
+            int nAdj = 0;
+            try { Face[] af = e.GetFaces(); nAdj = (af != null) ? af.Length : 0; } catch { }
+            string tagStr = "0";
+            try { tagStr = e.Tag.ToString(); } catch { }
+            sb.Append("{\"index\":").Append(i)
+              .Append(",\"tag\":").Append(tagStr)
+              .Append(",\"curve_type\":\"").Append(ctype).Append("\"")
+              .Append(",\"start\":[").Append(F(s.X)).Append(",").Append(F(s.Y)).Append(",").Append(F(s.Z)).Append("]")
+              .Append(",\"end\":[").Append(F(en.X)).Append(",").Append(F(en.Y)).Append(",").Append(F(en.Z)).Append("]")
+              .Append(",\"midpoint\":[").Append(F(mx)).Append(",").Append(F(my)).Append(",").Append(F(mz)).Append("]")
+              .Append(",\"length\":").Append(F(length))
+              .Append(",\"bbox_min\":").Append(bbMinStr)
+              .Append(",\"bbox_max\":").Append(bbMaxStr)
+              .Append(",\"direction\":\"").Append(dir).Append("\"")
+              .Append(",\"adjacent_faces\":").Append(nAdj)
+              .Append("}");
+        }
+        sb.Append("]}");
+        return sb.ToString();
+    }
+
+    private static string ListFaces(string[] parts)
+    {
+        if (parts.Length < 2) return ErrJson("usage: nx_list_faces <body_id>");
+        Body body;
+        try { body = GetBody(parts[1]); }
+        catch
+        {
+            Body[] all = _part.Bodies.ToArray();
+            body = null;
+            foreach (Body b in all) if (b.IsSolidBody) { body = b; break; }
+            if (body == null && all.Length > 0) body = all[0];
+            if (body == null) return ErrJson("no body in work part");
+        }
+        Face[] faces = body.GetFaces();
+        var sb = new StringBuilder();
+        sb.Append("{\"ok\":true,\"body_id\":\"").Append(Esc(parts[1])).Append("\",\"face_count\":").Append(faces.Length).Append(",\"faces\":[");
+        for (int i = 0; i < faces.Length; i++)
+        {
+            Face fc = faces[i];
+            if (i > 0) sb.Append(",");
+            string ftype = "Other";
+            try { ftype = fc.SolidFaceType.ToString(); } catch { }
+            string tagStr = "0";
+            try { tagStr = fc.Tag.ToString(); } catch { }
+            double area = 0.0;
+            Point3d cent = new Point3d();
+            Point3d normalP = new Point3d();
+            bool planar = (ftype == "Planar");
+            string faceErr = "";
+            bool measured = false;
+            try
+            {
+                var measProp = _session.GetType().GetProperty("Measurement",
+                    System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+                object meas = (measProp != null) ? measProp.GetValue(_session, null) : null;
+                if (meas != null)
+                {
+                    var measType = meas.GetType();
+                    var mGetFP = measType.GetMethod("GetFaceProperties");
+                    if (mGetFP != null)
+                    {
+                        var par = mGetFP.GetParameters();
+                    object alt = 0;
+                    foreach (var pp in par)
+                    {
+                        if (pp.IsOut) continue;
+                        if (pp.ParameterType.IsEnum) alt = System.Enum.Parse(pp.ParameterType, "Radius");
+                    }
+                    object[] margs = new object[] {
+                        new ISurface[] { fc },
+                        0.0,
+                        alt,
+                        false,
+                        0.0, 0.0, null, new Point3d(), 0.0, 0.0, new Point3d(), false
+                    };
+                    mGetFP.Invoke(meas, margs);
+                    area = (double)margs[4];
+                    cent = (Point3d)margs[7];
+                    measured = true;
+                    }
+                }
+            }
+            catch (System.Exception ex) { faceErr = ex.Message; }
+            if (!measured)
+            {
+                area = 0.0; cent = new Point3d();
+            }
+            // normal for planar
+            if (planar)
+            {
+                var t = fc.GetType();
+                var surfProp = t.GetProperty("Surface");
+                object surf = (surfProp != null) ? surfProp.GetValue(fc, null) : null;
+                if (surf == null)
+                {
+                    var mGetSurf = t.GetMethod("GetSurface", new System.Type[0]);
+                    if (mGetSurf != null) surf = mGetSurf.Invoke(fc, null);
+                }
+                if (surf is NXOpen.Plane)
+                {
+                    NXOpen.Vector3d nv = ((NXOpen.Plane)surf).Normal;
+                    normalP = new Point3d(nv.X, nv.Y, nv.Z);
+                }
+            }
+            string normalStr = "null";
+            if (planar && (normalP.X != 0 || normalP.Y != 0 || normalP.Z != 0))
+            {
+                normalStr = "[" + F(normalP.X) + "," + F(normalP.Y) + "," + F(normalP.Z) + "]";
+            }
+            int nAdj = 0;
+            try { Edge[] ed = fc.GetEdges(); nAdj = (ed != null) ? ed.Length : 0; } catch { }
+            sb.Append("{\"index\":").Append(i)
+              .Append(",\"tag\":").Append(tagStr)
+              .Append(",\"face_type\":\"").Append(ftype).Append("\"")
+              .Append(",\"centroid\":[").Append(F(cent.X)).Append(",").Append(F(cent.Y)).Append(",").Append(F(cent.Z)).Append("]")
+              .Append(",\"area\":").Append(F(area))
+              .Append(",\"normal\":").Append(normalStr)
+              .Append(",\"adjacent_edges\":").Append(nAdj)
+              .Append(",\"err\":\"").Append(Esc(faceErr)).Append("\"")
+              .Append("}");
+        }
+        sb.Append("]}");
+        return sb.ToString();
+    }
+
+    private static string F(double v)
+    {
+        return v.ToString("0.###", CultureInfo.InvariantCulture);
+    }
+
     private static string EdgeBlend(string[] parts)
     {
         if (parts.Length < 3) return ErrJson("usage: nx_edge_blend <body_id> <radius> [edge_indices csv]");
@@ -1421,6 +1612,19 @@ public static class NX_MCP_Loader
             _part = part;
             _partPath = part.FullPath;
             ResetTaskState();
+            // register existing bodies so GetBody works after nx_open_part
+            try
+            {
+                foreach (Body b in _part.Bodies.ToArray())
+                {
+                    string bid = "";
+                    try { bid = b.Name; } catch { }
+                    if (string.IsNullOrEmpty(bid)) { try { bid = b.JournalIdentifier; } catch { } }
+                    if (string.IsNullOrEmpty(bid)) bid = "BODY_" + (++_bodyCounter);
+                    _bodies[bid] = b;
+                }
+            }
+            catch { }
             return OkJson("part", _partPath, "opened");
         }
         finally

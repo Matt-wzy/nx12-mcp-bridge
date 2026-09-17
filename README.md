@@ -49,7 +49,7 @@ Properties:
 
 ---
 
-## Certified tools (30)
+## Certified tools (32)
 
 Real-machine certified on Siemens NX 2506, Windows.
 
@@ -57,6 +57,7 @@ Real-machine certified on Siemens NX 2506, Windows.
 | --- | --- |
 | Files | `nx_create_part`, `nx_open_part`, `nx_save_part`, `nx_close_part`, `nx_export_step` |
 | Status / queries | `nx_status`, `nx_list_sketches`, `nx_list_bodies`, `nx_list_features` |
+| Geometry inspection | `nx_list_edges`, `nx_list_faces` |
 | Sketch | `nx_create_sketch`, `nx_sketch_line`, `nx_sketch_rectangle`, `nx_sketch_circle`, `nx_sketch_arc`, `nx_finish_sketch` |
 | Extrude | `nx_extrude` (create / unite / subtract) |
 | Holes | `nx_hole`, `nx_counterbore_hole`, `nx_countersink_hole` |
@@ -67,6 +68,25 @@ Real-machine certified on Siemens NX 2506, Windows.
 `nx_release` only clears the current task state and returns NX to normal editing;
 it does **not** unload the resident Loader (the Loader stays ready for the next
 task).
+
+### Geometry inspection
+
+`nx_list_edges` and `nx_list_faces` return real geometry so callers can pick the
+correct edge / face index by position before targeting `nx_shell`,
+`nx_edge_blend`, or `nx_chamfer`:
+
+- `nx_list_edges(body_id)` → per edge: `index`, `tag`, `curve_type`, `start`,
+  `end`, `midpoint`, `length`, `bbox_min`, `bbox_max`, `direction`,
+  `adjacent_faces`.
+- `nx_list_faces(body_id)` → per face: `index`, `tag`, `face_type`, `centroid`,
+  `area`, `normal`, `adjacent_edges`. Centroid and area come from
+  `Session.Measurement.GetFaceProperties`. On NX 2506 `normal` may be `null`
+  for some faces; centroid and area remain valid.
+
+> Edge `index`, face `index`, and `tag` are diagnostic identifiers for the
+> current NX session and current topology only. After any topology change
+> (extrude, shell, blend, unite, undo, reopen) re-query `nx_list_edges` /
+> `nx_list_faces` and do not reuse old indices.
 
 The original legacy tools outside this certified surface remain hidden by
 default.
