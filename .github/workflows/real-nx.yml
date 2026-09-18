@@ -1,13 +1,7 @@
-name: Real NX validation
+name: Real NX resident-loader validation
 
 on:
   workflow_dispatch:
-    inputs:
-      iterations:
-        description: Number of acceptance iterations
-        required: true
-        default: 20
-        type: number
 
 concurrency:
   group: real-nx-${{ github.repository }}
@@ -18,110 +12,141 @@ permissions:
 
 jobs:
   real-nx:
-    name: real NX acceptance
+    name: resident Loader acceptance
     runs-on: [self-hosted, windows, nx]
-    timeout-minutes: 45
+    timeout-minutes: 30
     env:
-      NX_MCP_ALLOW_UNVERIFIED_PYTHON_BRIDGE: "1"
       NX_MCP_REAL_NX: "1"
-      NX_MCP_REAL_NX_ITERATIONS: ${{ inputs.iterations }}
-      NX_MCP_REAL_NX_RUN_PREFIX: ci-${{ github.run_id }}-${{ github.run_attempt }}
+
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
           cache: pip
+
       - name: Install package and dev dependencies
         run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
-      - name: Prepare dedicated NX workspace
+
+      - name: Prepare isolated workspace
         shell: pwsh
         run: |
-          if (-not $env:NX_RUN_JOURNAL) {
-            throw "Set NX_RUN_JOURNAL on the self-hosted runner to run_journal.exe."
+          if (-not $env:NX_UGRAF_EXE) {
+            throw "Set NX_UGRAF_EXE on the self-hosted runner to ugraf.exe."
           }
-          if (-not (Test-Path -LiteralPath $env:NX_RUN_JOURNAL)) {
-            throw "NX_RUN_JOURNAL does not exist: $env:NX_RUN_JOURNAL"
+          if (-not (Test-Path -LiteralPath $env:NX_UGRAF_EXE)) {
+            throw "NX_UGRAF_EXE does not exist: $env:NX_UGRAF_EXE"
           }
-
-          $descriptorPath = Join-Path $env:LOCALAPPDATA 'nx-mcp\bridge.json'
-          if ((Test-Path -LiteralPath $descriptorPath) -or (Get-Process ugraf,run_journal -ErrorAction SilentlyContinue)) {
-            throw "Dedicated runner has an existing NX session or descriptor; refusing to replace it."
+          if (Get-Process ugraf -ErrorAction SilentlyContinue) {
+            throw "Dedicated real-NX runner already has ugraf running."
           }
 
-          $nxWorkspace = Join-Path $env:RUNNER_TEMP "nx-mcp-real-nx-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
-          New-Item -ItemType Directory -Force -Path $nxWorkspace | Out-Null
-          Add-Content -LiteralPath $env:GITHUB_ENV -Value "NX_MCP_WORKSPACE=$nxWorkspace"
-          Add-Content -LiteralPath $env:GITHUB_ENV -Value "NX_MCP_BRIDGE_STOP_FILE=$(Join-Path $nxWorkspace 'stop-bridge')"
-          Add-Content -LiteralPath $env:GITHUB_ENV -Value "NX_MCP_PROBE_OUTPUT=$(Join-Path $nxWorkspace 'nx-runtime-probe.json')"
-      - name: Verify NX embedded runtime
+          $ws = Join-Path $env:RUNNER_TEMP "nx-mcp-resident-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          $ugii = Join-Path $ws "nx-user"
+          New-Item -ItemType Directory -Force -Path $ws,$ugii,(Join-Path $ugii "startup") | Out-Null
+
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "NX_MCP_WORKSPACE=$ws"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "UGII_USER_DIR=$ugii"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "NX_MCP_BACKEND=loader"
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "NX_MCP_ENHANCED_SRC=$(Join-Path $PWD 'src')"
+
+      - name: Build and deploy resident Loader
         shell: pwsh
         run: |
-          & $env:NX_RUN_JOURNAL -nx (Join-Path $PWD 'examples\nx_runtime_probe.py')
-          if ($LASTEXITCODE -ne 0) {
-            throw "NX runtime probe failed with exit code $LASTEXITCODE."
+          Push-Location loader
+          try {
+            & $env:ComSpec /c "build.bat"
+            if ($LASTEXITCODE -ne 0) { throw "Loader build failed" }
+          }
+          finally {
+            Pop-Location
           }
 
-          $probe = Get-Content -Raw -LiteralPath $env:NX_MCP_PROBE_OUTPUT | ConvertFrom-Json
-          if ($null -ne $probe.bridge_import_error) {
-            throw "NX bridge import failed: $($probe.bridge_import_error)"
+          $src = Join-Path $PWD "loader\NX_MCP_Loader.dll"
+          $dst = Join-Path $env:UGII_USER_DIR "startup\NX_MCP_Loader.dll"
+          Copy-Item -Force $src $dst
+          if ((Get-FileHash $src).Hash -ne (Get-FileHash $dst).Hash) {
+            throw "Loader deployment hash mismatch"
           }
-      - name: Start NX bridge
+
+      - name: Start NX and wait for named pipe
         shell: pwsh
         run: |
-          $startedAt = [DateTime]::UtcNow
-          $bridgeScript = Join-Path $PWD 'examples\start_nx_bridge.py'
-          $bridgeProcess = Start-Process -FilePath $env:NX_RUN_JOURNAL -ArgumentList @(
-            '-nx',
-            "`"$bridgeScript`""
-          ) -PassThru -WindowStyle Hidden
-          Add-Content -LiteralPath $env:GITHUB_ENV -Value "NX_MCP_BRIDGE_PID=$($bridgeProcess.Id)"
+          $p = Start-Process -FilePath $env:NX_UGRAF_EXE -PassThru
+          Add-Content -LiteralPath $env:GITHUB_ENV -Value "NX_UGRAF_PID=$($p.Id)"
 
-          $descriptorPath = Join-Path $env:LOCALAPPDATA 'nx-mcp\bridge.json'
-          $deadline = [DateTime]::UtcNow.AddMinutes(2)
+          $deadline = [DateTime]::UtcNow.AddMinutes(3)
+          $ready = $false
           do {
-            if (Test-Path -LiteralPath $descriptorPath) {
-              $descriptor = Get-Item -LiteralPath $descriptorPath
-              if ($descriptor.LastWriteTimeUtc -ge $startedAt) {
+            Start-Sleep -Seconds 2
+            try {
+              $out = & powershell -NoProfile -ExecutionPolicy Bypass -File .\loader\nx_client.ps1 -Cmd nx_status -TimeoutSec 10 2>&1
+              $txt = ($out -join [Environment]::NewLine)
+              if ($txt -match "CONNECTED" -and $txt -match '"ok"\s*:\s*true' -and $txt -match '"ready"\s*:\s*true') {
+                $ready = $true
                 break
               }
             }
-            Start-Sleep -Seconds 1
+            catch {}
           } while ([DateTime]::UtcNow -lt $deadline)
 
-          if (-not (Test-Path -LiteralPath $descriptorPath) -or $descriptor.LastWriteTimeUtc -lt $startedAt) {
-            throw "NX bridge did not write a fresh descriptor within two minutes."
-          }
-      - name: Run real NX acceptance test
+          if (-not $ready) { throw "Resident Loader named pipe did not become ready." }
+
+      - name: Build and run smoke plan through Plan Runner
         shell: pwsh
-        run: python -m pytest -q -p no:cacheprovider -m real_nx tests/test_real_nx.py --junitxml="$env:NX_MCP_WORKSPACE/acceptance.xml"
-      - name: Stop NX bridge
+        run: |
+          $frozen = Join-Path $env:NX_MCP_WORKSPACE "ci-smoke.frozen.json"
+          $exe = Join-Path $env:NX_MCP_WORKSPACE "ci-smoke.executable.json"
+          $report = Join-Path $env:NX_MCP_WORKSPACE "ci-smoke.report.json"
+
+          $plan = [ordered]@{
+            skill = "nx-agent"
+            mode = "FAST"
+            part = "ci-smoke.prt"
+            coordinate_system = "XY origin at lower-left, Z=0 bottom, mm"
+            operations = @(
+              [ordered]@{step=1;goal="create part";tool="nx_create_part";target="-";tool_args=@{path="ci-smoke.prt";units="mm"};topology_changes=$false},
+              [ordered]@{step=2;goal="create sketch";tool="nx_create_sketch";target="-";tool_args=@{plane="XY"};topology_changes=$false},
+              [ordered]@{step=3;goal="rectangle";tool="nx_sketch_rectangle";target="sketch_base";tool_args=@{sketch_id="sketch_base";corner1=@{x=0;y=0};corner2=@{x=20;y=10}};topology_changes=$false},
+              [ordered]@{step=4;goal="finish";tool="nx_finish_sketch";target="sketch_base";tool_args=@{sketch_id="sketch_base"};topology_changes=$false},
+              [ordered]@{step=5;goal="extrude";tool="nx_extrude";target="sketch_base";tool_args=@{sketch_id="sketch_base";distance=12.5;operation="create"};topology_changes=$true;refresh_edges_after=$true;refresh_faces_after=$true},
+              [ordered]@{step=6;goal="one body";tool="nx_list_bodies";target="-";tool_args=@{};expectation=@{body_count=1};topology_changes=$false},
+              [ordered]@{step=7;goal="save";tool="nx_save_part";target="-";tool_args=@{};topology_changes=$false},
+              [ordered]@{step=8;goal="export";tool="nx_export_step";target="-";tool_args=@{path="ci-smoke.step"};topology_changes=$false}
+            )
+          }
+          $plan | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $frozen -Encoding UTF8
+
+          python .\agent\nx-mcp-plan-runner\runner.py build $frozen $exe
+          if ($LASTEXITCODE -ne 0) { throw "Runner build failed" }
+          python .\agent\nx-mcp-plan-runner\runner.py check $exe
+          if ($LASTEXITCODE -ne 0) { throw "Runner check failed" }
+          python .\agent\nx-mcp-plan-runner\runner.py run $exe --workspace $env:NX_MCP_WORKSPACE --report $report --repair-attempt 0
+          if ($LASTEXITCODE -ne 0) { throw "Runner smoke execution failed" }
+
+          $rep = Get-Content -Raw -LiteralPath $report | ConvertFrom-Json
+          if ($rep.status -ne "success") { throw "Runner report is not success" }
+          if ($rep.body_count -ne 1) { throw "Unexpected body count" }
+          if (-not (Test-Path (Join-Path $env:NX_MCP_WORKSPACE "ci-smoke.prt"))) { throw "PRT missing" }
+          if (-not (Test-Path (Join-Path $env:NX_MCP_WORKSPACE "ci-smoke.step"))) { throw "STEP missing" }
+
+      - name: Stop owned NX process
         if: always()
         shell: pwsh
         run: |
-          if ($env:NX_MCP_BRIDGE_STOP_FILE) {
-            New-Item -ItemType File -Force -Path $env:NX_MCP_BRIDGE_STOP_FILE | Out-Null
-          }
-          if ($env:NX_MCP_BRIDGE_PID) {
-            $bridgeProcess = Get-Process -Id $env:NX_MCP_BRIDGE_PID -ErrorAction SilentlyContinue
-            if ($bridgeProcess) {
-              $bridgeProcess.WaitForExit(120000)
-              if (-not $bridgeProcess.HasExited) {
-                throw "NX bridge process did not stop cleanly."
-              }
-            }
+          if ($env:NX_UGRAF_PID) {
+            $p = Get-Process -Id $env:NX_UGRAF_PID -ErrorAction SilentlyContinue
+            if ($p) { Stop-Process -Id $p.Id -Force }
           }
 
-      - name: Verify reconnection with separately owned NX processes
-        shell: pwsh
-        run: python -m pytest -q -p no:cacheprovider -m real_nx tests/test_real_nx_restart.py --junitxml="$env:NX_MCP_WORKSPACE/restart.xml"
-      - name: Upload allowlisted acceptance evidence
+      - name: Upload acceptance evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: real-nx-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          name: real-nx-resident-evidence-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ env.NX_MCP_WORKSPACE }}/nx-runtime-probe.json
-            ${{ env.NX_MCP_WORKSPACE }}/acceptance.xml
-            ${{ env.NX_MCP_WORKSPACE }}/restart.xml
+            ${{ env.NX_MCP_WORKSPACE }}/ci-smoke.report.json
+            ${{ env.NX_MCP_WORKSPACE }}/ci-smoke.prt
+            ${{ env.NX_MCP_WORKSPACE }}/ci-smoke.step
           if-no-files-found: warn
