@@ -30,116 +30,116 @@ Agent
 
 ---
 
-## Certified tools (32)
+## 已认证工具（32 个）
 
-Real-machine certified on Siemens NX 2506, Windows.
+已在 Windows + Siemens NX 2506 真机环境完成验证。
 
-| Group | Tools |
+| 分类 | 工具 |
 | --- | --- |
-| Files | `nx_create_part`, `nx_open_part`, `nx_save_part`, `nx_close_part`, `nx_export_step` |
-| Status / queries | `nx_status`, `nx_list_sketches`, `nx_list_bodies`, `nx_list_features` |
-| Geometry inspection | `nx_list_edges`, `nx_list_faces` |
-| Sketch | `nx_create_sketch`, `nx_sketch_line`, `nx_sketch_rectangle`, `nx_sketch_circle`, `nx_sketch_arc`, `nx_finish_sketch` |
-| Extrude | `nx_extrude` (create / unite / subtract) |
-| Holes | `nx_hole`, `nx_counterbore_hole`, `nx_countersink_hole` |
-| Features | `nx_unite`, `nx_revolve`, `nx_mirror`, `nx_linear_pattern`, `nx_circular_pattern`, `nx_shell` |
-| Edges | `nx_edge_blend`, `nx_chamfer` |
-| View / recovery | `nx_undo`, `nx_fit_view`, `nx_release` |
+| 文件 | `nx_create_part`, `nx_open_part`, `nx_save_part`, `nx_close_part`, `nx_export_step` |
+| 状态 / 查询 | `nx_status`, `nx_list_sketches`, `nx_list_bodies`, `nx_list_features` |
+| 几何检查 | `nx_list_edges`, `nx_list_faces` |
+| 草图 | `nx_create_sketch`, `nx_sketch_line`, `nx_sketch_rectangle`, `nx_sketch_circle`, `nx_sketch_arc`, `nx_finish_sketch` |
+| 拉伸 | `nx_extrude`（create / unite / subtract） |
+| 孔 | `nx_hole`, `nx_counterbore_hole`, `nx_countersink_hole` |
+| 特征 | `nx_unite`, `nx_revolve`, `nx_mirror`, `nx_linear_pattern`, `nx_circular_pattern`, `nx_shell` |
+| 边处理 | `nx_edge_blend`, `nx_chamfer` |
+| 视图 / 恢复 | `nx_undo`, `nx_fit_view`, `nx_release` |
 
 ---
 
-## Install — integrated one-click flow
+## 安装 — 一体化一键流程
 
-Requirements:
+### 环境要求
 
 - Windows 10/11
-- Siemens NX installed (validated on **NX 2506**)
+- 已安装 Siemens NX（当前在 **NX 2506** 上完成真机验证）
 - Python 3.10+
-- Doubao desktop installed
+- 已安装并至少启动过一次 Agent 客户端
 
-After cloning the repository, run **one command** from the repository root:
+克隆仓库后，在仓库根目录执行一条命令：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-The installer automatically completes:
+安装器会自动完成：
 
-1. Python virtual environment + NX_MCP-Enhanced sidecar
-2. Workspace creation
-3. `UGII_USER_DIR` configuration for the current Windows user
-4. C# Loader build
-5. Loader deployment to `%UGII_USER_DIR%\startup`
-6. Drawing Reader Skill installation
-7. Modeling Planner Skill installation
-8. Pipeline Skill installation
-9. Plan Runner installation and lightweight tests
+1. 创建 Python 虚拟环境并安装 NX_MCP-Enhanced sidecar
+2. 创建 Workspace
+3. 为当前 Windows 用户配置 `UGII_USER_DIR`
+4. 构建 C# Loader
+5. 将 Loader 部署到 `%UGII_USER_DIR%\startup`
+6. 安装 Drawing Reader Skill
+7. 安装 Modeling Planner Skill
+8. 安装 Pipeline Skill
+9. 安装 Plan Runner 并执行轻量测试
 
-For multiple Doubao profiles:
+如果存在多个 Agent Profile，可手动指定：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -DoubaoProfile "Profile 7"
 ```
 
-If Siemens NX was already running before installation, restart it once so the
-new process can read `UGII_USER_DIR` and auto-load the newly deployed Loader.
-If NX was not running, simply start it after installation.
+> 注：`-DoubaoProfile` 是当前安装脚本中的兼容参数名，仅用于指定本机 Profile。
 
-Then open a new Doubao conversation, upload a 2D mechanical drawing, and send:
+如果安装前 Siemens NX 已经处于运行状态，安装完成后需要重启一次 NX，
+让新进程读取 `UGII_USER_DIR` 并自动加载新部署的 Loader。
+如果 NX 尚未启动，安装完成后直接启动即可。
+
+然后新建一个 Agent 对话，上传二维机械工程图，并发送：
 
 ```
 开始建模
 ```
 
-See [INSTALL.md](INSTALL.md) for details and manual/advanced installation.
+完整安装说明请查看 [INSTALL.md](INSTALL.md)。
 
 ---
 
-## Paths (auto-detected)
+## 路径自动检测
 
-| Item | Resolution order |
+| 项目 | 检测 / 使用顺序 |
 | --- | --- |
-| NX install (`UGII_BASE_DIR`) | `UGII_BASE_DIR` env → registry → `PATH` → `%ProgramFiles%\Siemens\NX*` |
-| Workspace (`NX_MCP_WORKSPACE`) | environment variable → `%USERPROFILE%\NX_MCP_WORKSPACE` |
-| NX user dir (`UGII_USER_DIR`) | existing environment → otherwise installer sets `%USERPROFILE%\.nx_mcp_user` |
-| Loader startup | `%UGII_USER_DIR%\startup` |
+| NX 安装目录（`UGII_BASE_DIR`） | `UGII_BASE_DIR` 环境变量 → 注册表 → `PATH` → `%ProgramFiles%\Siemens\NX*` |
+| Workspace（`NX_MCP_WORKSPACE`） | 环境变量 → `%USERPROFILE%\NX_MCP_WORKSPACE` |
+| NX 用户目录（`UGII_USER_DIR`） | 优先使用已有环境变量；未设置时自动配置为 `%USERPROFILE%\.nx_mcp_user` |
+| Loader 启动目录 | `%UGII_USER_DIR%\startup` |
 
 ---
 
-## Known limitations
+## 当前限制
 
-- Threaded holes / real thread geometry are not supported.
-- Sweep, Loft, Draft, Spline, involute gears and complex free-form surfaces are
-  outside the current certified scope.
-- Real-NX certification is currently based on **NX 2506 / Windows**; other NX
-  versions may work but are not formally validated.
-- STEP export may briefly lag while the NX translator finishes writing.
+- 暂不支持真实螺纹 / 螺纹孔几何。
+- Sweep、Loft、Draft、Spline、渐开线齿轮及复杂自由曲面不在当前认证范围内。
+- 当前真机认证环境为 **NX 2506 / Windows**；其他 NX 版本可能可用，但尚未正式验证。
+- STEP 导出后，NX Translator 可能需要短暂时间完成文件写入。
 
 ---
 
 ## 二维工程图 → NX 自动建模
 
-The Agent Pack is **bundled in this repository and installed automatically by
-`install.ps1`**. It provides:
+Agent Pack 已经**内置在本仓库中，并由 `install.ps1` 自动安装**，包含：
 
-- `nx-engineering-drawing-reader`: engineering drawing → structured JSON
-- `nx-mcp-modeling-planner`: JSON → executable modeling plan
-- `nx-mcp-pipeline`: one-command A → B → C orchestration
-- `nx-mcp-plan-runner`: deterministic plan execution in NX
+- `nx-engineering-drawing-reader`：二维机械工程图 → 结构化 JSON
+- `nx-mcp-modeling-planner`：结构化 JSON → 可执行建模计划
+- `nx-mcp-pipeline`：一条指令完成 A → B → C 全流程编排
+- `nx-mcp-plan-runner`：在 NX 中确定性执行建模计划
 
-Detailed usage: [docs/DRAWING_TO_NX.md](docs/DRAWING_TO_NX.md)
+详细使用说明：[docs/DRAWING_TO_NX.md](docs/DRAWING_TO_NX.md)
 
-The NX_MCP core can still be used independently; `install-agent.ps1` remains
-available as an advanced helper to reinstall only the Agent Pack.
+NX_MCP 核心仍可独立使用；`install-agent.ps1` 保留为高级工具，
+用于只重装 Agent Pack，而不重新安装 NX_MCP 核心。
 
 ---
 
-## Credits
+## 致谢
 
-- Original project: DreamEnding/NX_MCP
-- Enhanced edition / integrated Agent Pack: NX MCP contributors
+- 原始项目：DreamEnding/NX_MCP
+- 增强版 / 一体化 Agent Pack：NX MCP contributors
 
-## License
+## 许可证
 
-MIT License. See [LICENSE](LICENSE).
-Original project content remains under its own MIT license.
+MIT License，详见 [LICENSE](LICENSE)。
+
+原始项目内容继续遵循其自身的 MIT License。
