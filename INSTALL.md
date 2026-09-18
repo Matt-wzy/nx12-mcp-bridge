@@ -36,7 +36,7 @@ The single installer performs the complete setup:
 6. Auto-detects the local Siemens NX installation
 7. Builds `NX_MCP_Loader.dll`
 8. Deploys the Loader to `%UGII_USER_DIR%\startup`
-9. Installs the bundled NX Modeling / Drawing Reader / Modeling Planner / Pipeline Skills
+9. Installs the unified `nx-agent` Skill
 10. Installs the generic Plan Runner
 11. Runs lightweight Agent Pack tests
 
@@ -57,7 +57,7 @@ After NX is started with the new environment, two workflows are available:
 
 ### Text-description modeling
 
-Open a new Agent conversation and directly describe the NX model you want to create or edit. The installed `nx-modeling` Skill uses the existing NX_MCP tool surface for this workflow.
+Open a new Agent conversation and directly describe the NX model you want to create or edit. The unified `nx-agent` Skill uses the existing NX_MCP tool surface for this workflow.
 
 Example:
 
@@ -119,11 +119,8 @@ This fixes the first-install case where the DLL existed under
 
 The installer automatically runs `install-agent.ps1` internally and installs:
 
-- `nx-modeling`
-- `nx-engineering-drawing-reader`
-- `nx-mcp-modeling-planner`
-- `nx-mcp-pipeline`
-- `nx-mcp-plan-runner`
+- `nx-agent` — the single user-facing Skill for text modeling, current-part editing, and 2D drawing modeling
+- `nx-mcp-plan-runner` — the deterministic execution runtime used internally by drawing mode
 
 `install-agent.ps1` remains available only as an advanced helper when you want
 to reinstall the Agent Pack without reinstalling the NX_MCP core.
@@ -148,7 +145,7 @@ The integrated installer verifies:
 - `nx_mcp` can be imported from the repository venv
 - `UGII_USER_DIR` is configured
 - built and deployed Loader DLL SHA256 values match
-- all three Skill frontmatter names are correct
+- the unified Skill frontmatter name is correct
 - Plan Runner files exist
 - Plan Runner lightweight tests pass
 
@@ -157,6 +154,6 @@ It deliberately does **not** execute a real modeling task during installation.
 ## Uninstall / rollback notes
 
 - Loader only: run `loader\uninstall.bat` and restart NX.
-- Agent Pack only: remove the three installed Skill folders and
+- Agent Pack only: remove the installed `nx-agent` Skill folder and
   `%USERPROFILE%\NX_MCP_WORKSPACE\nx-mcp-plan-runner`.
 - Repository venv: remove `.venv` if you no longer need this installation.
