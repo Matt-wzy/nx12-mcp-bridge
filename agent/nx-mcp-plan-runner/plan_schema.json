@@ -1,29 +1,100 @@
 {
   "schema_version": "1.1",
-  "description": "nx-mcp-plan-runner plan schema. Two tiers: the frozen planner output format (unchanged, backward compatible) and the executable format (frozen + minimal extensions). The Runner executes the executable format; it can READ (parse/validate) both.",
+  "description": "nx-mcp-plan-runner plan schema for the unified nx-agent. Two tiers: frozen planner output and executable format.",
   "frozen_format": {
-    "planner": "nx-mcp-modeling-planner",
+    "planner": "nx-agent modeling planner module",
     "top_level_fields": [
-      {"name": "skill", "required": false},
-      {"name": "mode", "required": true, "values": ["FAST", "DIAGNOSTIC"]},
-      {"name": "part", "required": false},
-      {"name": "coordinate_system", "required": false},
-      {"name": "notes", "required": false, "type": "string[]"},
-      {"name": "operations", "required": true, "type": "operation[]"},
-      {"name": "final_validation", "required": false},
-      {"name": "fallbacks", "required": false}
+      {
+        "name": "skill",
+        "required": false
+      },
+      {
+        "name": "mode",
+        "required": true,
+        "values": [
+          "FAST",
+          "DIAGNOSTIC"
+        ]
+      },
+      {
+        "name": "part",
+        "required": false
+      },
+      {
+        "name": "coordinate_system",
+        "required": false
+      },
+      {
+        "name": "notes",
+        "required": false,
+        "type": "string[]"
+      },
+      {
+        "name": "operations",
+        "required": true,
+        "type": "operation[]"
+      },
+      {
+        "name": "final_validation",
+        "required": false
+      },
+      {
+        "name": "fallbacks",
+        "required": false
+      }
     ],
     "operation_fields": [
-      {"name": "step", "required": true, "type": "int"},
-      {"name": "goal", "required": false},
-      {"name": "tool", "required": true, "values": "one of the 32 certified NX_MCP tools"},
-      {"name": "target", "required": false},
-      {"name": "tool_args", "required": true, "type": "object", "note": "real params sent to NX_MCP; logical names may appear as values"},
-      {"name": "selection_criteria", "required": false, "note": "local filter rules; NEVER sent to NX_MCP"},
-      {"name": "expectation", "required": false, "note": "judgement rules; NEVER sent to NX_MCP"},
-      {"name": "topology_changes", "required": true, "type": "bool"},
-      {"name": "refresh_edges_after", "required": false, "type": "bool", "note": "information only: previously cached edge indices are stale; the Runner never auto-lists"},
-      {"name": "refresh_faces_after", "required": false, "type": "bool", "note": "information only: previously cached face indices are stale; the Runner never auto-lists"}
+      {
+        "name": "step",
+        "required": true,
+        "type": "int"
+      },
+      {
+        "name": "goal",
+        "required": false
+      },
+      {
+        "name": "tool",
+        "required": true,
+        "values": "one of the 32 certified NX_MCP tools"
+      },
+      {
+        "name": "target",
+        "required": false
+      },
+      {
+        "name": "tool_args",
+        "required": true,
+        "type": "object",
+        "note": "real params sent to NX_MCP; logical names may appear as values"
+      },
+      {
+        "name": "selection_criteria",
+        "required": false,
+        "note": "local filter rules; NEVER sent to NX_MCP"
+      },
+      {
+        "name": "expectation",
+        "required": false,
+        "note": "judgement rules; NEVER sent to NX_MCP"
+      },
+      {
+        "name": "topology_changes",
+        "required": true,
+        "type": "bool"
+      },
+      {
+        "name": "refresh_edges_after",
+        "required": false,
+        "type": "bool",
+        "note": "information only: previously cached edge indices are stale; the Runner never auto-lists"
+      },
+      {
+        "name": "refresh_faces_after",
+        "required": false,
+        "type": "bool",
+        "note": "information only: previously cached face indices are stale; the Runner never auto-lists"
+      }
     ]
   },
   "executable_extensions": {
@@ -32,7 +103,9 @@
       {
         "name": "result_bindings",
         "type": "object",
-        "example": { "body": "body_base" },
+        "example": {
+          "body": "body_base"
+        },
         "semantics": "After a successful call, bind named response fields into the symbol table. Field keys are adapted-response fields: object / body / sketch / feature / part / path / objects. Values are logical names, or arrays of names (multi-name binding = aliases to the same result, e.g. an unite that re-bases the main solid). Objects use their .id."
       },
       {
@@ -44,7 +117,12 @@
       {
         "name": "retry",
         "type": "object",
-        "example": { "max": 1, "if_error_contains": ["撤消"] },
+        "example": {
+          "max": 1,
+          "if_error_contains": [
+            "撤消"
+          ]
+        },
         "semantics": "The ONLY retries the Runner performs. Declared in the plan (from planner fallbacks or known loader transients); never invented at runtime. Retried only when the error text contains any substring of if_error_contains and retry count < max."
       }
     ],
@@ -92,7 +170,8 @@
     ],
     "group_mode": "if every value of selection_criteria is itself an object of criteria keys, the criteria are NAMED GROUPS: each group filters independently and its match count is bound by name (e.g. {\"flange_top\": {...}, \"boss_tops\": {...}}).",
     "informational_keys": [
-      "note", "use",
+      "note",
+      "use",
       "keys containing 'auxiliary'",
       "keys ending in '_approx' are ACTIVE filters on the base key (strip '_approx', e.g. centroid_radius_approx -> centroid_radius)"
     ]
@@ -110,38 +189,233 @@
   "certified_tool_params": {
     "note": "Allowed tool_args keys per certified tool (NX_MCP-Enhanced v2.1.1). The Runner validates resolved args against these before dispatch.",
     "spec": {
-      "nx_status": {"optional": []},
-      "nx_create_part": {"required": ["path"], "optional": ["units"]},
-      "nx_open_part": {"required": ["path"]},
-      "nx_save_part": {"optional": []},
-      "nx_close_part": {"optional": ["save"]},
-      "nx_export_step": {"required": ["path"]},
-      "nx_list_sketches": {"optional": []},
-      "nx_list_bodies": {"optional": []},
-      "nx_list_features": {"optional": []},
-      "nx_list_edges": {"required": ["body_id"]},
-      "nx_list_faces": {"required": ["body_id"]},
-      "nx_create_sketch": {"optional": ["plane", "name"]},
-      "nx_sketch_line": {"required": ["sketch_id", "start", "end"]},
-      "nx_sketch_rectangle": {"required": ["sketch_id", "corner1", "corner2"], "note": "corner1/corner2 are the BRIDGE slot names; the runner adapter packs center into corner1 and width/height into corner2 (loader grammar cx cy w h)"},
-      "nx_sketch_circle": {"required": ["sketch_id", "center", "diameter"]},
-      "nx_sketch_arc": {"required": ["sketch_id", "center", "radius"], "optional": ["start_angle", "end_angle"]},
-      "nx_finish_sketch": {"required": ["sketch_id"]},
-      "nx_extrude": {"required": ["sketch_id", "distance"], "optional": ["reverse", "start_offset", "operation", "target_body_id"]},
-      "nx_hole": {"required": ["body_id", "center", "diameter", "depth"], "optional": ["start_offset"]},
-      "nx_counterbore_hole": {"required": ["body_id", "center", "hole_diameter", "hole_depth", "counterbore_diameter", "counterbore_depth"], "optional": ["start_offset"]},
-      "nx_countersink_hole": {"required": ["body_id", "center", "hole_diameter", "hole_depth", "countersink_diameter"], "optional": ["countersink_angle", "start_offset"]},
-      "nx_shell": {"required": ["body_id", "thickness", "remove_face_index"], "optional": ["inward"]},
-      "nx_edge_blend": {"required": ["body_id", "radius"], "optional": ["edge_indices"]},
-      "nx_chamfer": {"required": ["body_id", "offset"], "optional": ["edge_indices"]},
-      "nx_unite": {"required": ["target_body_id", "tool_body_ids"]},
-      "nx_revolve": {"required": ["sketch_id", "axis_start", "axis_end"], "optional": ["angle", "reverse"]},
-      "nx_mirror": {"required": ["body_id", "plane"], "optional": ["offset"]},
-      "nx_linear_pattern": {"required": ["body_id", "direction", "count", "spacing"], "optional": ["reverse"]},
-      "nx_circular_pattern": {"required": ["body_id", "axis", "center", "count", "angle"], "optional": ["reverse"]},
-      "nx_undo": {"optional": []},
-      "nx_fit_view": {"optional": []},
-      "nx_release": {"optional": []}
+      "nx_status": {
+        "optional": []
+      },
+      "nx_create_part": {
+        "required": [
+          "path"
+        ],
+        "optional": [
+          "units"
+        ]
+      },
+      "nx_open_part": {
+        "required": [
+          "path"
+        ]
+      },
+      "nx_save_part": {
+        "optional": []
+      },
+      "nx_close_part": {
+        "optional": [
+          "save"
+        ]
+      },
+      "nx_export_step": {
+        "required": [
+          "path"
+        ]
+      },
+      "nx_list_sketches": {
+        "optional": []
+      },
+      "nx_list_bodies": {
+        "optional": []
+      },
+      "nx_list_features": {
+        "optional": []
+      },
+      "nx_list_edges": {
+        "required": [
+          "body_id"
+        ]
+      },
+      "nx_list_faces": {
+        "required": [
+          "body_id"
+        ]
+      },
+      "nx_create_sketch": {
+        "optional": [
+          "plane",
+          "name"
+        ]
+      },
+      "nx_sketch_line": {
+        "required": [
+          "sketch_id",
+          "start",
+          "end"
+        ]
+      },
+      "nx_sketch_rectangle": {
+        "required": [
+          "sketch_id",
+          "corner1",
+          "corner2"
+        ],
+        "note": "corner1/corner2 are the BRIDGE slot names; the runner adapter packs center into corner1 and width/height into corner2 (loader grammar cx cy w h)"
+      },
+      "nx_sketch_circle": {
+        "required": [
+          "sketch_id",
+          "center",
+          "diameter"
+        ]
+      },
+      "nx_sketch_arc": {
+        "required": [
+          "sketch_id",
+          "center",
+          "radius"
+        ],
+        "optional": [
+          "start_angle",
+          "end_angle"
+        ]
+      },
+      "nx_finish_sketch": {
+        "required": [
+          "sketch_id"
+        ]
+      },
+      "nx_extrude": {
+        "required": [
+          "sketch_id",
+          "distance"
+        ],
+        "optional": [
+          "reverse",
+          "start_offset",
+          "operation",
+          "target_body_id"
+        ]
+      },
+      "nx_hole": {
+        "required": [
+          "body_id",
+          "center",
+          "diameter",
+          "depth"
+        ],
+        "optional": [
+          "start_offset"
+        ]
+      },
+      "nx_counterbore_hole": {
+        "required": [
+          "body_id",
+          "center",
+          "hole_diameter",
+          "hole_depth",
+          "counterbore_diameter",
+          "counterbore_depth"
+        ],
+        "optional": [
+          "start_offset"
+        ]
+      },
+      "nx_countersink_hole": {
+        "required": [
+          "body_id",
+          "center",
+          "hole_diameter",
+          "hole_depth",
+          "countersink_diameter"
+        ],
+        "optional": [
+          "countersink_angle",
+          "start_offset"
+        ]
+      },
+      "nx_shell": {
+        "required": [
+          "body_id",
+          "thickness",
+          "remove_face_index"
+        ],
+        "optional": [
+          "inward"
+        ]
+      },
+      "nx_edge_blend": {
+        "required": [
+          "body_id",
+          "radius"
+        ],
+        "optional": [
+          "edge_indices"
+        ]
+      },
+      "nx_chamfer": {
+        "required": [
+          "body_id",
+          "offset"
+        ],
+        "optional": [
+          "edge_indices"
+        ]
+      },
+      "nx_unite": {
+        "required": [
+          "target_body_id",
+          "tool_body_ids"
+        ]
+      },
+      "nx_revolve": {
+        "required": [
+          "sketch_id",
+          "axis_start",
+          "axis_end"
+        ],
+        "optional": [
+          "angle",
+          "reverse"
+        ]
+      },
+      "nx_mirror": {
+        "required": [
+          "body_id",
+          "plane"
+        ],
+        "optional": [
+          "offset"
+        ]
+      },
+      "nx_linear_pattern": {
+        "required": [
+          "body_id",
+          "direction",
+          "count",
+          "spacing"
+        ],
+        "optional": [
+          "reverse"
+        ]
+      },
+      "nx_circular_pattern": {
+        "required": [
+          "body_id",
+          "axis",
+          "center",
+          "count",
+          "angle"
+        ],
+        "optional": [
+          "reverse"
+        ]
+      },
+      "nx_undo": {
+        "optional": []
+      },
+      "nx_fit_view": {
+        "optional": []
+      },
+      "nx_release": {
+        "optional": []
+      }
     }
   }
 }
