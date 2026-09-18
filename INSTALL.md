@@ -120,7 +120,7 @@ This fixes the first-install case where the DLL existed under
 The installer automatically runs `install-agent.ps1` internally and installs:
 
 - `nx-agent` — the single user-facing Skill for text modeling, safe edits of explicitly selected saved workspace parts, and 2D drawing modeling
-- `nx-mcp-plan-runner` — the deterministic execution runtime used internally by drawing mode
+- `nx-mcp-plan-runner` — the deterministic execution runtime used internally by both text-description and drawing workflows
 
 `install-agent.ps1` remains available only as an advanced helper when you want
 to reinstall the Agent Pack without reinstalling the NX_MCP core.
