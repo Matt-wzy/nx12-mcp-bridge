@@ -56,10 +56,11 @@ else {
     Write-Host "[Python] 复用已有虚拟环境: $venvDir"
 }
 
-Write-Host "[Python] 安装 NX_MCP-Enhanced 及依赖..."
+Write-Host "[Python] 安装 NX_MCP-Enhanced 运行依赖..."
 Push-Location $RepoRoot
 try {
-    & $venvPython -m pip install -e ".[dev]"
+    # 普通用户只安装运行依赖；pytest/ruff/mypy/pre-commit 等开发工具保留给 CI / 开发环境。
+    & $venvPython -m pip install -e "."
     if ($LASTEXITCODE -ne 0) {
         throw "pip 安装失败（exit=$LASTEXITCODE）"
     }
