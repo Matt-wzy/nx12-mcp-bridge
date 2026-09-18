@@ -57,7 +57,7 @@ After NX is started with the new environment, two workflows are available:
 
 ### Text-description modeling
 
-Open a new Agent conversation and directly describe the NX model you want to create or edit. The unified `nx-agent` Skill uses the existing NX_MCP tool surface for this workflow.
+Open a new Agent conversation and directly describe the NX model you want to create or edit. The unified `nx-agent` converts the text request into a modeling plan and executes it through the installed Plan Runner and resident Loader; no extra MCP-client JSON is required.
 
 Example:
 
@@ -119,7 +119,7 @@ This fixes the first-install case where the DLL existed under
 
 The installer automatically runs `install-agent.ps1` internally and installs:
 
-- `nx-agent` — the single user-facing Skill for text modeling, current-part editing, and 2D drawing modeling
+- `nx-agent` — the single user-facing Skill for text modeling, safe edits of explicitly selected saved workspace parts, and 2D drawing modeling
 - `nx-mcp-plan-runner` — the deterministic execution runtime used internally by drawing mode
 
 `install-agent.ps1` remains available only as an advanced helper when you want
@@ -146,8 +146,8 @@ The integrated installer verifies:
 - `UGII_USER_DIR` is configured
 - built and deployed Loader DLL SHA256 values match
 - the unified Skill frontmatter name is correct
-- Plan Runner files exist
-- Plan Runner lightweight tests pass
+- Plan Runner files and runtime-config exist
+- Plan Runner lightweight tests and Agent Pack static verification pass
 
 It deliberately does **not** execute a real modeling task during installation.
 
