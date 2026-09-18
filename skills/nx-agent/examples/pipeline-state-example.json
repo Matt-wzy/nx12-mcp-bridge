@@ -1,5 +1,5 @@
 {
-  "pipeline_status": "success",
+  "pipeline_status": "success_after_repair",
   "current_stage": "C",
   "input_image": "%USERPROFILE%\\Desktop\\bearing_seat_2d.png",
   "stage_a": {
@@ -18,9 +18,34 @@
     "check_status": "passed",
     "operations": 59
   },
+  "self_healing": {
+    "max_repairs": 1,
+    "repair_count": 1,
+    "first_failure": {
+      "stage": "C",
+      "failed_step": 6,
+      "reason": "face selection count=0"
+    },
+    "diagnosis": "top face selection over-constrained by normal",
+    "repair": "use Planar + centroid_z + count=1",
+    "repaired_plan_path": "%USERPROFILE%\\NX_MCP_WORKSPACE\\bearing_seat_plan.repair1.json"
+  },
   "stage_c": {
     "status": "success",
-    "elapsed_seconds": 96.5,
+    "attempts": [
+      {
+        "attempt": 1,
+        "status": "failed",
+        "elapsed_seconds": 8.2,
+        "failed_step": 6
+      },
+      {
+        "attempt": 2,
+        "status": "success",
+        "elapsed_seconds": 96.5
+      }
+    ],
+    "elapsed_seconds": 104.7,
     "body_count": 1,
     "model_bbox": {
       "x_min": -90,
@@ -33,5 +58,5 @@
     "prt_path": "%USERPROFILE%\\NX_MCP_WORKSPACE\\bearing_seat.prt",
     "step_path": "%USERPROFILE%\\NX_MCP_WORKSPACE\\bearing_seat.step"
   },
-  "total_elapsed_seconds": 124.8
+  "total_elapsed_seconds": 151.3
 }

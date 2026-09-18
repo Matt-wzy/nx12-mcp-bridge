@@ -135,7 +135,7 @@ Pattern / Mirror / Edge Blend / Chamfer / 任何改变实体拓扑的操作
   - 边：`curve_type` / `start` / `end` / `midpoint` / `midpoint_z` /
     `length` / `bbox_min` / `bbox_max` / `bbox_x` / `bbox_y` /
     `bbox_z` / `corners_xy` / `direction` / `adjacent_faces`
-  - 面：`face_type` / `centroid` / `area` / `normal`（仅 planar）/ 邻接边数
+  - 面：`face_type` / `centroid` / `centroid_z` / `centroid_radius` / `area` / `normal`（仅 planar，辅助）/ 邻接边数
   - 这些筛选条件写入计划步骤的 `selection_criteria`（见 §8），**不放入
     `tool_args`**。
 - **Linear 边方向语法固定为字符串**：`"X"` / `"Y"` / `"Z"` / `"OTHER"`。
@@ -153,6 +153,13 @@ Pattern / Mirror / Edge Blend / Chamfer / 任何改变实体拓扑的操作
   `length + midpoint_z + expectation.count` 进一步限定。
 - **曲线边禁止 bbox**：Circular / Elliptical / Conical 等曲线边不得使用
   `bbox` / `bbox_x` / `bbox_y` / `bbox_z` / `corners_xy`。
+- **Planar 顶/底面稳定选择规则（强制）**：若目标面在目标 body 中可通过 Z 高度唯一确定，
+  优先使用 `face_type:"Planar" + centroid_z + expectation.count`。不要把
+  `normal:[0,0,1]` 或 `[0,0,-1]` 作为首要硬条件；当前 Loader/拓扑变化下 normal
+  更适合作为辅助信息。只有同一 Z 高度存在多个 Planar 面时，才增加完整 `centroid`
+  或 `area` 辅助区分。
+- **Shell remove face**：若最高 Z 只有一个 Planar 面，固定用
+  `face_type:"Planar" + centroid_z=<最高Z> + count=1`；禁止仅靠 normal。
 - group mode 只用于**确实需要不同几何条件的多组目标**。group 的每个 value
   必须直接是合法 criteria 对象；**禁止额外包一层 `groups` 键**。
 - 详见 `references/topology-safety.md`。
@@ -170,23 +177,18 @@ Pattern / Mirror / Edge Blend / Chamfer / 任何改变实体拓扑的操作
 - 若两个实体只是理论上刚好接触而导致 Boolean 不稳定，允许使用**不改变最终
   外形尺寸**的微小内部重叠建模方式；最终几何尺寸不能改变。
 
-## 6. 失败处理
+## 6. 失败处理与受控自动修复
 
-> 本节的“一次最小修正”只适用于独立使用 Planner/执行器时的运行时操作错误。
-> **当由 nx-mcp-pipeline 调用时，B 阶段 runner build/check 失败必须直接上报，
-> 禁止修改 frozen plan 后继续 build/check。**
-
-一个操作失败后**禁止立刻无脑重复同一调用**。必须先判断错误属于：
-- **参数错误** → 修正参数后重试一次；
-- **body 选择错误** → `nx_list_bodies` 取新 id 后重试一次；
-- **edge/face index 失效** → 重新 `nx_list_edges` / `nx_list_faces` 后操作一次；
-- **Boolean 不相交** → 检查几何是否真实相交、该 body 是否已被消费
-  （Unite 后 tool body 会消失），做最小修正后重试一次；
-- **NX 拓扑改变** → 重新识别后继续；
-- **工具当前能力不支持** → 换当前 NX_MCP 已支持的等价建模顺序（仅一次），
-  或停止并上报。
-
-只允许针对原因做**一次最小修正**；禁止进入长时间无限自我修复循环。
+- **B 阶段 runner build/check 失败**：直接判定 B 失败，禁止修改 frozen plan 后自动重跑。
+- **C 阶段 Runner 失败**：Planner 本身不在原模型上继续操作，也不从失败步骤续跑；
+  是否允许受控自动修复由 `pipeline-contract.md` 决定。
+- 允许生成“修复后的新 frozen plan”的前提：根因已经确定，且修复只影响计划表达，
+  **不改变任何图纸尺寸、特征数量、位置、建模语义或 NX_MCP 能力边界**。
+- 典型允许修复：edge/face `selection_criteria` 过严、Loader 返回类型语义差异、
+  可通过冻结契约确定的稳定筛选方式替换。
+- 典型禁止修复：图纸 unresolved/conflict、猜尺寸、改变实体结构、Boolean 几何本身错误、
+  超出 certified tools 能力、用户无关 dirty part、需要修改 Runner/NX_MCP/Loader。
+- 每次 Pipeline 最多只允许 1 次受控自动修复；第二次失败必须停止。
 
 ## 7. 验证：FAST / DIAGNOSTIC
 

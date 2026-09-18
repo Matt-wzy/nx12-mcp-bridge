@@ -69,10 +69,32 @@ nx_shell(body_id, thickness, remove_face_index=<确认的 index>, inward=true)
 | `face_type` | "Planar" / "Cylindrical" / "Swept" / "Conical" / "Toroidal" / ... |
 | `centroid` | 顶面 (0,0,48)；法兰顶环面 (0,0,56)；凸台顶面 (x,y,20) |
 | `area` | **只作辅助**（见下）；不作为单点失败条件 |
-| `normal` | 仅 Planar：顶面 [0,0,1]、底面 [0,0,-1] |
+| `normal` | 仅 Planar；**只作辅助**，不作为唯一顶/底面的首要硬筛选条件 |
 | 邻接边数 | 辅助确认 |
 
-### 4.1 边筛选稳定语法（Planner 强制）
+### 4.1 面筛选稳定语法（Planner 强制）
+
+当目标是唯一顶面/底面时，优先：
+```json
+{
+  "tool": "nx_list_faces",
+  "tool_args": {"body_id": "body_main"},
+  "selection_criteria": {
+    "face_type": "Planar",
+    "centroid_z": {"value": 40.0, "tol": 0.5}
+  },
+  "expectation": {"count": 1}
+}
+```
+
+规则：
+- 唯一顶/底面：`face_type + centroid_z + count`；
+- `normal` 仅辅助，不作为首要硬条件；
+- `area` 仅辅助，不作单点失败条件；
+- 同一 Z 高度存在多个 Planar 面时，再增加完整 `centroid` 或 `area`；
+- Shell remove face 同样遵循本规则。
+
+### 4.2 边筛选稳定语法（Planner 强制）
 
 Runner 已验证的 edge criteria 关键语法：
 
@@ -192,7 +214,7 @@ Z 高度 / 数量 / face type / 直径相关几何。**
 | 法兰顶圆与底圆混淆 | 圆边无 bbox；用候选 `["Elliptical","Circular"]` + `length`（Ø104→326.73）+ `midpoint_z`（顶=56，底=48） |
 | Ø104 外圆与 Ø72 内圆混淆 | 长度不同（326.73 vs 226.19） |
 | 圆角后角棱消失 | 先 R6 后找 R8 时，R8 边仍在（互不相邻），但必须重查 |
-| Shell 移除面猜错 | 顶面唯一判定：Planar + centroid.z=48 + normal=[0,0,1]（面积≈5541.77 仅辅助） |
+| Shell 顶面筛选返回空 | 唯一顶面优先 `Planar + centroid_z + count=1`；`normal` 仅辅助，面积仅辅助 |
 | 用加工前面积做最终验证 | C2 后法兰顶环面是 **3782.48** 不是 4423.36；Ø6.6 后凸台顶环面是 **220.26** 不是 254.47 |
 | 只相切却 Unite 成主体 | 底板顶边与 R35 圆立板底端单点相切 → Unite 不可靠、工具体未并入、后续孔"工具体完全在目标体外"；此类主体改**单一连续闭合轮廓一次拉伸**（SKILL.md §3.0 Profile-First），禁止零面积接触 Unite |
 

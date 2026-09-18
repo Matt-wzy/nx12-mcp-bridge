@@ -1,6 +1,6 @@
 ---
 name: nx-agent
-description: 作者：抖音 无趣。Siemens NX 自动建模统一入口。支持文字描述直接建模、修改当前 NX 零件，以及二维机械工程图自动读取→建模规划→Plan Runner 执行→输出 PRT/STEP。根据输入自动选择模式，并遵守冻结的 NX_MCP、拓扑安全、门禁与 fail-fast 规则。
+description: 作者：抖音 无趣。Siemens NX 自动建模统一入口。支持文字描述直接建模、修改当前 NX 零件，以及二维机械工程图自动读取→建模规划→Plan Runner 执行→输出 PRT/STEP。根据输入自动选择模式，并遵守冻结的 NX_MCP、拓扑安全、阶段门禁与 Controlled Self-Healing（受控自动修复）规则。
 ---
 
 # NX Agent — Siemens NX 自动建模统一入口
@@ -60,8 +60,12 @@ B 阶段必须在 frozen plan 首次落盘前完成静态自检。禁止先生�
 - 先做 preflight
 - resident C# Loader 只以 named pipe `nx_mcp_loader` ready 为准
 - 禁止使用 legacy `bridge.json` 判断 Loader 是否加载
-- Runner 正式建模后任意 modeling step 失败 → 整个任务失败
-- 失败后禁止自动 repair、修改 plan 续跑、手动补建、手动 save、手动 STEP 导出
+- Runner 单次执行仍采用 fail-fast：任意 modeling step 失败，**当前尝试立即停止**
+- 允许最多 **1 次 Controlled Self-Healing（受控自动修复）**
+- 自动修复只允许针对“可确定、可复现、不会改变图纸尺寸/几何语义”的计划级问题，例如 edge/face `selection_criteria` 过严、Loader 类型语义差异、当前 Pipeline 自己失败后遗留的同名 dirty part
+- 修复时禁止从失败步骤续跑；必须清理本次 Pipeline 自己产生的失败零件，重新 build/check，并从 C 的第 1 步完整重跑
+- 第二次仍失败、或失败原因不在允许修复范围内 → 最终失败
+- 禁止手动 bridge 补建、禁止修改 NX_MCP / Runner / Loader、禁止猜尺寸
 
 ## 4. 拓扑与边选择
 - 所有 edge / face index 都是临时数据；拓扑改变后旧 index 立即失效
@@ -71,13 +75,16 @@ B 阶段必须在 frozen plan 首次落盘前完成静态自检。禁止先生�
 - **完整圆边在当前 Loader 的 `nx_list_edges` 中可能报告为 `Elliptical`，不得只写死 `Circular`**
 - 完整圆边优先使用 `curve_type:["Elliptical","Circular"] + length + midpoint_z + expectation.count`
 - 连续多个圆角/倒角必须每次重新 `nx_list_edges`
+- **唯一顶/底平面优先使用 `face_type:"Planar" + centroid_z + expectation.count`；`normal` 只作辅助，不作为首要硬筛选条件**
+- 如果同一 Z 高度存在多个 Planar 面，再增加完整 `centroid` 或 `area` 辅助区分
 - 禁止只按 index 数字猜边/面
 
 完整细则以 `references/topology-safety.md` 和 `references/nx-mcp-rules.md` 为准。
 
 ## 5. 输出
 - 用户可见回复使用自然中文
-- 工程图模式成功时输出：图纸解析耗时、建模规划耗时、NX 建模耗时、总耗时、实体数量、模型尺寸、PRT 路径、STEP 路径
+- 工程图模式成功时输出：图纸解析耗时、建模规划耗时、NX 建模耗时、总耗时、自动修复次数、实体数量、模型尺寸、PRT 路径、STEP 路径
+- 若发生受控自动修复，必须明确显示首次失败步骤/原因与“自动修复后成功”，不得伪装成一次通过
 - 失败只报告失败阶段、失败步骤和失败原因
 - 不输出内部 JSON 键、长 plan、思考过程或调试噪音
 

@@ -86,7 +86,8 @@ Planner 直接写对角点 `{x,y}` 即可，无需自行换算。
 以下操作完成后，之前获得的 edge index / face index **一律立即失效**（见 topology-safety.md 完整清单）：
 `Unite / Subtract / Hole / Counterbore / Countersink / Shell / Pattern / Mirror / Edge Blend / Chamfer` 及任何改变实体拓扑的操作。
 
-- 每个边/面操作前必须重新 `nx_list_edges` / `nx_list_faces` 并按**几何条件**（midpoint / bbox / direction / curve_type / adjacent_faces / centroid / area / normal）筛选，禁止猜 index。
+- 每个边/面操作前必须重新 `nx_list_edges` / `nx_list_faces` 并按**几何条件**筛选，禁止猜 index。
+- face 选择的 Planner 稳定策略：唯一顶/底 Planar 面优先 `face_type + centroid_z + count`；`normal` 与 `area` 只作辅助。只有同一 Z 高度存在多个 Planar 面时，再增加完整 `centroid` 或 `area`。
 - 连续多个边操作必须：list → 定位 → 执行 → 再 list → 定位 → 执行，禁止一次 list 保存多组 index 连续使用。
 
 ## 9. build / check 输入输出约定
@@ -120,6 +121,7 @@ check（executable）检查项：
 硬编码，Planner 从每个零件的最终几何关系推导。
 
 selection_criteria 值语法：精确值（默认容差 0.5，可 `{"value":n,"tol":t}`）、`{"min","max"}` 范围、`[lo,hi]`、候选数组、`{"any":[...]}`。
+face 额外冻结语义：对唯一顶/底 Planar 面，Planner 优先 `face_type:"Planar" + centroid_z + expectation.count`；`normal` 只作辅助，不作为首要硬筛选条件；`area` 只辅助。
 edge 额外冻结语法：`direction` 必须是 `"X"|"Y"|"Z"|"OTHER"` 字符串；
 `midpoint` 是完整 `[x,y,z]`；只筛高度用 `midpoint_z`；
 `corners_xy` 是 `[[x1,y1],...]`，用于一次匹配多个指定 XY 位置的 Linear 边。
