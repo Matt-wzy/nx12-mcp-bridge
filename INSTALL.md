@@ -30,7 +30,7 @@ The single installer performs the complete setup:
 
 1. Checks Python 3.10+
 2. Creates/reuses `.venv`
-3. Installs NX_MCP-Enhanced and its Python dependencies
+3. Installs NX_MCP-Enhanced and its runtime Python dependencies only
 4. Creates/uses `%USERPROFILE%\NX_MCP_WORKSPACE`
 5. Determines and persists `UGII_USER_DIR`
 6. Auto-detects the local Siemens NX installation
@@ -127,16 +127,24 @@ to reinstall the Agent Pack without reinstalling the NX_MCP core.
 
 ## Manual / advanced installation
 
-If you intentionally want the core without the integrated Agent Pack:
+If you intentionally want the core without the integrated Agent Pack, install only the runtime dependencies:
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\.venv\Scripts\python.exe -m pip install -e "."
 .\loader\build.bat
 ```
 
 Then set `UGII_USER_DIR`, deploy `loader\NX_MCP_Loader.dll` to
 `%UGII_USER_DIR%\startup`, and restart NX.
+
+For repository development or the full test/lint/type-check toolchain, install the optional development dependencies instead:
+
+```powershell
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+```
+
+The normal one-click installer does not install `pytest`, `pytest-cov`, `ruff`, `mypy`, or `pre-commit`; GitHub CI and contributor environments continue to use the `dev` extra.
 
 ## Verification
 
