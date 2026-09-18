@@ -1,6 +1,6 @@
 ---
 name: nx-mcp-modeling-planner
-description: Use when a complete, unambiguous set of 3D modeling dimensions or structured JSON must be turned into a reliable, pre-planned call sequence for the existing NX_MCP tools (Siemens NX). Plans the full feature order up front (base solid → additive features → unite → shell → pattern/mirror → holes → blends/chamfers → validation → save/STEP), enforces edge/face index freshness, avoids boolean retries and deep STEP audits, and outputs a FAST/DIAGNOSTIC operation plan. Does NOT do image recognition, OCR, or drawing reading; does NOT modify NX_MCP-Enhanced.
+description: 作者：抖音 无趣。Use when a complete, unambiguous set of 3D modeling dimensions or structured JSON must be turned into a reliable, pre-planned call sequence for the existing NX_MCP tools (Siemens NX). Plans the full feature order up front (base solid → additive features → unite → shell → pattern/mirror → holes → blends/chamfers → validation → save/STEP), enforces edge/face index freshness, avoids boolean retries and deep STEP audits, and outputs a FAST/DIAGNOSTIC operation plan. Does NOT do image recognition, OCR, or drawing reading; does NOT modify NX_MCP-Enhanced.
 ---
 
 # NX MCP Modeling Planner
