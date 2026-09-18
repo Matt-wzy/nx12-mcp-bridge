@@ -1,7 +1,7 @@
-# NX Agent 工程图模式接口规范
+# NX Agent 工程图/文字建模执行规范
 
 ## 1. 总控职责
-工程图模式只负责编排 A→B→C，不自行解析图纸、不重新解释尺寸、不直接手工补建几何。
+本规范负责统一编排文字建模与工程图建模的计划执行层，不直接手工补建几何。
 
 核心策略：**Fail-fast + Controlled Self-Healing（受控自动修复）**。
 
@@ -11,7 +11,19 @@
 - 只有满足安全门禁时，才允许最多 1 次受控自动修复；
 - 自动修复必须从干净状态完整重跑，禁止从失败步骤续跑。
 
-## 2. 阶段 A：工程图读取
+## 2. Runtime Config（强制）
+
+安装器会在 Runner 目录生成 `runtime-config.json`，至少包含：
+
+- `python_exe`
+- `workspace_root`
+- `nx_mcp_src`
+- `repo_root`
+
+执行 Runner 时必须优先读取该文件，并使用其中的 `python_exe` 与 `workspace_root`。
+所有 plan / report / PRT / STEP 都必须落在 `workspace_root` 内，禁止把聊天目录或临时对话目录当作工作区。
+
+## 3. 阶段 A：工程图读取
 读取 `drawing-reader.md` 与 `nx-drawing-rules.md`。
 输出结构化 JSON 并落盘。
 
@@ -22,8 +34,8 @@
 
 A 失败立即停止，**不允许自动修复**。
 
-## 3. 阶段 B：建模规划
-输入只允许 A 生成的 JSON。
+## 4. 阶段 B：建模规划
+输入可以是工程图模式 A 阶段 JSON，或文字模式中已经确认完整的结构化建模意图。
 读取：
 - `modeling-planner.md`
 - `runner-contract.md`
@@ -33,16 +45,16 @@ A 失败立即停止，**不允许自动修复**。
 
 正常路径：
 ```text
-A JSON → FAST plan → 发布前静态自检 → frozen plan → runner build → runner check → executable plan
+结构化输入 → FAST plan → 发布前静态自检 → frozen plan → runner build → runner check → executable plan
 ```
 
 runner build/check 任一失败即 B 失败。B 阶段失败**不进入自修复**，禁止修改 frozen plan 后自动重跑。
 
-## 4. 阶段 C：Plan Runner
+## 5. 阶段 C：Plan Runner
 Runner 路径：
-`%USERPROFILE%\NX_MCP_WORKSPACE\nx-mcp-plan-runner\runner.py`
+`<runtime-config.workspace_root>\nx-mcp-plan-runner\runner.py`
 
-### 4.1 Preflight
+### 5.1 Preflight
 只允许：
 - 检查/启动 NX
 - 探测 named pipe `nx_mcp_loader`
@@ -54,7 +66,7 @@ CONNECTED + ok=true + ready=true 即 ready。
 
 禁止用 `%LOCALAPPDATA%\nx-mcp\bridge.json` 判断 resident Loader。
 
-### 4.2 单次尝试的 fail-fast
+### 5.2 单次尝试的 fail-fast
 Runner 正式开始建模后，任一 operation 失败：
 - 当前 Runner 尝试立即停止；
 - 禁止在当前 dirty model 上继续执行后续步骤；
@@ -65,15 +77,15 @@ Runner 正式开始建模后，任一 operation 失败：
 
 这一步只结束“当前尝试”，是否进入一次受控自动修复由 §5 决定。
 
-## 5. Controlled Self-Healing（受控自动修复）
+## 6. Controlled Self-Healing（受控自动修复）
 
-### 5.1 次数
+### 6.1 次数
 每次 Pipeline **最多 1 次**自动修复：
 - attempt 1 失败 → 可评估 repair；
 - repair 后 attempt 2 成功 → 最终“成功（自动修复后）”；
 - attempt 2 再失败 → 最终失败，禁止第三次尝试。
 
-### 5.2 允许修复的范围
+### 6.2 允许修复的范围
 只有根因明确、可确定、不会改变设计语义时才允许：
 1. edge / face `selection_criteria` 匹配 0 条或数量不符；
 2. Loader 已冻结的返回语义差异，例如：
@@ -82,7 +94,7 @@ Runner 正式开始建模后，任一 operation 失败：
 3. 筛选条件过严，可替换为冻结契约中已验证的稳定组合；
 4. 上一次失败由**当前 Pipeline 自己创建**的计划输出零件处于 dirty 状态，需要无保存清理后完整重跑。
 
-### 5.3 禁止自动修复
+### 6.3 禁止自动修复
 以下任一情况必须最终失败：
 - A 阶段 unresolved > 0 / dimension conflict / 尺寸缺失；
 - 需要猜尺寸、改尺寸、改孔位、改特征数量；
@@ -93,19 +105,32 @@ Runner 正式开始建模后，任一 operation 失败：
 - 无法确定修复是否改变最终几何；
 - 第一次修复后的 attempt 2 再次失败。
 
-### 5.4 修复过程（强制）
+### 6.4 修复过程（强制）
 允许修复时必须按以下顺序：
 1. 保留 attempt 1 失败报告；
 2. 只读诊断失败原因；
 3. 生成 **repair plan v1**，只修改已确认的计划级问题；
 4. 重新执行 runner build + check；失败则最终失败；
-5. 确认当前 dirty part 的路径/名称属于本次 Pipeline 自己创建的目标零件；
-6. 关闭/丢弃该失败零件，**不得保存**；
+5. 禁止 Agent 手动关闭 dirty part；
+6. 第二次执行必须交给 Runner preflight 安全处理本任务自己的 planned dirty part；
 7. 从 C 的第 1 步完整重跑 executable plan；
 8. 禁止从 failed_step 接着执行；
 9. 最终报告必须披露自动修复次数、首次失败步骤和首次失败原因。
 
-### 5.5 允许的 selection 修复示例
+第二次执行必须使用：
+```text
+python_exe runner.py run <repair-executable.json>
+  --workspace <workspace_root>
+  --report <attempt2-report.json>
+  --mode benchmark
+  --allow-overwrite
+  --repair-attempt 1
+  --repair-report <attempt1-report.json>
+```
+
+Runner 会机器校验 previous report、planned part 和 repair 次数，防止第三次 repair。
+
+### 6.5 允许的 selection 修复示例
 - 唯一顶面：
   `Planar + centroid_z + count=1`
   优先于 `Planar + normal + ...`。
@@ -115,7 +140,7 @@ Runner 正式开始建模后，任一 operation 失败：
 - 四角竖边：
   `Linear + direction="Z" + corners_xy + bbox_z + count`。
 
-## 6. 面选择稳定规则
+## 7. 面选择稳定规则
 当目标是唯一顶/底 Planar 面时：
 - 首选 `face_type:"Planar" + centroid_z + expectation.count`；
 - `normal` 只作为辅助信息，不作为首要硬筛选；
@@ -133,7 +158,7 @@ Shell remove face 若最高 Z 只有一个 Planar 面，固定按：
 }
 ```
 
-## 7. 总耗时
+## 8. 总耗时
 `total_elapsed_seconds` 必须是**真实墙钟时间**：
 从收到“开始建模”并正式执行，到最终成功/失败报告返回。
 
@@ -150,5 +175,5 @@ Shell remove face 若最高 Z 只有一个 Planar 面，固定按：
 
 `C_RUNNER_SECONDS` = 所有 Runner 尝试的 elapsed_seconds 之和。
 
-## 8. 用户输出
+## 9. 用户输出
 最终用户可见格式以 `chinese-output.md` 为准。
