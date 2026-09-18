@@ -126,6 +126,12 @@ def main() -> None:
         if "v2.1.1" in md.read_text(encoding="utf-8"):
             fail(f"stale release pin remains in Agent Pack rules/docs: {md.name}")
 
+    installer = (ROOT / "install.ps1").read_text(encoding="utf-8")
+    if 'pip install -e ".[dev]"' in installer:
+        fail("normal install.ps1 must not install development extras")
+    if 'pip install -e "."' not in installer:
+        fail("normal install.ps1 is missing runtime-only editable install")
+
     print("Agent Pack static verification passed")
 
 
