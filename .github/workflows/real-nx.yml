@@ -113,7 +113,8 @@ jobs:
               [ordered]@{step=5;goal="extrude";tool="nx_extrude";target="sketch_base";tool_args=@{sketch_id="sketch_base";distance=12.5;operation="create"};topology_changes=$true;refresh_edges_after=$true;refresh_faces_after=$true},
               [ordered]@{step=6;goal="one body";tool="nx_list_bodies";target="-";tool_args=@{};expectation=@{body_count=1};topology_changes=$false},
               [ordered]@{step=7;goal="save";tool="nx_save_part";target="-";tool_args=@{};topology_changes=$false},
-              [ordered]@{step=8;goal="export";tool="nx_export_step";target="-";tool_args=@{path="ci-smoke.step"};topology_changes=$false}
+              [ordered]@{step=8;goal="export";tool="nx_export_step";target="-";tool_args=@{path="ci-smoke.step"};topology_changes=$false},
+              [ordered]@{step=9;goal="release task";tool="nx_release";target="-";tool_args=@{};topology_changes=$false}
             )
           }
           $plan | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $frozen -Encoding UTF8
@@ -130,6 +131,65 @@ jobs:
           if ($rep.body_count -ne 1) { throw "Unexpected body count" }
           if (-not (Test-Path (Join-Path $env:NX_MCP_WORKSPACE "ci-smoke.prt"))) { throw "PRT missing" }
           if (-not (Test-Path (Join-Path $env:NX_MCP_WORKSPACE "ci-smoke.step"))) { throw "STEP missing" }
+
+      - name: Validate XZ and YZ principal-plane extrusion
+        shell: pwsh
+        run: |
+          function Invoke-PrincipalPlanePlan {
+            param(
+              [string]$Prefix,
+              [string]$Plane,
+              [double]$Distance,
+              [double]$XMax,
+              [double]$YMax,
+              [double]$ZMax
+            )
+
+            $frozen = Join-Path $env:NX_MCP_WORKSPACE "$Prefix.frozen.json"
+            $exe = Join-Path $env:NX_MCP_WORKSPACE "$Prefix.executable.json"
+            $report = Join-Path $env:NX_MCP_WORKSPACE "$Prefix.report.json"
+            $prt = "$Prefix.prt"
+            $step = "$Prefix.step"
+
+            $plan = [ordered]@{
+              skill = "nx-agent"
+              mode = "FAST"
+              part = $prt
+              coordinate_system = "$Plane principal-plane smoke, local rectangle 20x10, mm"
+              operations = @(
+                [ordered]@{step=1;goal="create part";tool="nx_create_part";target="-";tool_args=@{path=$prt;units="mm"};topology_changes=$false},
+                [ordered]@{step=2;goal="create principal-plane sketch";tool="nx_create_sketch";target="-";tool_args=@{plane=$Plane};topology_changes=$false},
+                [ordered]@{step=3;goal="rectangle";tool="nx_sketch_rectangle";target="sketch_profile";tool_args=@{sketch_id="sketch_profile";corner1=@{x=0;y=0};corner2=@{x=20;y=10}};topology_changes=$false},
+                [ordered]@{step=4;goal="finish";tool="nx_finish_sketch";target="sketch_profile";tool_args=@{sketch_id="sketch_profile"};topology_changes=$false},
+                [ordered]@{step=5;goal="extrude along principal-plane axis";tool="nx_extrude";target="sketch_profile";tool_args=@{sketch_id="sketch_profile";distance=$Distance;operation="create"};topology_changes=$true;refresh_edges_after=$true;refresh_faces_after=$true},
+                [ordered]@{step=6;goal="one body";tool="nx_list_bodies";target="-";tool_args=@{};expectation=@{body_count=1};topology_changes=$false},
+                [ordered]@{step=7;goal="verify global bbox";tool="nx_list_edges";target="-";tool_args=@{body_id="body_main"};expectation=@{x_min=0.0;x_max=$XMax;y_min=0.0;y_max=$YMax;z_min=0.0;z_max=$ZMax;tolerance_mm=0.05};topology_changes=$false},
+                [ordered]@{step=8;goal="save";tool="nx_save_part";target="-";tool_args=@{};topology_changes=$false},
+                [ordered]@{step=9;goal="export";tool="nx_export_step";target="-";tool_args=@{path=$step};topology_changes=$false},
+                [ordered]@{step=10;goal="release task";tool="nx_release";target="-";tool_args=@{};topology_changes=$false}
+              )
+            }
+            $plan | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $frozen -Encoding UTF8
+
+            python .\agent\nx-mcp-plan-runner\runner.py build $frozen $exe
+            if ($LASTEXITCODE -ne 0) { throw "$Prefix Runner build failed" }
+            python .\agent\nx-mcp-plan-runner\runner.py check $exe
+            if ($LASTEXITCODE -ne 0) { throw "$Prefix Runner check failed" }
+            python .\agent\nx-mcp-plan-runner\runner.py run $exe --workspace $env:NX_MCP_WORKSPACE --report $report --repair-attempt 0
+            if ($LASTEXITCODE -ne 0) { throw "$Prefix Runner execution failed" }
+
+            $rep = Get-Content -Raw -LiteralPath $report | ConvertFrom-Json
+            if ($rep.status -ne "success") { throw "$Prefix report is not success" }
+            if ($rep.body_count -ne 1) { throw "$Prefix unexpected body count" }
+            if (-not (Test-Path (Join-Path $env:NX_MCP_WORKSPACE $prt))) { throw "$Prefix PRT missing" }
+            if (-not (Test-Path (Join-Path $env:NX_MCP_WORKSPACE $step))) { throw "$Prefix STEP missing" }
+          }
+
+          # local (x,y) on XZ maps to global (X,Z), then extrudes +Y.
+          Invoke-PrincipalPlanePlan -Prefix "ci-xz" -Plane "XZ" -Distance 7 -XMax 20 -YMax 7 -ZMax 10
+
+          # local (x,y) on YZ maps to global (Y,Z), then extrudes +X.
+          Invoke-PrincipalPlanePlan -Prefix "ci-yz" -Plane "YZ" -Distance 9 -XMax 9 -YMax 20 -ZMax 10
 
       - name: Stop owned NX process
         if: always()
@@ -149,4 +209,10 @@ jobs:
             ${{ env.NX_MCP_WORKSPACE }}/ci-smoke.report.json
             ${{ env.NX_MCP_WORKSPACE }}/ci-smoke.prt
             ${{ env.NX_MCP_WORKSPACE }}/ci-smoke.step
+            ${{ env.NX_MCP_WORKSPACE }}/ci-xz.report.json
+            ${{ env.NX_MCP_WORKSPACE }}/ci-xz.prt
+            ${{ env.NX_MCP_WORKSPACE }}/ci-xz.step
+            ${{ env.NX_MCP_WORKSPACE }}/ci-yz.report.json
+            ${{ env.NX_MCP_WORKSPACE }}/ci-yz.prt
+            ${{ env.NX_MCP_WORKSPACE }}/ci-yz.step
           if-no-files-found: warn
