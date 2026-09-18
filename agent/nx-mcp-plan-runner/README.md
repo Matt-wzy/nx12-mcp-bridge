@@ -103,9 +103,10 @@ Runner 只会自动关闭两类 part：
     "active_part": "...", "planned_part": "..." }
   ```
 - 当前打开的是同名目标 part 且**检测到未保存修改**（见下）→ 默认不得直接丢弃；
-  仅当 `--mode benchmark` **且** part 路径与 planned_part 完全一致 **且** 显式
-  传入 `--allow-overwrite` 时才允许关闭不保存。否则返回
-  `"reason": "planned_part_dirty"` 并停止。
+  仅当这是经过机器校验的 Controlled Self-Healing 第二次尝试：
+  `--repair-attempt 1 --repair-report <attempt1>`，并同时满足
+  `--mode benchmark --allow-overwrite`、part 路径与 planned_part 完全一致，
+  才允许关闭不保存。否则返回 `"reason": "planned_part_dirty"` 并停止。
 
 ### 脏状态如何判定（诚实说明）
 
@@ -123,8 +124,9 @@ C# Loader 的 certified 工具**不暴露 IsModified / 脏状态标记**（`nx_s
 ### 运行模式
 
 - `--mode normal`（默认）：禁止丢弃任何未保存 part（dirty → blocked）。
-- `--mode benchmark`：仅对当前 plan 指定的测试件允许安全覆盖
-  （仍需 `--allow-overwrite` 显式授权）。
+- `--mode benchmark`：本身不再授权丢弃 dirty planned part；只有通过
+  `--repair-attempt 1` + 有效 attempt1 失败报告后，配合
+  `--allow-overwrite` 才允许一次受控覆盖。
 
 ## 分阶段计时（run 报告）
 
@@ -226,9 +228,10 @@ resolution / rectangle adapter / edge selection（角点候选、圆边、z、�
 bbox 包含、邻接面）/ face selection（扁平、命名分组、半径）/ topology
 invalidation（且不自动 list）/ expectation checker（含 done）/ 冻结计划加载 /
 build + check 全引用可解析 / build 幂等 / 非法参数拦截 / **preflight 策略**
-（无关 part 阻塞、planned clean 放行、dirty+benchmark+overwrite 放行、
-dirty+normal 阻塞、无活动 part 放行、Runner 自有测试件放行、路径归一化）/
-**run_history 与 runtime_dirty 判定**。
+（无关 part 阻塞、planned clean 放行、dirty+受控 repair 放行、
+dirty+普通 benchmark 阻塞、dirty+normal 阻塞、无活动 part 放行、
+Runner 自有测试件放行、路径归一化）/ **run_history 与 runtime_dirty 判定** /
+**repair attempt 门禁**。
 
 ## 验收口径
 
