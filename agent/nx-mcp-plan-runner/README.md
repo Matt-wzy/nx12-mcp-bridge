@@ -1,7 +1,7 @@
 # nx-mcp-plan-runner
 
 通用、零件无关、plan 无关的 NX_MCP 建模计划执行器。
-任何符合 `nx-mcp-modeling-planner` 输出规范的 modeling plan，都可以直接交给
+任何符合 `nx-agent` 建模规划模块输出规范的 modeling plan，都可以直接交给
 本 Runner 执行 —— 禁止再针对单个零件编写专用 Python 驱动。
 
 ## 设计原则
@@ -57,6 +57,7 @@ nx-mcp-plan-runner/
 ```text
 python runner.py run   <executable-plan.json> [--workspace DIR] [--report out.json]
                        [--mode normal|benchmark] [--allow-overwrite] [--history FILE]
+                       [--repair-attempt 0|1] [--repair-report attempt1.json]
 python runner.py check <plan.json> [--frozen]
 python runner.py build <frozen-plan.json> <out.json>
 python runner.py test  #（等价：运行 tests/test_plan_resolution.py）
@@ -67,6 +68,22 @@ python runner.py test  #（等价：运行 tests/test_plan_resolution.py）
 - `check`：不触 NX 的静态检查（工具合法性、参数合法性、引用可解析、占位符
   清零、selection criteria 语法）。
 - `build`：冻结 → 可执行转换（无 NX）。
+
+## Runtime Config
+
+安装器会在 Runner 目录生成 `runtime-config.json`，包含 `python_exe`、
+`workspace_root`、`nx_mcp_src`、`repo_root`。Runner 会用它补充 workspace /
+import 路径；总控应使用其中的 `python_exe` 启动 Runner。
+
+## Controlled Self-Healing 门禁
+
+Runner 不自行修改 plan，但会机器校验第二次 repair：
+
+- `--repair-attempt 1`
+- `--repair-report <attempt1-report>`
+- 必须同时使用 `--mode benchmark --allow-overwrite`
+- previous report 必须是本零件第一次失败报告
+- previous report 的 `repair_attempt` 必须为 0
 
 ## Preflight 安全检查（run 子命令）
 
