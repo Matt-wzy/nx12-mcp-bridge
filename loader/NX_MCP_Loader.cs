@@ -70,6 +70,7 @@ public static class NX_MCP_Loader
     private static Session _session;
     private static NXOpen.Part _part;
     private static readonly Dictionary<string, Sketch> _sketches = new Dictionary<string, Sketch>();
+    private static readonly Dictionary<string, string> _sketchPlanes = new Dictionary<string, string>();
     private static readonly Dictionary<string, Body> _bodies = new Dictionary<string, Body>();
     private static int _sketchCounter;
     private static int _bodyCounter;
@@ -378,6 +379,7 @@ public static class NX_MCP_Loader
     private static void ResetTaskState()
     {
         _sketches.Clear();
+        _sketchPlanes.Clear();
         _bodies.Clear();
         _sketchCounter = 0;
         _bodyCounter = 0;
@@ -412,16 +414,25 @@ public static class NX_MCP_Loader
     private static string CreateSketch(string[] parts)
     {
         if (_part == null) return ErrJson("no active part");
-        string plane = parts.Length > 1 ? parts[1] : "XY";
+        string plane = (parts.Length > 1 ? parts[1] : "XY").ToUpperInvariant();
+        if (plane != "XY" && plane != "XZ" && plane != "YZ")
+            return ErrJson("plane must be XY, XZ or YZ");
+
         _sketchCounter++;
         string id = "SKETCH_" + _sketchCounter;
-        double z = 0.0;
-        if (plane == "XZ" || plane == "YZ") z = 0.0;
+        Plane planeRef = _part.Planes.CreatePlane(
+            new Point3d(0.0, 0.0, 0.0),
+            SketchPlaneNormal(plane),
+            SmartObject.UpdateOption.WithinModeling);
+
         var b = _part.Sketches.CreateSketchInPlaceBuilder2(null);
         Sketch sk;
         try
         {
-            // default placement: WCS XY plane (all sketches at z=0)
+            // Attach the sketch to the requested principal plane at the work-part origin.
+            // Local sketch coordinates are mapped explicitly by SketchPoint/SketchVector.
+            b.PlaneReference = planeRef;
+            b.OriginOption = OriginMethod.WorkPartOrigin;
             sk = (Sketch)b.Commit();
         }
         finally
@@ -431,6 +442,7 @@ public static class NX_MCP_Loader
         try { sk.SetName(id); } catch { }
         try { sk.Activate(Sketch.ViewReorient.True); } catch { }
         _sketches[id] = sk;
+        _sketchPlanes[id] = plane;
         return OkJson("sketch_id", id, "created plane=" + plane);
     }
 
@@ -439,7 +451,9 @@ public static class NX_MCP_Loader
         if (parts.Length < 6) return ErrJson("usage: nx_sketch_line <sketch_id> x1 y1 x2 y2");
         var sk = GetSketch(parts[1]);
         double x1 = D(parts[2]), y1 = D(parts[3]), x2 = D(parts[4]), y2 = D(parts[5]);
-        var curve = _part.Curves.CreateLine(new Point3d(x1, y1, 0.0), new Point3d(x2, y2, 0.0));
+        var curve = _part.Curves.CreateLine(
+            SketchPoint(parts[1], x1, y1),
+            SketchPoint(parts[1], x2, y2));
         sk.AddGeometry(curve, Sketch.InferConstraintsOption.InferNoConstraints);
         return OkJson("added line " + parts[2] + "," + parts[3] + " -> " + parts[4] + "," + parts[5]);
     }
@@ -451,10 +465,10 @@ public static class NX_MCP_Loader
         double cx = D(parts[2]), cy = D(parts[3]), w = D(parts[4]), h = D(parts[5]);
         double x1 = cx - w / 2.0, y1 = cy - h / 2.0;
         double x2 = cx + w / 2.0, y2 = cy + h / 2.0;
-        AddLine(sk, x1, y1, x2, y1);
-        AddLine(sk, x2, y1, x2, y2);
-        AddLine(sk, x2, y2, x1, y2);
-        AddLine(sk, x1, y2, x1, y1);
+        AddLine(sk, parts[1], x1, y1, x2, y1);
+        AddLine(sk, parts[1], x2, y1, x2, y2);
+        AddLine(sk, parts[1], x2, y2, x1, y2);
+        AddLine(sk, parts[1], x1, y2, x1, y1);
         return OkJson("added rectangle " + w + "x" + h + " at " + cx + "," + cy);
     }
 
@@ -464,9 +478,11 @@ public static class NX_MCP_Loader
         var sk = GetSketch(parts[1]);
         double cx = D(parts[2]), cy = D(parts[3]), dia = D(parts[4]);
         double r = dia / 2.0;
+        string plane = GetSketchPlaneName(parts[1]);
         var ell = _part.Curves.CreateEllipse(
-            new Point3d(cx, cy, 0.0),
-            new Vector3d(1.0, 0.0, 0.0), new Vector3d(0.0, 1.0, 0.0),
+            SketchPoint(parts[1], cx, cy),
+            SketchVectorForPlane(plane, 1.0, 0.0),
+            SketchVectorForPlane(plane, 0.0, 1.0),
             r, r, 0.0, 2.0 * Math.PI);
         sk.AddGeometry(ell, Sketch.InferConstraintsOption.InferNoConstraints);
         return OkJson("added circle d=" + dia + " at " + cx + "," + cy);
@@ -480,9 +496,11 @@ public static class NX_MCP_Loader
         double a1 = D(parts[5]), a2 = D(parts[6]);
         double rad1 = a1 * Math.PI / 180.0;
         double rad2 = a2 * Math.PI / 180.0;
+        string plane = GetSketchPlaneName(parts[1]);
         var arc = _part.Curves.CreateArc(
-            new Point3d(cx, cy, 0.0),
-            new Vector3d(1.0, 0.0, 0.0), new Vector3d(0.0, 1.0, 0.0),
+            SketchPoint(parts[1], cx, cy),
+            SketchVectorForPlane(plane, 1.0, 0.0),
+            SketchVectorForPlane(plane, 0.0, 1.0),
             r, rad1, rad2);
         sk.AddGeometry(arc, Sketch.InferConstraintsOption.InferNoConstraints);
         return OkJson("added arc r=" + r + " " + a1 + ".." + a2 + " deg at " + cx + "," + cy);
@@ -519,9 +537,10 @@ public static class NX_MCP_Loader
             new SelectionIntentRule[] { rule }, null, null, null,
             new Point3d(0.0, 0.0, 0.0), Section.Mode.Create, false);
 
-        double dz = reverse ? -1.0 : 1.0;
+        Vector3d axis = SketchExtrudeAxis(GetSketchPlaneName(parts[1]));
+        if (reverse) axis = new Vector3d(-axis.X, -axis.Y, -axis.Z);
         var dir = _part.Directions.CreateDirection(
-            new Point3d(0.0, 0.0, 0.0), new Vector3d(0.0, 0.0, dz),
+            new Point3d(0.0, 0.0, 0.0), axis,
             SmartObject.UpdateOption.WithinModeling);
 
         var b = _part.Features.CreateExtrudeBuilder(null);
@@ -583,9 +602,9 @@ public static class NX_MCP_Loader
         NXOpen.Axis axis;
         try
         {
-            NXOpen.Point axisPoint = _part.Points.CreatePoint(new Point3d(ax, ay, 0.0));
+            NXOpen.Point axisPoint = _part.Points.CreatePoint(SketchPoint(parts[1], ax, ay));
             NXOpen.Direction axisDir = _part.Directions.CreateDirection(
-                axisPoint, new Vector3d(vx, vy, 0.0));
+                axisPoint, SketchVectorForPlane(GetSketchPlaneName(parts[1]), vx, vy));
             axis = _part.Axes.CreateAxis(axisPoint, axisDir, SmartObject.UpdateOption.WithinModeling);
         }
         catch (Exception e) { return ErrJson("revolve[axis] failed: " + e.Message); }
@@ -1499,9 +1518,65 @@ public static class NX_MCP_Loader
         return json.Substring(s, e - s);
     }
 
-    private static void AddLine(Sketch sk, double x1, double y1, double x2, double y2)
+    private static string GetSketchPlaneName(string id)
     {
-        var curve = _part.Curves.CreateLine(new Point3d(x1, y1, 0.0), new Point3d(x2, y2, 0.0));
+        string plane;
+        if (_sketchPlanes.TryGetValue(id, out plane)) return plane;
+        return "XY";
+    }
+
+    private static Point3d SketchPoint(string sketchId, double u, double v)
+    {
+        return SketchPointForPlane(GetSketchPlaneName(sketchId), u, v);
+    }
+
+    private static Point3d SketchPointForPlane(string plane, double u, double v)
+    {
+        switch (plane)
+        {
+            case "XZ": return new Point3d(u, 0.0, v);
+            case "YZ": return new Point3d(0.0, u, v);
+            default: return new Point3d(u, v, 0.0);
+        }
+    }
+
+    private static Vector3d SketchVectorForPlane(string plane, double u, double v)
+    {
+        switch (plane)
+        {
+            case "XZ": return new Vector3d(u, 0.0, v);
+            case "YZ": return new Vector3d(0.0, u, v);
+            default: return new Vector3d(u, v, 0.0);
+        }
+    }
+
+    private static Vector3d SketchPlaneNormal(string plane)
+    {
+        // Normals are right-handed with the local (u,v) mapping above.
+        switch (plane)
+        {
+            case "XZ": return new Vector3d(0.0, -1.0, 0.0);
+            case "YZ": return new Vector3d(1.0, 0.0, 0.0);
+            default: return new Vector3d(0.0, 0.0, 1.0);
+        }
+    }
+
+    private static Vector3d SketchExtrudeAxis(string plane)
+    {
+        // Stable user-facing default: positive global axis for reverse=false.
+        switch (plane)
+        {
+            case "XZ": return new Vector3d(0.0, 1.0, 0.0);
+            case "YZ": return new Vector3d(1.0, 0.0, 0.0);
+            default: return new Vector3d(0.0, 0.0, 1.0);
+        }
+    }
+
+    private static void AddLine(Sketch sk, string sketchId, double x1, double y1, double x2, double y2)
+    {
+        var curve = _part.Curves.CreateLine(
+            SketchPoint(sketchId, x1, y1),
+            SketchPoint(sketchId, x2, y2));
         sk.AddGeometry(curve, Sketch.InferConstraintsOption.InferNoConstraints);
     }
 
