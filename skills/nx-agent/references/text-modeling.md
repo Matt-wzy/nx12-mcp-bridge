@@ -43,6 +43,13 @@
 
 如果当前 NX 中有无关零件或未保存工作，Runner preflight 必须阻止覆盖。禁止为了继续任务自动关闭无关零件。
 
+已有零件修改的 frozen plan 必须先：
+1. `nx_open_part(path=<工作区相对路径>)`
+2. `nx_list_bodies` 且 `expectation.body_count=1`
+3. 后续第一个 `body_main` 引用由 Runner 自动绑定到该唯一实体
+
+当前一体化安全路径只自动绑定**单实体零件**。多实体已有零件若没有明确可验证的目标 body 选择规则，必须停止并说明，禁止猜测。
+
 ## 5. 规划规则
 
 - 只使用 32 个 certified tools。
