@@ -1,5 +1,5 @@
 {
-  "skill": "nx-mcp-modeling-planner",
+  "skill": "nx-agent",
   "example": "V2-TEXT-CHALLENGE（锁定尺寸文字版零件，仅生成计划，不执行 NX）",
   "mode": "FAST",
   "part": "V2-TEXT-CHALLENGE.prt",
@@ -268,13 +268,12 @@
       },
       "selection_criteria": {
         "face_type": "Planar",
-        "centroid": [
-          0,
-          0,
-          48
-        ],
+        "centroid_z": {
+          "value": 48,
+          "tol": 0.5
+        },
         "area_approx_auxiliary": 5541.77,
-        "note": "loader returns normal=null; identify by face_type + centroid only"
+        "note": "唯一顶面优先 face_type + centroid_z；normal/area 仅辅助"
       },
       "expectation": {
         "count": 1,
@@ -880,7 +879,7 @@
         "curve_type": "Linear",
         "direction": "Z",
         "length": {
-          "value": 12.0,
+          "value": 12,
           "tol": 0.05
         },
         "corners_xy": [
@@ -902,8 +901,8 @@
           ]
         ],
         "bbox_z": {
-          "min": 0.0,
-          "max": 12.0
+          "min": 0,
+          "max": 12
         }
       },
       "expectation": {
@@ -941,7 +940,7 @@
         "curve_type": "Linear",
         "direction": "Z",
         "length": {
-          "value": 12.0,
+          "value": 12,
           "tol": 0.05
         },
         "corners_xy": [
@@ -963,8 +962,8 @@
           ]
         ],
         "bbox_z": {
-          "min": 0.0,
-          "max": 12.0
+          "min": 0,
+          "max": 12
         }
       },
       "expectation": {
@@ -1000,18 +999,18 @@
       },
       "selection_criteria": {
         "curve_type": [
-          "Circular",
-          "Elliptical"
+          "Elliptical",
+          "Circular"
         ],
         "length": {
           "value": 326.73,
           "tol": 1.5
         },
         "midpoint_z": {
-          "value": 56.0,
+          "value": 56,
           "tol": 0.5
         },
-        "note": "2π×52≈326.73，与 Ø72 内圆(226.19)及 Z=48 底圆区分"
+        "note": "完整圆边兼容 Elliptical/Circular"
       },
       "expectation": {
         "count": 1,
@@ -1068,10 +1067,10 @@
         },
         "boss_tops": {
           "face_type": "Planar",
-          "centroid_z": 20.0,
+          "centroid_z": 20,
           "centroid_radius": {
-            "value": 65.0,
-            "tol": 1.0
+            "value": 65,
+            "tol": 1
           }
         },
         "countersink_cones": {
