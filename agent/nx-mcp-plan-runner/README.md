@@ -23,7 +23,7 @@
   但绝不自动重新 list；只有后续 plan 显式调用 list 步骤时才查询。
 - **错误策略**：单步失败 → Runner 停止 → 输出 `failed_step` + 原始错误。
   只有 plan 中显式声明的 `retry` 才会被重试；Runner 从不"思考式修复"。
-- **冻结边界**：不修改 NX_MCP-Enhanced v2.1.1、不修改 C# Loader、不修改
+- **冻结边界**：不修改 NX_MCP-Enhanced 核心、不修改 C# Loader、不修改
   named pipe / resident Loader 架构、不新增 NX Tool、不安装大型依赖。
 
 ## 目录结构
