@@ -83,6 +83,18 @@
 
 Planner 直接写对角点 `{x,y}` 即可，无需自行换算。
 
+### 7.1 principal-plane sketch / extrude 语义
+
+该语义属于 Loader 冻结契约，Planner 可直接依赖：
+
+- `plane="XY"`：局部 `{x,y}`→全局 `{X,Y}`，`reverse=false` 挤出 +Z；
+- `plane="XZ"`：局部 `{x,y}`→全局 `{X,Z}`，`reverse=false` 挤出 +Y；
+- `plane="YZ"`：局部 `{x,y}`→全局 `{Y,Z}`，`reverse=false` 挤出 +X；
+- `reverse=true` 反向；`start_offset` 沿同一挤出轴解释。
+- `nx_revolve.axis_start/axis_end` 同样使用所属 sketch 的局部二维坐标。
+- Z 轴专用 hole 系列不随 sketch 平面旋转；非 Z 轴孔使用 principal-plane
+  circle sketch + `nx_extrude(operation="subtract")`。
+
 ## 8. Topology invalidation 规则
 
 以下操作完成后，之前获得的 edge index / face index **一律立即失效**（见 topology-safety.md 完整清单）：
