@@ -83,7 +83,9 @@ C 修复后再次失败：
 
 - 图纸解析耗时 ← A 阶段真实耗时
 - 建模规划耗时 ← B Planner + build/check；若发生 repair plan，修复规划/build/check 时间也计入
-- NX 建模耗时 ← **所有 Runner 尝试耗时之和**
+- NX 建模耗时 ← 各 Runner report 的 `nx_modeling_elapsed` 之和，只表示几何建模 operations
+- Runner 总耗时 ← 各 Runner report 的 `total_runner_elapsed` 之和；包含 preflight、保存、STEP 导出/落盘等待和最终验证
+- 最终验证耗时 ← `validation_ops_elapsed`；不得把 STEP export settle 算成验证耗时
 - 总耗时 ← **真实墙钟时间**：从“开始建模”正式执行，到最终成功/失败报告返回
 - 若发生自动修复，总耗时必须包含：首次失败、诊断、repair plan、build/check、失败零件清理、第二次执行、验证和汇报
 - 禁止只报告最终成功那一轮的耗时
