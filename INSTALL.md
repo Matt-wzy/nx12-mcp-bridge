@@ -32,22 +32,33 @@ The single installer performs the complete setup:
 2. Creates/reuses `.venv`
 3. Installs NX_MCP-Enhanced and its Python dependencies
 4. Creates/uses `%USERPROFILE%\NX_MCP_WORKSPACE`
-5. Auto-detects the local Siemens NX installation
-6. Builds `NX_MCP_Loader.dll`
-7. Deploys the Loader into the NX user startup directory
-8. Installs the bundled Drawing Reader / Modeling Planner / Pipeline Skills
-9. Installs the generic Plan Runner
-10. Runs lightweight Agent Pack tests
+5. Determines and persists `UGII_USER_DIR`
+6. Auto-detects the local Siemens NX installation
+7. Builds `NX_MCP_Loader.dll`
+8. Deploys the Loader to `%UGII_USER_DIR%\startup`
+9. Installs the bundled Drawing Reader / Modeling Planner / Pipeline Skills
+10. Installs the generic Plan Runner
+11. Runs lightweight Agent Pack tests
 
 No separate MCP-client JSON configuration is required for the bundled Doubao
 Agent Pack workflow.
 
-After installation:
+### Important: first NX start after installation
 
-1. Start or restart Siemens NX so the resident Loader can auto-load.
-2. Open a new Doubao conversation.
-3. Upload a 2D mechanical engineering drawing.
-4. Send:
+`UGII_USER_DIR` is read when Siemens NX starts.
+
+- If NX was **not running** during installation: start NX normally afterward.
+- If NX was **already running** during installation: save your work and restart
+  NX once after installation.
+
+You should no longer need to manually create or set `UGII_USER_DIR`; the
+installer does that automatically.
+
+After NX is started with the new environment:
+
+1. Open a new Doubao conversation.
+2. Upload a 2D mechanical engineering drawing.
+3. Send:
 
 ```
 开始建模
@@ -84,12 +95,16 @@ The installer calls `loader\build.bat`. NX is auto-detected in this order:
 3. `PATH` / `ugraf.exe`
 4. `%ProgramFiles%\Siemens\NX*`
 
-The compiled DLL is deployed to:
+For `UGII_USER_DIR`:
 
-- `%UGII_USER_DIR%\startup` when `UGII_USER_DIR` is set, otherwise
-- `%USERPROFILE%\.nx_mcp_user\startup`
+1. Existing process/user/machine environment value is respected when present.
+2. If none exists, the installer uses `%USERPROFILE%\.nx_mcp_user`.
+3. The chosen value is written to the current user environment and to the
+   current installer process.
+4. The Loader is deployed to `%UGII_USER_DIR%\startup`.
 
-If NX is already running during installation, restart it afterward.
+This fixes the first-install case where the DLL existed under
+`~\.nx_mcp_user\startup` but NX had never been told to use that user directory.
 
 ### Integrated Agent Pack
 
@@ -113,14 +128,15 @@ python -m venv .venv
 .\loader\build.bat
 ```
 
-Then deploy `loader\NX_MCP_Loader.dll` to the NX user startup directory
-described above.
+Then set `UGII_USER_DIR`, deploy `loader\NX_MCP_Loader.dll` to
+`%UGII_USER_DIR%\startup`, and restart NX.
 
 ## Verification
 
 The integrated installer verifies:
 
 - `nx_mcp` can be imported from the repository venv
+- `UGII_USER_DIR` is configured
 - built and deployed Loader DLL SHA256 values match
 - all three Skill frontmatter names are correct
 - Plan Runner files exist
