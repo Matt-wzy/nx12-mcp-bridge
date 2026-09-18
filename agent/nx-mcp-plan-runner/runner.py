@@ -34,7 +34,7 @@ import time
 from typing import Any
 
 # --------------------------------------------------------------------------
-# certified tool contract (NX_MCP-Enhanced v2.1.1) — static data, not part-specific
+# certified tool contract — static data, not part-specific
 # --------------------------------------------------------------------------
 CERTIFIED_TOOLS = {
     "nx_status", "nx_create_part", "nx_open_part", "nx_save_part",
