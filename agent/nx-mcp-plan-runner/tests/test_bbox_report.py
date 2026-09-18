@@ -107,6 +107,17 @@ def test_report_model_bbox_merges_faces_and_edges():
     assert "bbox" not in rep
 
 
+def test_timing_bucket_separates_postprocess_from_validation():
+    validation_start = 9
+    assert R._timing_bucket("nx_hole", 8, validation_start) == "modeling"
+    assert R._timing_bucket("nx_save_part", 9, validation_start) == "save"
+    assert R._timing_bucket("nx_export_step", 10, validation_start) == "export"
+    assert R._timing_bucket("nx_list_bodies", 11, validation_start) == "validation"
+    assert R._timing_bucket("nx_list_faces", 12, validation_start) == "validation"
+    assert R._timing_bucket("nx_list_edges", 13, validation_start) == "validation"
+    assert R._timing_bucket("nx_release", 14, validation_start) == "other"
+
+
 def test_report_model_bbox_survives_partial_early_steps():
     # an early list on a partial body must not shrink the merged extents
     faces_partial = [make_face(0, centroid=[0, 0, 12]), make_face(1, centroid=[0, 0, 48])]
