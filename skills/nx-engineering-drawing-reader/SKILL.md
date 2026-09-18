@@ -1,6 +1,6 @@
 ---
 name: nx-engineering-drawing-reader
-description: Use when a 2D mechanical engineering drawing must be converted quickly into structured JSON for 3D CAD modeling (e.g. NX) — extract overall dimensions, thickness, holes, counterbores, countersinks, PCD, fillets, chamfers, counts, symmetry, mirror, and patterns in a single pass, without pixel measurement or scale guessing.
+description: 作者：抖音 无趣。Use when a 2D mechanical engineering drawing must be converted quickly into structured JSON for 3D CAD modeling (e.g. NX) — extract overall dimensions, thickness, holes, counterbores, countersinks, PCD, fillets, chamfers, counts, symmetry, mirror, and patterns in a single pass, without pixel measurement or scale guessing.
 ---
 
 # NX Engineering Drawing Reader Skill
