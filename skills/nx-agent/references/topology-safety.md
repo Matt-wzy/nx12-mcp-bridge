@@ -167,8 +167,13 @@ Runner 已验证的 edge criteria 关键语法：
    也可能出现在 Edge Blend 等其他曲面上。
 3. 验证孔是否存在时：
    - `face_type` 使用 `["Swept", "Cylindrical"]` 候选（当前实测为 Swept）；
-   - 以 `centroid_radius`（质心 xy 到轴心距离）+ `centroid_z`（侧壁实际材料
-     区间中点）+ `count` 为主要判据。
+   - `centroid_radius` 固定等于 `sqrt(centroid_x² + centroid_y²)`，即 face
+     质心到**全局 XY 原点**的径向距离；**不是孔半径，禁止写 diameter/2**；
+   - 已知孔中心时，优先按每个孔建立 named group，以
+     `face_type + centroid:[hole_x,hole_y,sidewall_mid_z]` 定位，并用
+     `<group>_count=1` 验证；
+   - 仅当孔/特征本身按全局原点形成 PCD/同心分布时，才使用
+     `centroid_radius + centroid_z + count` 验证全局径向位置。
 4. 后续若 Loader 版本对孔侧面的报告类型发生变化，以本契约的更新为准；
    **不允许每张 plan 自行猜测 face_type**。
 
@@ -188,8 +193,8 @@ Runner 已验证的 edge criteria 关键语法：
   （凸台顶面 C1.5 后变小但 centroid 不变；口袋底面不变）。
 
 推算方法：**材料区间 = 该位置实际实体 Z 范围 ∩ 孔工具 Z 范围**；
-孔侧壁 centroid_z = 材料区间中点；centroid_radius = 孔中心到轴心距离
-（质心 xy 落在孔轴上）。
+孔侧壁 centroid_z = 材料区间中点。若使用 centroid_radius，其值是孔轴 XY
+到**全局 XY 原点**的径向距离（因为侧壁 face 质心 xy 落在孔轴上），不是孔半径。
 
 **面积值随加工顺序变化（使用前必须核对当前特征状态）**：
 | 时刻 | 面 | 面积 |
