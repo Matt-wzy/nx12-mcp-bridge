@@ -141,6 +141,26 @@ def main() -> None:
     if 'report.status == "success"' not in output_rules:
         fail("user-visible success is not bound to Runner report status")
 
+    loader_source = (ROOT / "loader" / "NX_MCP_Loader.cs").read_text(encoding="utf-8")
+    principal_plane_tokens = [
+        "_sketchPlanes",
+        "b.PlaneReference = planeRef",
+        "SketchPointForPlane",
+        'case "XZ": return new Point3d(u, 0.0, v);',
+        'case "YZ": return new Point3d(0.0, u, v);',
+        "SketchExtrudeAxis",
+        'case "XZ": return new Vector3d(0.0, 1.0, 0.0);',
+        'case "YZ": return new Vector3d(1.0, 0.0, 0.0);',
+    ]
+    for token in principal_plane_tokens:
+        if token not in loader_source:
+            fail(f"principal-plane Loader regression: missing {token}")
+
+    plane_rules = (SKILL / "references" / "nx-mcp-rules.md").read_text(encoding="utf-8")
+    for token in ("XY→+Z", "XZ→+Y", "YZ→+X", 'nx_extrude(operation="subtract")'):
+        if token not in plane_rules:
+            fail(f"principal-plane planning contract missing: {token}")
+
     installer = (ROOT / "install.ps1").read_text(encoding="utf-8")
     if 'pip install -e ".[dev]"' in installer:
         fail("normal install.ps1 must not install development extras")
