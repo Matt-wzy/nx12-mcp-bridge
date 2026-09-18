@@ -1085,7 +1085,7 @@ def build_executable_plan(plan: dict) -> dict:
     def bind_body(name: str, op_idx: int) -> None:
         bd_bound[name] = op_idx
         tool = ops[op_idx]["tool"]
-        if tool in ("nx_circular_pattern", "nx_linear_pattern"):
+        if tool in ("nx_circular_pattern", "nx_linear_pattern", "nx_list_bodies"):
             field = "objects"
         elif tool in ("nx_mirror", "nx_unite"):
             field = "object"   # bridge adapted-response field for mirror/unite
@@ -1135,6 +1135,12 @@ def build_executable_plan(plan: dict) -> dict:
             except (TypeError, ValueError):
                 copies = 0
             for _ in range(copies):
+                bd_live.append(i)
+        elif tool == "nx_list_bodies":
+            # Safe existing-part binding: only expose the sole body as a producer
+            # when the frozen plan explicitly requires body_count == 1.
+            exp = op.get("expectation") or {}
+            if exp.get("body_count") == 1:
                 bd_live.append(i)
 
         # 4) unite consumes tool bodies
