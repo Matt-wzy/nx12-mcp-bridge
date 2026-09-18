@@ -95,6 +95,28 @@ jobs:
           path: coverage.xml
           if-no-files-found: warn
 
+
+  agent-pack:
+    name: agent pack integrity
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install package and dev dependencies
+        run: python -m pip install --upgrade pip && python -m pip install -e ".[dev]"
+      - name: Verify unified Agent Pack
+        run: python agent/verify_agent_pack.py
+      - name: Run Plan Runner tests
+        shell: pwsh
+        run: |
+          python agent/nx-mcp-plan-runner/tests/test_plan_resolution.py
+          if ($LASTEXITCODE -ne 0) { throw "test_plan_resolution failed" }
+          python agent/nx-mcp-plan-runner/tests/test_bbox_report.py
+          if ($LASTEXITCODE -ne 0) { throw "test_bbox_report failed" }
+
   type-check:
     name: mypy sidecar type check
     runs-on: ubuntu-latest
