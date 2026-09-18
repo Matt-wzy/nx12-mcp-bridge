@@ -131,6 +131,7 @@ Pattern / Mirror / Edge Blend / Chamfer / 任何改变实体拓扑的操作
     `length` / `bbox_min` / `bbox_max` / `bbox_x` / `bbox_y` /
     `bbox_z` / `corners_xy` / `direction` / `adjacent_faces`
   - 面：`face_type` / `centroid` / `centroid_z` / `centroid_radius` / `area` / `normal`（仅 planar，辅助）/ 邻接边数
+- `centroid_radius` 的固定语义是 `sqrt(centroid_x² + centroid_y²)`：face 质心到**全局 XY 原点**的径向距离。它描述的是 face/特征轴心相对全局原点的位置，**不是圆柱半径或孔半径**；禁止把 `diameter/2` 写入 `centroid_radius`。
   - 这些筛选条件写入计划步骤的 `selection_criteria`（见 §8），**不放入
     `tool_args`**。
 - **Linear 边方向语法固定为字符串**：`"X"` / `"Y"` / `"Z"` / `"OTHER"`。
@@ -206,9 +207,17 @@ Pattern / Mirror / Edge Blend / Chamfer / 任何改变实体拓扑的操作
 **Face Type 语义（Loader 实测契约，见 `references/topology-safety.md`）**：
 - 布尔切孔侧面（hole / counterbore / countersink）在 `nx_list_faces` 中
   通常报告为 **`Swept`**，不是 `Cylindrical`；验证孔时 `face_type` 使用
-  `["Swept", "Cylindrical"]` 候选，以 `centroid_radius` + `centroid_z` +
-  `count` 为主要判据，禁止只凭 `Cylindrical` 判断孔。
-- 后续 Loader 版本若改变孔侧面类型，以契约更新为准，**不允许每张 plan
+  `["Swept", "Cylindrical"]` 候选，禁止只凭 `Cylindrical` 判断孔。
+- 已知每个孔中心时，优先使用 named group：每个 group 用
+  `face_type:["Swept","Cylindrical"] + centroid:[hole_x,hole_y,sidewall_mid_z]`，
+  并用 `<group>_count=1` 验证每个孔。多个孔不得把孔半径误写成
+  `centroid_radius`。
+- 只有当目标特征本来就按**全局 XY 原点**做同心/PCD 分布时，
+  `centroid_radius` 才可用于验证该全局径向位置，再配合
+  `centroid_z + count`；它仍然不是孔半径。
+- FAST 模式若需要独立验证孔径，应使用最终拓扑中可验证的圆边长度
+  （约 `π×D`）等几何证据；不要用 `centroid_radius` 代替孔径。
+- 后续 Loader 版本若改变孔侧面的报告类型，以契约更新为准，**不允许每张 plan
   自行猜 face_type**。
 
 **最终拓扑验证几何（强制）**：FAST 验证几何必须基于最终实体中**真实存在
@@ -217,8 +226,8 @@ Pattern / Mirror / Edge Blend / Chamfer / 任何改变实体拓扑的操作
 （Ø9 被 Ø16 沉孔截断后 centroid_z≈9.5 而非 7.0）、hole depth 超过局部材料
 高度时侧壁只存在于实际区间（depth=36 但实体仅 Z=0..24 → centroid_z≈12.0
 而非 18.0）、后续 Unite/subtract/blend/chamfer 是否改变面范围。
-推算：孔侧壁 centroid_z = 该位置实际材料 Z 区间中点；centroid_radius =
-孔中心到轴心距离。
+推算：孔侧壁 centroid_z = 该位置实际材料 Z 区间中点；若使用 centroid_radius，
+其值 = 孔侧壁 face 质心（即孔轴 XY）到**全局 XY 原点**的径向距离，绝不是孔半径。
 - **默认禁止**：
   - 大规模解析 STEP 文本
   - 搜索 AXIS2_PLACEMENT_3D
