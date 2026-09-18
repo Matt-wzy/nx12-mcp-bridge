@@ -1,4 +1,9 @@
-"""Restart acceptance owns its NX processes; run after the ordinary bridge stops."""
+"""Legacy Python-bridge restart acceptance.
+
+The primary V2 validation path is the resident C# Loader workflow in
+.github/workflows/real-nx.yml. This file only covers the optional legacy
+Python-bridge reconnection path.
+"""
 
 from __future__ import annotations
 
