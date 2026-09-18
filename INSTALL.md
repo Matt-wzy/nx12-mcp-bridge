@@ -64,31 +64,24 @@ To **uninstall** the Loader, delete the DLL from
 `%USERPROFILE%\.nx_mcp_user\startup\` (or run `loader\uninstall.bat`); NX then
 starts without it and the sidecar falls back automatically.
 
-## 4. Configure your MCP client
+### Agent Pack (Doubao)
 
-```json
-{
-  "mcpServers": {
-    "nx-mcp": {
-      "command": "<abs path to repo>\\.venv\\Scripts\\python.exe",
-      "args": ["-m", "nx_mcp.server"],
-      "env": {
-        "NX_MCP_WORKSPACE": "<workspace>",
-        "NX_MCP_BACKEND": "auto"
-      }
-    }
-  }
-}
+For the integrated drawing-to-NX workflow, install the bundled Agent Pack:
+
+```powershell
+.\install-agent.ps1
 ```
 
-`NX_MCP_BACKEND=auto` (default) prefers the C# Loader and falls back to the
-Python bridge only when the Loader is not running.
+Then restart / open a new Doubao conversation, upload a 2D mechanical drawing,
+and send:
 
-Now model from your client: create a part, sketch, extrude, add features, save
-PRT, export STEP. After each task NX stays editable and the Loader remains
-`ready:true`; you can send the next task without restarting NX.
+```
+开始建模
+```
 
-## 5. Compatibility: Batch Journal (no persistent bridge)
+See `docs/DRAWING_TO_NX.md` for details.
+
+## 4. Compatibility: Batch Journal (no persistent bridge)
 
 For one-shot scripted output:
 
@@ -100,14 +93,14 @@ For one-shot scripted output:
 There is no persistent bridge lock; the journal completes and NX returns to
 normal.
 
-## 6. Compatibility: Python visual bridge (legacy)
+## 5. Compatibility: Python visual bridge (legacy)
 
 Kept for compatibility. Inside NX press `Alt+F8`, pick
 `examples\start_nx_bridge_gui.py`, run. Call `nx_release` to stop the bridge and
 restore manual editing. This mode blocks NX GUI while the bridge is up; prefer
 the C# Loader for interactive work.
 
-## 7. Optional: license server
+## 6. Optional: license server
 
 If your license server differs from `27800@localhost`:
 
@@ -124,4 +117,4 @@ Unit suite (no NX required):
 ```
 
 Real-NX smoke: start NX (Loader auto-loads), then call `nx_status`
-(`ready:true`) and create a simple part through your MCP client.
+(`ready:true`) and create a simple part through the installed workflow.
