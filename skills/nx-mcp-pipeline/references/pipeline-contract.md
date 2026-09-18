@@ -148,10 +148,24 @@ python runner.py run <executable-plan.json> [--workspace DIR] [--report out.json
 ### 4.2 Preflight（Runner 启动前）
 在调用 `runner.py run` 之前，总控只允许做以下环境准备，属于 preflight，不属于 repair：
 - 检查 NX 是否运行；未运行时启动 NX
-- 等待 Loader named pipe ready
+- 等待并验证 resident C# Loader 的 named pipe `nx_mcp_loader` ready
 - 检查 Python 环境（NX_MCP-Enhanced venv）
 - 检查 `runner.py` 与 executable plan 文件
 - 检查 workspace 目录
+
+**Loader readiness 契约（强制）：**
+- 当前推荐后端是 C# resident Loader，唯一有效的就绪判据是 named pipe `nx_mcp_loader` 可以连接并返回成功响应。
+- 推荐探测命令：
+  ```powershell
+  powershell -NoProfile -ExecutionPolicy Bypass -File "<repo>\loader\nx_client.ps1" -Cmd nx_status
+  ```
+  `CONNECTED` + `"ok":true` + `"ready":true` → Loader ready。
+  `ping` 返回 `pong` 也可作为轻量 ready 判据。
+- **不得检查或依赖 `%LOCALAPPDATA%\nx-mcp\bridge.json` 来判断 C# Loader。**
+  `bridge.json` 是 legacy Python visual bridge descriptor；resident Loader 模式不要求创建该文件。
+- `bridge.json` 缺失时不得推断 Loader 未加载、不得要求重启 NX。
+- named pipe 失败时才允许进一步检查 DLL 部署位置与 `nx_mcp_loader.log`；只有确认 NX 是在安装 Loader / 设置 `UGII_USER_DIR` 之前启动时，才允许要求一次重启。
+- 重启后必须重新 probe named pipe；同一任务不得因 legacy descriptor 缺失反复要求重启。
 
 preflight 只处理"Runner 尚未正式开始建模"的环境问题。Runner 一旦进入建模阶段，preflight 不再适用。
 
