@@ -126,11 +126,6 @@ edge 额外冻结语法：`direction` 必须是 `"X"|"Y"|"Z"|"OTHER"` 字符串�
 禁止 `direction:[0,0,1]`、`midpoint_x`、`midpoint_y`。
 对于四角竖边等“条件相同、仅 XY 不同”的目标，优先 flat criteria +
 `corners_xy` + `expectation.count`，不要拆成 group。
-**曲线边语义约束**：当 `curve_type` 为 `Circular / Elliptical / Conical`
-（或候选数组只包含这些曲线类型）时，Planner 禁止同时生成
-`bbox / bbox_x / bbox_y / bbox_z / corners_xy`；曲线边优先使用
-`curve_type + length + midpoint_z + expectation.count`。这是 Planner 的
-语义门禁；虽然这些 bbox 键在 schema 中是合法键，但对曲线边返回数据并不可靠。
 group 模式：criteria 所有 value 均为条件对象时按命名组独立筛选；
 每个 group value 本身就是 criteria 对象，禁止外层再加 `groups` 键。
 

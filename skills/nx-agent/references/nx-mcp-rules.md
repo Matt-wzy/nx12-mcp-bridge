@@ -82,12 +82,9 @@
 
 1. **index = GetEdges()/GetFaces() 实时下标**：任何拓扑操作后顺序即变，
    旧 index 无意义（见 `topology-safety.md`）。
-2. **曲线边 bbox 为 null / 不可靠**：只对 Linear 边使用 bbox。
-   Circular / Elliptical / Conical 等曲线边禁止使用
-   `bbox / bbox_x / bbox_y / bbox_z / corners_xy`。圆形边优先使用
-   `curve_type` + `length`（如 Ø104 → 2π×52 ≈ 326.73）+
-   `midpoint_z` + `expectation.count`。对同尺寸、同高度、执行同一收尾操作的
-   多个圆边，应一次按数量选齐，不要为了区分左右位置引入 bbox。
+2. **曲线边 bbox 为 null**：只对 Linear 边用 bbox；圆形边用
+   `curve_type=Circular` + `length`（如 Ø104 → 2π×52 ≈ 326.73）+
+   `midpoint` 的 z 坐标（圆上任意点的 z 一致）。
 3. **计数器参数约束**：counterbore：cb_dia>hole_dia、cb_depth<hole_depth；
    countersink：cs_dia>hole_dia、cs_angle∈(0,180)、锥深<hole_depth。
 4. **Unite 消费 tool body**：Unite 后不要再引用 tool body id。
@@ -100,10 +97,6 @@
 8. **边选择协议必须使用 Runner 冻结语法**：Linear 方向只写 `"X"/"Y"/"Z"`；
    多个板件角棱优先 `corners_xy + bbox_z/midpoint_z`；禁止方向向量、
    `midpoint_x/midpoint_y`、以及为相同条件四角创建脆弱的精确 midpoint group。
-9. **圆边选择禁止 bbox**：Circular / Elliptical / Conical 边只使用
-   `curve_type + length + midpoint_z` 等曲线可用字段，并用
-   `expectation.count` 固定数量。典型：两个 Ø34 凸台顶圆边做 C1.5 倒角，
-   `length≈106.81`、`midpoint_z≈36`、`count=2`，不得加 `bbox_x`。
 
 ## 4. 工具参数与规划条件分离（tool_args / selection_criteria / expectation）
 
@@ -138,20 +131,5 @@
 其中 `direction` 是枚举字符串，不是 `[0,0,1]`；只需要 Z 高度时使用
 `midpoint_z`，不要虚构 `midpoint_x/midpoint_y`。四角目标条件相同、只有
 XY 不同时优先 `corners_xy`，不要拆成四个精确 midpoint group。
-
-**圆形边典型写法（两个 Ø34 顶外圆）：**
-```json
-{
-  "tool": "nx_list_edges",
-  "tool_args": { "body_id": "body_main" },
-  "selection_criteria": {
-    "curve_type": ["Circular", "Elliptical"],
-    "length": { "value": 106.81, "tol": 1.0 },
-    "midpoint_z": { "value": 36.0, "tol": 0.5 }
-  },
-  "expectation": { "count": 2 }
-}
-```
-禁止在这类曲线边条件里加入 `bbox_x`、`bbox_y`、`bbox_z` 或 `corners_xy`。
 
 非查询类工具一般只有 `tool_args`（如 `nx_extrude` 的 sketch_id/distance/start_offset）。
