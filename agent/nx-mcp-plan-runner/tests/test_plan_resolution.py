@@ -1,0 +1,546 @@
+# -*- coding: utf-8 -*-
+"""Unit tests for nx-mcp-plan-runner (no NX involved).
+
+Run:  python tests/test_plan_resolution.py
+or:   pytest tests/test_plan_resolution.py
+"""
+import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import runner as R  # noqa: E402
+
+PROJECT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FROZEN_PLAN = os.path.join(PROJECT, "examples", "modeling-plan-example.json")
+
+
+# --------------------------------------------------------------------------
+# helpers
+# --------------------------------------------------------------------------
+class ObjectRef:
+    def __init__(self, oid):
+        self.id = oid
+
+
+def make_edge(index, **kw):
+    base = {"index": index, "tag": index, "curve_type": "Linear", "start": [0, 0, 0],
+            "end": [0, 0, 0], "midpoint": [0, 0, 0], "length": 12.0,
+            "bbox_min": [0, 0, 0], "bbox_max": [0, 0, 0], "direction": "Z",
+            "adjacent_faces": 2}
+    base.update(kw)
+    return base
+
+
+def make_face(index, **kw):
+    base = {"index": index, "tag": index, "face_type": "Planar",
+            "centroid": [0, 0, 0], "area": 100.0, "normal": [0, 0, 1]}
+    base.update(kw)
+    return base
+
+
+# --------------------------------------------------------------------------
+# 1. symbol table
+# --------------------------------------------------------------------------
+def test_symbol_table():
+    s = R.Symbols()
+    s.bind("sketch_base", "SKT1")
+    s.bind_selection("r6_edges", [9, 135, 151, 65])
+    assert s.names["sketch_base"] == "SKT1"
+    assert s.selection["r6_edges"] == [9, 135, 151, 65]
+
+
+# --------------------------------------------------------------------------
+# 2. result binding (producer op binds response fields to logical names)
+# --------------------------------------------------------------------------
+def test_result_binding_single():
+    resp = {"body": ObjectRef("BODY_1")}
+    s = R.Symbols()
+    for n in ["body_base"]:
+        s.bind(n, R._item_id(resp["body"]))
+    assert s.names["body_base"] == "BODY_1"
+
+
+def test_result_binding_multi():
+    resp = {"objects": [ObjectRef("B2"), ObjectRef("B3"), ObjectRef("B4")]}
+    names = ["body_boss2", "body_boss3", "body_boss4"]
+    s = R.Symbols()
+    vals = [R._item_id(v) for v in resp["objects"]]
+    for n, v in zip(names, vals):
+        s.bind(n, v)
+    assert s.names["body_boss2"] == "B2"
+    assert s.names["body_boss3"] == "B3"
+    assert s.names["body_boss4"] == "B4"
+
+
+def test_result_binding_mismatch_raises():
+    # len mismatch between response list and names must be an error
+    resp = {"objects": [ObjectRef("B2"), ObjectRef("B3")]}
+    names = ["a", "b", "c"]
+    s = R.Symbols()
+    try:
+        vals = [R._item_id(v) for v in resp["objects"]]
+        if len(vals) != len(names):
+            raise R.PlanError("mismatch")
+        for n, v in zip(names, vals):
+            s.bind(n, v)
+        assert False, "should have raised"
+    except R.PlanError:
+        pass
+
+
+# --------------------------------------------------------------------------
+# 3. variable resolution
+# --------------------------------------------------------------------------
+def test_resolution_forms():
+    s = R.Symbols()
+    s.bind("body_main", "BODY_9")
+    s.bind_selection("sel_49", [9, 135, 151, 65])
+    s.bind_selection("sel_56", {"flange_top": [1], "boss_tops": [2, 3, 4, 5]})
+
+    assert R.resolve_value("$body_main", s) == "BODY_9"
+    assert R.resolve_value("$selection.sel_49", s) == [9, 135, 151, 65]
+    assert R.resolve_value("$selection.sel_56.flange_top", s) == [1]
+    assert R.resolve_value("body_main", s) == "BODY_9"  # bare name
+
+
+def test_resolution_nested_args():
+    s = R.Symbols()
+    s.bind("body_main", "BODY_9")
+    args = {
+        "target_body_id": "$body_main",
+        "tool_body_ids": ["$body_a", "$body_b"],
+        "center": {"x": 1.0, "y": 2.0},
+    }
+    s.bind("body_a", "A1")
+    s.bind("body_b", "B1")
+    out = R.resolve_value(args, s)
+    assert out["target_body_id"] == "BODY_9"
+    assert out["tool_body_ids"] == ["A1", "B1"]
+    assert out["center"] == {"x": 1.0, "y": 2.0}
+
+
+def test_unresolved_raises():
+    s = R.Symbols()
+    try:
+        R.resolve_value("$ghost", s)
+        assert False, "should have raised"
+    except R.PlanError:
+        pass
+
+
+def test_finalize_args():
+    args = {"body_id": "B1", "remove_face_index": [3], "edge_indices": [1.0, 2.0],
+            "tool_body_ids": ["B2", "B3"], "count": 4.0}
+    out = R.finalize_args(args)
+    assert out["remove_face_index"] == 3
+    assert out["edge_indices"] == [1, 2]
+    assert out["tool_body_ids"] == ["B2", "B3"]
+    assert out["count"] == 4
+
+
+# --------------------------------------------------------------------------
+# 4. rectangle adapter (generic, no step numbers)
+# --------------------------------------------------------------------------
+def test_rectangle_adapter():
+    args = {"sketch_id": "$sketch_base",
+            "corner1": {"x": -90.0, "y": -60.0},
+            "corner2": {"x": 90.0, "y": 60.0}}
+    out = R.adapt_rectangle(args)
+    assert out["corner1"] == {"x": 0.0, "y": 0.0}   # center
+    assert out["corner2"] == {"x": 180.0, "y": 120.0}  # width/height
+
+
+def test_rectangle_adapter_passthrough_without_corners():
+    args = {"sketch_id": "$s", "center": {"x": 0, "y": 0}, "diameter": 10}
+    assert R.adapt_rectangle(args) == args
+
+
+# --------------------------------------------------------------------------
+# 5. edge selection engine
+# --------------------------------------------------------------------------
+def test_edge_selection_corner_candidates():
+    edges = [
+        make_edge(0, bbox_min=[-90, -60, 0], bbox_max=[-90, -60, 12]),
+        make_edge(1, bbox_min=[-90, 60, 0], bbox_max=[-90, 60, 12]),
+        make_edge(2, bbox_min=[90, -60, 0], bbox_max=[90, -60, 12]),
+        make_edge(3, bbox_min=[90, 60, 0], bbox_max=[90, 60, 12]),
+        make_edge(4, bbox_min=[-90, -22, 0], bbox_max=[-90, -22, 12]),  # distractor
+    ]
+    crit = {"curve_type": "Linear", "direction": "Z", "length": {"value": 12.0, "tol": 0.05},
+            "corners_xy": [[-90, -60], [-90, 60], [90, -60], [90, 60]],
+            "bbox_z": {"min": 0.0, "max": 12.0}}
+    sel = R.run_selection(edges, crit, "edges")
+    assert sel["count"] == 4
+    assert sorted(it["index"] for it in sel["items"]) == [0, 1, 2, 3]
+
+
+def test_edge_selection_curve_type_list_and_length_tol():
+    edges = [
+        make_edge(0, curve_type="Circular", length=326.73),
+        make_edge(1, curve_type="Elliptical", length=326.7),
+        make_edge(2, curve_type="Linear", length=100.0),
+    ]
+    crit = {"curve_type": ["Circular", "Elliptical"], "length": {"value": 326.73, "tol": 1.5}}
+    sel = R.run_selection(edges, crit, "edges")
+    assert sel["count"] == 2
+
+
+def test_edge_selection_midpoint_z_and_linear_only():
+    edges = [
+        make_edge(0, curve_type="Linear", midpoint=[0, 0, 56]),
+        make_edge(1, curve_type="Circular", midpoint=[52, 0, 56]),
+        make_edge(2, curve_type="Linear", midpoint=[0, 0, 10]),
+    ]
+    crit = {"linear_only": True, "midpoint_z": {"value": 56.0, "tol": 0.5}}
+    sel = R.run_selection(edges, crit, "edges")
+    assert [it["index"] for it in sel["items"]] == [0]
+
+
+def test_edge_selection_bbox_x_containment():
+    edges = [
+        make_edge(0, bbox_min=[-115, -60, 0], bbox_max=[-115, -60, 12]),
+        make_edge(1, bbox_min=[-115, 60, 0], bbox_max=[-115, 60, 12]),
+        make_edge(2, bbox_min=[-120, -60, 0], bbox_max=[-120, -60, 12]),  # outside x
+        make_edge(3, bbox_min=[-115, 80, 0], bbox_max=[-115, 80, 12]),    # outside y
+    ]
+    crit = {"bbox_x": [-115.0, 115.0], "bbox_y": [-60.0, 60.0]}
+    sel = R.run_selection(edges, crit, "edges")
+    assert [it["index"] for it in sel["items"]] == [0, 1]
+
+
+def test_edge_selection_adjacent_faces_and_count():
+    edges = [make_edge(0, adjacent_faces=2), make_edge(1, adjacent_faces=1)]
+    sel = R.run_selection(edges, {"adjacent_faces": 2}, "edges")
+    assert sel["count"] == 1
+
+
+# --------------------------------------------------------------------------
+# 6. face selection engine
+# --------------------------------------------------------------------------
+def test_face_selection_flat():
+    faces = [
+        make_face(0, face_type="Planar", centroid=[0, 0, 48], area=5541.77, normal=[0, 0, 1]),
+        make_face(1, face_type="Cylindrical", centroid=[0, 0, 20]),
+        make_face(2, face_type="Planar", centroid=[0, 0, 10], normal=[0, 0, 1]),
+    ]
+    crit = {"face_type": "Planar", "centroid": [0, 0, 48], "normal": [0, 0, 1],
+            "area_approx_auxiliary": 5541.77}  # auxiliary key must be ignored
+    sel = R.run_selection(faces, crit, "faces")
+    assert sel["count"] == 1
+    assert sel["items"][0]["index"] == 0
+
+
+def test_face_selection_named_groups():
+    faces = [
+        make_face(0, face_type="Planar", centroid=[0, 0, 56], normal=[0, 0, 1]),
+        make_face(1, face_type="Planar", centroid=[65, 0, 20], normal=[0, 0, 1]),
+        make_face(2, face_type="Planar", centroid=[-65, 0, 20], normal=[0, 0, 1]),
+        make_face(3, face_type="Cylindrical", centroid=[0, 0, 20]),
+    ]
+    crit = {
+        "flange_top": {"face_type": "Planar", "centroid": [0, 0, 56]},
+        "boss_tops": {"face_type": "Planar", "centroid_z": 20.0,
+                      "centroid_radius": {"value": 65.0, "tol": 1.0}},
+        "holes_reasonable": {"face_type": "Cylindrical"},
+    }
+    sel = R.run_selection(faces, crit, "faces")
+    assert sel["count"] == 4
+    assert sel["groups"]["flange_top"] == 1
+    assert sel["groups"]["boss_tops"] == 2
+    assert sel["groups"]["holes_reasonable"] == 1
+
+
+def test_face_selection_centroid_radius_and_centroid_z():
+    faces = [
+        make_face(0, face_type="Planar", centroid=[52, 0, 56]),
+        make_face(1, face_type="Planar", centroid=[10, 0, 56]),
+    ]
+    sel = R.run_selection(faces, {"centroid_radius": {"value": 52.0, "tol": 0.5}}, "faces")
+    assert [it["index"] for it in sel["items"]] == [0]
+    sel2 = R.run_selection(faces, {"centroid_z": {"value": 56.0, "tol": 0.5}}, "faces")
+    assert sel2["count"] == 2
+
+
+# --------------------------------------------------------------------------
+# 7. topology cache invalidation
+# --------------------------------------------------------------------------
+def test_topology_invalidation():
+    topo = R.TopologyState()
+    assert topo.edges_valid and topo.faces_valid
+    topo.edges_cached = [1, 2]
+    topo.faces_cached = [3]
+    topo.invalidate()
+    assert not topo.edges_valid and not topo.faces_valid
+    assert topo.edges_cached == [] and topo.faces_cached == []
+
+
+def test_topology_invalidation_does_not_auto_list():
+    # a topology_changes op must NOT trigger list calls by itself
+    calls = []
+
+    async def fake_loop():
+        plan = {"operations": [{"step": 1, "tool": "nx_unite",
+                                "tool_args": {"target_body_id": "b", "tool_body_ids": ["c"]},
+                                "topology_changes": True}]}
+        s = R.Symbols()
+        s.bind("b", "B1")
+        s.bind("c", "B2")
+
+        class T:
+            async def call(self, tool, args):
+                calls.append(tool)
+                return {"message": "ok", "target": ObjectRef("B1")}
+
+        await R.run_plan(plan, T())
+        assert calls == ["nx_unite"], calls
+
+    import asyncio
+    asyncio.run(fake_loop())
+
+
+# --------------------------------------------------------------------------
+# 8. expectation checker
+# --------------------------------------------------------------------------
+def test_expectation_checks():
+    sel = {"count": 4, "groups": {"flange_top": 1, "boss_tops": 4},
+           "extents": {"x_min": -115.0, "x_max": 115.0, "y_min": -60.0,
+                       "y_max": 60.0, "z_min": 0.0, "z_max": 56.0}}
+    assert R.check_expectation({"count": 4}, sel, {}) == []
+    assert R.check_expectation({"count": 5}, sel, {}) != []
+    assert R.check_expectation({"flange_top_count": 1, "boss_tops_count": 4}, sel, {}) == []
+    assert R.check_expectation({"boss_tops_count": 3}, sel, {}) != []
+    assert R.check_expectation({"cylindrical_count_range": [4, 12]}, sel, {}) != []  # unknown group
+    assert R.check_expectation({"x_min": -115.0, "z_max": 56.0, "tolerance_mm": 0.5}, sel, {}) == []
+    assert R.check_expectation({"body_count": 1}, sel, {"objects": [ObjectRef("B1")]}) == []
+    assert R.check_expectation({"body_count": 2}, sel, {"objects": [ObjectRef("B1")]}) != []
+    # informational keys must be ignored
+    assert R.check_expectation({"purpose": "check", "area_auxiliary": 123.0}, sel, {}) == []
+    # done check on raw pipe result
+    raw = {"result": "blend ok done=4"}
+    assert R.check_expectation({"done": 4}, sel, raw) == []
+    assert R.check_expectation({"done": 3}, sel, raw) != []
+
+
+def test_extents_computation():
+    edges = [
+        make_edge(0, bbox_min=[-115, -60, 0], bbox_max=[-115, -60, 12]),
+        make_edge(1, bbox_min=[115, 60, 48], bbox_max=[115, 60, 56]),
+    ]
+    ext = R.compute_extents(edges, "edges")
+    assert ext["x_min"] == -115 and ext["x_max"] == 115
+    assert ext["y_min"] == -60 and ext["y_max"] == 60
+    assert ext["z_min"] == 0 and ext["z_max"] == 56
+
+
+# --------------------------------------------------------------------------
+# 9. build + static check on the real frozen plan (no NX)
+# --------------------------------------------------------------------------
+def test_frozen_plan_loads():
+    assert os.path.isfile(FROZEN_PLAN)
+    with open(FROZEN_PLAN, encoding="utf-8") as f:
+        plan = json.load(f)
+    assert plan["mode"] == "FAST"
+    assert len(plan["operations"]) == 59
+
+
+def test_build_executable_plan_resolves_all_references():
+    with open(FROZEN_PLAN, encoding="utf-8") as f:
+        plan = json.load(f)
+    exe = R.build_executable_plan(plan)
+    errs = R.check_plan(exe, executable=True)
+    assert errs == [], errs
+    # no natural-language placeholders left in any tool_args
+    for op in exe["operations"]:
+        for v in R._walk(op.get("tool_args") or {}):
+            assert not (isinstance(v, str) and ("<" in v or "匹配" in v)), (op["step"], v)
+    # selection consumers rewritten to machine references
+    ta = {op["step"]: op.get("tool_args") or {} for op in exe["operations"]}
+    assert ta[17]["remove_face_index"] == "$selection.sel_16"
+    assert ta[50]["edge_indices"] == "$selection.sel_49"
+    assert ta[52]["edge_indices"] == "$selection.sel_51"
+    assert ta[54]["edge_indices"] == "$selection.sel_53"
+    # key logical bindings present
+    bindings = {}
+    for op in exe["operations"]:
+        for field, names in (op.get("result_bindings") or {}).items():
+            ns = [names] if isinstance(names, str) else names
+            for n in ns:
+                bindings[n] = (op["step"], field)
+    assert bindings.get("sketch_base") and bindings.get("body_base")
+    assert bindings.get("body_main") is not None       # alias on the base producer
+    assert bindings.get("body_cyl") and bindings.get("body_flange")
+    assert bindings.get("body_boss1") and bindings.get("body_boss2")
+    assert bindings.get("body_ribL1") and bindings.get("body_ribR1")
+    # pattern copies bound via the "objects" response field
+    assert bindings.get("body_boss2")[1] == "objects"
+    assert bindings.get("body_ribR2")[1] == "objects"
+    # mirror results bound via the bridge's "object" field (regression)
+    assert bindings.get("body_earR") == (10, "object")
+    assert bindings.get("body_ribR1") == (36, "object")
+    # save retry declared
+    save = [op for op in exe["operations"] if op["tool"] == "nx_save_part"]
+    assert save and save[0].get("retry", {}).get("max", 0) >= 1
+
+
+def test_build_is_idempotent_shape():
+    with open(FROZEN_PLAN, encoding="utf-8") as f:
+        plan = json.load(f)
+    exe1 = R.build_executable_plan(plan)
+    exe2 = R.build_executable_plan(exe1)  # re-running build must not break
+    errs = R.check_plan(exe2, executable=True)
+    assert errs == [], errs
+
+
+def test_param_validation_rejects_planner_fields_in_tool_args():
+    # planner custom fields in tool_args must be flagged
+    plan = {"operations": [{
+        "step": 1, "tool": "nx_list_edges",
+        "tool_args": {"body_id": "$body_main", "expected_count": 4},  # illegal
+        "selection_criteria": {}, "expectation": {}}]}
+    errs = R.check_plan(plan, executable=True)
+    assert any("illegal param" in e for e in errs)
+
+
+# --------------------------------------------------------------------------
+# 10. preflight safety policy (no NX)
+# --------------------------------------------------------------------------
+def test_preflight_unrelated_part_open_blocked():
+    dec, payload = R.preflight_decision(
+        active_path=r"C:\work\user_own.prt", planned_path=r"C:\work\test.prt",
+        mode="benchmark", overwrite_allowed=True, dirty=False, runner_parts=())
+    assert dec == "blocked"
+    assert payload["reason"] == "unrelated_part_open"
+
+
+def test_preflight_planned_benchmark_clean_allowed():
+    dec, payload = R.preflight_decision(
+        active_path=r"C:\work\test.prt", planned_path=r"C:\work\test.prt",
+        mode="benchmark", overwrite_allowed=False, dirty=False, runner_parts=())
+    assert dec == "allow"
+    assert payload["state"] == "planned_clean"
+
+
+def test_preflight_planned_clean_normal_allowed():
+    dec, _ = R.preflight_decision(
+        active_path=r"C:\work\test.prt", planned_path=r"C:\work\test.prt",
+        mode="normal", overwrite_allowed=False, dirty=False, runner_parts=())
+    assert dec == "allow"
+
+
+def test_preflight_planned_dirty_benchmark_overwrite_allowed():
+    dec, payload = R.preflight_decision(
+        active_path=r"C:\work\test.prt", planned_path=r"C:\work\test.prt",
+        mode="benchmark", overwrite_allowed=True, dirty=True, runner_parts=())
+    assert dec == "allow"
+    assert payload["state"] == "planned_dirty_benchmark_overwrite"
+
+
+def test_preflight_planned_dirty_normal_blocked():
+    dec, payload = R.preflight_decision(
+        active_path=r"C:\work\test.prt", planned_path=r"C:\work\test.prt",
+        mode="normal", overwrite_allowed=True, dirty=True, runner_parts=())
+    assert dec == "blocked"
+    assert payload["reason"] == "planned_part_dirty"
+
+
+def test_preflight_planned_dirty_benchmark_without_overwrite_blocked():
+    dec, _ = R.preflight_decision(
+        active_path=r"C:\work\test.prt", planned_path=r"C:\work\test.prt",
+        mode="benchmark", overwrite_allowed=False, dirty=True, runner_parts=())
+    assert dec == "blocked"
+
+
+def test_preflight_no_active_part_allowed():
+    dec, payload = R.preflight_decision(
+        active_path="", planned_path=r"C:\work\test.prt",
+        mode="normal", overwrite_allowed=False, dirty=False, runner_parts=())
+    assert dec == "allow"
+    assert payload["state"] == "no_active_part"
+
+
+def test_preflight_runner_own_test_part_allowed():
+    # category B: a part the Runner itself created and recorded
+    dec, payload = R.preflight_decision(
+        active_path=r"C:\work\tmp_test.prt", planned_path=r"C:\work\test.prt",
+        mode="normal", overwrite_allowed=False, dirty=False,
+        runner_parts=(R._norm_path(r"C:\work\tmp_test.prt"),))
+    assert dec == "allow"
+    assert payload["state"] == "runner_test_part"
+
+
+def test_preflight_path_normalization():
+    # same file, different slash/case spelling must still match
+    dec, _ = R.preflight_decision(
+        active_path="c:/Work/Test.prt", planned_path=r"C:\work\test.prt",
+        mode="normal", overwrite_allowed=False, dirty=False, runner_parts=())
+    assert dec == "allow"
+
+
+def test_run_history_and_runtime_dirty(tmp_path=None):
+    import tempfile
+    d = tmp_path or tempfile.mkdtemp()
+    hp = os.path.join(str(d), "history.json")
+    h = R.RunHistory(hp)
+    # unknown provenance -> dirty (conservative)
+    assert R.runtime_dirty(r"C:\work\test.prt", h) is True
+    # Runner started a run, did not save -> dirty
+    h.record_start(r"C:\work\test.prt", "benchmark", "plan.json")
+    assert R.runtime_dirty(r"C:\work\test.prt", h) is True
+    # saved -> clean
+    h.record_saved(r"C:\work\test.prt")
+    assert R.runtime_dirty(r"C:\work\test.prt", h) is False
+    # path normalization in history keys
+    assert h.most_recent("c:/work/TEST.prt")["save_ok"] is True
+    h.record_failed(r"C:\work\test.prt")
+    assert R.runtime_dirty(r"C:\work\test.prt", h) is True
+    # history persists across instances
+    h2 = R.RunHistory(hp)
+    assert h2.most_recent(r"C:\work\test.prt")["save_ok"] is False
+
+
+def test_run_plan_mirror_object_binding():
+    # regression: the bridge adapts nx_mirror results under "object"; a plan that
+    # binds {"object": ...} must resolve in the very next step
+    import asyncio
+    plan = {"mode": "FAST", "operations": [
+        {"step": 10, "tool": "nx_mirror", "tool_args": {"body_id": "src", "plane": "YZ"},
+         "result_bindings": {"object": "body_earR"}, "topology_changes": True},
+        {"step": 11, "tool": "nx_list_edges", "tool_args": {"body_id": "$body_earR"},
+         "selection_criteria": {"linear_only": True}, "expectation": {"count": 1}}]}
+
+    class T:
+        async def call(self, tool, args):
+            if tool == "nx_mirror":
+                return {"status": "success", "object": ObjectRef("MIR1"), "message": "mirrored"}
+            return {"status": "success",
+                    "edges": [{"index": 0, "curve_type": "Linear", "length": 1.0,
+                               "midpoint": [0, 0, 0], "bbox_min": [0, 0, 0],
+                               "bbox_max": [1, 1, 1], "direction": "X",
+                               "adjacent_faces": 2}],
+                    "message": "1 edge"}
+
+    rep = asyncio.run(R.run_plan(plan, T()))
+    assert rep["status"] == "success", rep["steps"]
+
+
+# --------------------------------------------------------------------------
+# main
+# --------------------------------------------------------------------------
+def _run_all():
+    tests = [(k, v) for k, v in sorted(globals().items()) if k.startswith("test_")]
+    failed = 0
+    for name, fn in tests:
+        try:
+            fn()
+            print(f"PASS  {name}")
+        except Exception as e:
+            failed += 1
+            print(f"FAIL  {name}: {type(e).__name__}: {e}")
+    print(f"\n{len(tests) - failed}/{len(tests)} tests passed")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(_run_all())

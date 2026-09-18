@@ -1,0 +1,37 @@
+{
+  "pipeline_status": "success",
+  "current_stage": "C",
+  "input_image": "%USERPROFILE%\\Desktop\\bearing_seat_2d.png",
+  "stage_a": {
+    "status": "passed",
+    "json_path": "%USERPROFILE%\\NX_MCP_WORKSPACE\\bearing_seat_drawing.json",
+    "elapsed_seconds": 18.4,
+    "unresolved_count": 0,
+    "closure_status": "closed"
+  },
+  "stage_b": {
+    "status": "passed",
+    "plan_path": "%USERPROFILE%\\NX_MCP_WORKSPACE\\bearing_seat_plan.json",
+    "executable_plan_path": "%USERPROFILE%\\NX_MCP_WORKSPACE\\bearing_seat_plan.executable.json",
+    "planner_elapsed_seconds": 6.5,
+    "build_elapsed_seconds": 0.7,
+    "check_status": "passed",
+    "operations": 59
+  },
+  "stage_c": {
+    "status": "success",
+    "elapsed_seconds": 96.5,
+    "body_count": 1,
+    "model_bbox": {
+      "x_min": -90,
+      "x_max": 90,
+      "y_min": -55,
+      "y_max": 55,
+      "z_min": 0,
+      "z_max": 36
+    },
+    "prt_path": "%USERPROFILE%\\NX_MCP_WORKSPACE\\bearing_seat.prt",
+    "step_path": "%USERPROFILE%\\NX_MCP_WORKSPACE\\bearing_seat.step"
+  },
+  "total_elapsed_seconds": 124.8
+}

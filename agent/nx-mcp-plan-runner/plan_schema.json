@@ -1,0 +1,147 @@
+{
+  "schema_version": "1.1",
+  "description": "nx-mcp-plan-runner plan schema. Two tiers: the frozen planner output format (unchanged, backward compatible) and the executable format (frozen + minimal extensions). The Runner executes the executable format; it can READ (parse/validate) both.",
+  "frozen_format": {
+    "planner": "nx-mcp-modeling-planner",
+    "top_level_fields": [
+      {"name": "skill", "required": false},
+      {"name": "mode", "required": true, "values": ["FAST", "DIAGNOSTIC"]},
+      {"name": "part", "required": false},
+      {"name": "coordinate_system", "required": false},
+      {"name": "notes", "required": false, "type": "string[]"},
+      {"name": "operations", "required": true, "type": "operation[]"},
+      {"name": "final_validation", "required": false},
+      {"name": "fallbacks", "required": false}
+    ],
+    "operation_fields": [
+      {"name": "step", "required": true, "type": "int"},
+      {"name": "goal", "required": false},
+      {"name": "tool", "required": true, "values": "one of the 32 certified NX_MCP tools"},
+      {"name": "target", "required": false},
+      {"name": "tool_args", "required": true, "type": "object", "note": "real params sent to NX_MCP; logical names may appear as values"},
+      {"name": "selection_criteria", "required": false, "note": "local filter rules; NEVER sent to NX_MCP"},
+      {"name": "expectation", "required": false, "note": "judgement rules; NEVER sent to NX_MCP"},
+      {"name": "topology_changes", "required": true, "type": "bool"},
+      {"name": "refresh_edges_after", "required": false, "type": "bool", "note": "information only: previously cached edge indices are stale; the Runner never auto-lists"},
+      {"name": "refresh_faces_after", "required": false, "type": "bool", "note": "information only: previously cached face indices are stale; the Runner never auto-lists"}
+    ]
+  },
+  "executable_extensions": {
+    "note": "A backward-compatible superset of the frozen format. The Runner binds results / selections / references ONLY through these explicit, machine-readable fields.",
+    "operation_extensions": [
+      {
+        "name": "result_bindings",
+        "type": "object",
+        "example": { "body": "body_base" },
+        "semantics": "After a successful call, bind named response fields into the symbol table. Field keys are adapted-response fields: object / body / sketch / feature / part / path / objects. Values are logical names, or arrays of names (multi-name binding = aliases to the same result, e.g. an unite that re-bases the main solid). Objects use their .id."
+      },
+      {
+        "name": "selection_binding",
+        "type": "string",
+        "example": "sel_49",
+        "semantics": "On list steps (nx_list_edges / nx_list_faces) with selection_criteria: bind the locally-filtered result to the selection symbol. Flat criteria -> list of item indices. Named-group criteria -> {group_name: [indices]}. Consumers reference it as $selection.<name> or $selection.<name>.<group>. The build pass names bindings generically (sel_<step>); planner-authored plans may choose semantic names."
+      },
+      {
+        "name": "retry",
+        "type": "object",
+        "example": { "max": 1, "if_error_contains": ["撤消"] },
+        "semantics": "The ONLY retries the Runner performs. Declared in the plan (from planner fallbacks or known loader transients); never invented at runtime. Retried only when the error text contains any substring of if_error_contains and retry count < max."
+      }
+    ],
+    "topology_safety": {
+      "semantics": "Any operation with topology_changes=true that completes successfully immediately invalidates the Runner's edge/face caches (and sets edges_valid/faces_valid=false). The Runner NEVER auto-lists after invalidation: only a later plan step that explicitly calls nx_list_edges / nx_list_faces re-populates the caches. Selection symbols are plan artifacts; plans must rebind them after topology changes."
+    },
+    "reference_syntax": {
+      "form": "$<symbol>",
+      "examples": [
+        "$body_main",
+        "$selection.r6_edges",
+        "$selection.fast_structure.flange_top"
+      ],
+      "semantics": "tool_args values may reference the symbol table. $name resolves the names table (logical -> real NX id). $selection.name resolves a flat selection (list of indices); $selection.name.group resolves a named group. Bare logical names (frozen format) also resolve when present in the symbol table. A single-element selection list used where a scalar is expected (e.g. remove_face_index) unwraps to the element. Natural-language placeholders (e.g. \"<step49 匹配的 4 个 index>\") are NOT part of the executable format."
+    }
+  },
+  "selection_criteria_grammar": {
+    "note": "selection_criteria filter the tool result LOCALLY. Keys describe geometry; values are exact numbers, numeric ranges, candidate lists, or nested groups. Unknown/informational keys never fail.",
+    "edge_keys": [
+      "curve_type (string or list of allowed types, e.g. [\"Circular\",\"Elliptical\"])",
+      "direction (X/Y/Z/OTHER or list)",
+      "length (numeric)",
+      "midpoint ([x,y,z])",
+      "midpoint_z (numeric)",
+      "bbox ([minX,minY,minZ] .. [maxX,maxY,maxZ] form: bbox as full extent array)",
+      "bbox_x / bbox_y / bbox_z (numeric range: containment — both the min and the max of the edge's bbox axis must lie within the range; prefer corners_xy for exact corner edges)",
+      "corners_xy (list of [x,y] candidates: edge bbox is degenerate at the corner; exact precision form for corner picking)",
+      "adjacent_faces (int or range)",
+      "linear_only (bool: shortcut for curve_type=Linear)"
+    ],
+    "face_keys": [
+      "face_type (string or list)",
+      "centroid ([x,y,z])",
+      "centroid_z (numeric)",
+      "centroid_radius (numeric; |hypot(x,y) - r| <= tol)",
+      "normal ([x,y,z]; planar faces only — non-planar faces fail this criterion)",
+      "area (numeric)"
+    ],
+    "value_forms": [
+      "number: exact match within tolerance (per-key tol override: {\"value\": n, \"tol\": t}; global default tol = 0.5)",
+      "{\"min\": a, \"max\": b}: inclusive range",
+      "[a, b]: inclusive range (for scalar keys)",
+      "array of candidates: match if the field is in the array (list-any)",
+      "{\"any\": [candidates...]}: match any candidate (used for e.g. multi-corner lists)"
+    ],
+    "group_mode": "if every value of selection_criteria is itself an object of criteria keys, the criteria are NAMED GROUPS: each group filters independently and its match count is bound by name (e.g. {\"flange_top\": {...}, \"boss_tops\": {...}}).",
+    "informational_keys": [
+      "note", "use",
+      "keys containing 'auxiliary'",
+      "keys ending in '_approx' are ACTIVE filters on the base key (strip '_approx', e.g. centroid_radius_approx -> centroid_radius)"
+    ]
+  },
+  "expectation_grammar": {
+    "count": "matched item count (exact)",
+    "count_range": "{\"min\":..,\"max\":..} or [lo,hi] inclusive (alias: *_count_range)",
+    "body_count": "nx_list_bodies object count",
+    "<group>_count": "named-group match count (e.g. flange_top_count)",
+    "<group>_count_range": "named-group count range",
+    "x_min / x_max / y_min / y_max / z_min / z_max": "extents of matched items (Linear edge bbox for edges; centroid for faces); tolerance via tolerance_mm or default 0.5",
+    "done": "edge_blend / chamfer done count (parsed from the raw loader result)",
+    "informational": "keys named *_approx / *_auxiliary / area_auxiliary / purpose / note are logged, never failed"
+  },
+  "certified_tool_params": {
+    "note": "Allowed tool_args keys per certified tool (NX_MCP-Enhanced v2.1.1). The Runner validates resolved args against these before dispatch.",
+    "spec": {
+      "nx_status": {"optional": []},
+      "nx_create_part": {"required": ["path"], "optional": ["units"]},
+      "nx_open_part": {"required": ["path"]},
+      "nx_save_part": {"optional": []},
+      "nx_close_part": {"optional": ["save"]},
+      "nx_export_step": {"required": ["path"]},
+      "nx_list_sketches": {"optional": []},
+      "nx_list_bodies": {"optional": []},
+      "nx_list_features": {"optional": []},
+      "nx_list_edges": {"required": ["body_id"]},
+      "nx_list_faces": {"required": ["body_id"]},
+      "nx_create_sketch": {"optional": ["plane", "name"]},
+      "nx_sketch_line": {"required": ["sketch_id", "start", "end"]},
+      "nx_sketch_rectangle": {"required": ["sketch_id", "corner1", "corner2"], "note": "corner1/corner2 are the BRIDGE slot names; the runner adapter packs center into corner1 and width/height into corner2 (loader grammar cx cy w h)"},
+      "nx_sketch_circle": {"required": ["sketch_id", "center", "diameter"]},
+      "nx_sketch_arc": {"required": ["sketch_id", "center", "radius"], "optional": ["start_angle", "end_angle"]},
+      "nx_finish_sketch": {"required": ["sketch_id"]},
+      "nx_extrude": {"required": ["sketch_id", "distance"], "optional": ["reverse", "start_offset", "operation", "target_body_id"]},
+      "nx_hole": {"required": ["body_id", "center", "diameter", "depth"], "optional": ["start_offset"]},
+      "nx_counterbore_hole": {"required": ["body_id", "center", "hole_diameter", "hole_depth", "counterbore_diameter", "counterbore_depth"], "optional": ["start_offset"]},
+      "nx_countersink_hole": {"required": ["body_id", "center", "hole_diameter", "hole_depth", "countersink_diameter"], "optional": ["countersink_angle", "start_offset"]},
+      "nx_shell": {"required": ["body_id", "thickness", "remove_face_index"], "optional": ["inward"]},
+      "nx_edge_blend": {"required": ["body_id", "radius"], "optional": ["edge_indices"]},
+      "nx_chamfer": {"required": ["body_id", "offset"], "optional": ["edge_indices"]},
+      "nx_unite": {"required": ["target_body_id", "tool_body_ids"]},
+      "nx_revolve": {"required": ["sketch_id", "axis_start", "axis_end"], "optional": ["angle", "reverse"]},
+      "nx_mirror": {"required": ["body_id", "plane"], "optional": ["offset"]},
+      "nx_linear_pattern": {"required": ["body_id", "direction", "count", "spacing"], "optional": ["reverse"]},
+      "nx_circular_pattern": {"required": ["body_id", "axis", "center", "count", "angle"], "optional": ["reverse"]},
+      "nx_undo": {"optional": []},
+      "nx_fit_view": {"optional": []},
+      "nx_release": {"optional": []}
+    }
+  }
+}

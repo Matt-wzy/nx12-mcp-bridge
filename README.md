@@ -142,6 +142,18 @@ STEP export uses the NX STEP translator with `InputFile`,
 
 ---
 
+## 二维工程图 → NX 自动建模
+
+可选 Agent Pack 能将二维机械工程图自动解析、规划并在 NX 中执行。
+
+- 安装：`.\install-agent.ps1`
+- 使用：上传工程图 → “开始建模”
+- 详细说明：`docs/DRAWING_TO_NX.md`
+
+NX_MCP 本身可以独立使用，Agent Pack 是可选增强层。
+
+---
+
 ## Original project content
 
 The original architecture, security model, and quality gates are preserved:
