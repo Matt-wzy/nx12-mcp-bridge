@@ -31,6 +31,7 @@ REQUIRED = [
 
 OLD_SKILL_NAMES = ("nx-modeling", "nx-engineering-drawing-reader", "nx-mcp-modeling-planner", "nx-mcp-pipeline")
 
+
 def fail(message: str) -> None:
     raise SystemExit(message)
 
