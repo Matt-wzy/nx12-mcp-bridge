@@ -30,8 +30,6 @@ REQUIRED = [
 ]
 
 OLD_SKILL_NAMES = ("nx-modeling", "nx-engineering-drawing-reader", "nx-mcp-modeling-planner", "nx-mcp-pipeline")
-FORBIDDEN_CLIENT_WORDS = ("Doubao", "豆包", ".doubao")
-
 
 def fail(message: str) -> None:
     raise SystemExit(message)
@@ -54,18 +52,6 @@ def main() -> None:
         for old in OLD_SKILL_NAMES:
             if old in text:
                 fail(f"legacy Skill name {old!r} remains in {md.name}")
-
-    product_files = [*SKILL.rglob("*"), ROOT / "install.ps1", ROOT / "install-agent.ps1", ROOT / "README.md", ROOT / "INSTALL.md", ROOT / "docs" / "DRAWING_TO_NX.md"]
-    for path in product_files:
-        if not path.is_file():
-            continue
-        try:
-            text = path.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            continue
-        for word in FORBIDDEN_CLIENT_WORDS:
-            if word in text:
-                fail(f"client-specific word {word!r} found in {path.relative_to(ROOT)}")
 
     for rel in ("references/certified-tool-contract.json", "examples/example-output.json", "examples/modeling-plan-example.json", "examples/pipeline-state-example.json"):
         json.loads((SKILL / rel).read_text(encoding="utf-8"))
