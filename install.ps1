@@ -170,14 +170,14 @@ Write-Host "[Loader] 已部署: $deployedLoader"
 Write-Host "[OK] Loader SHA256 校验通过"
 
 # ---------------------------------------------------------------
-# 5. Agent Pack（Drawing Reader + Planner + Pipeline + Runner）
+# 5. Agent Pack（NX Modeling + Drawing Reader + Planner + Pipeline + Runner）
 # ---------------------------------------------------------------
 $agentInstaller = Join-Path $RepoRoot "install-agent.ps1"
 if (-not (Test-Path $agentInstaller)) {
     throw "缺少 Agent Pack 安装器: $agentInstaller"
 }
 
-Write-Host "[Agent Pack] 安装工程图自动建模能力..."
+Write-Host "[Agent Pack] 安装文字建模 + 工程图自动建模能力..."
 $agentParams = @{
     RepoRoot  = $RepoRoot
     PythonExe = $venvPython
@@ -201,6 +201,7 @@ Write-Host "NX_MCP-Enhanced 核心：已安装"
 Write-Host "Python sidecar：已安装"
 Write-Host "UGII_USER_DIR：已配置"
 Write-Host "C# Loader：已构建并部署"
+Write-Host "文字建模 Skill：已安装"
 Write-Host "工程图读取 Skill：已安装"
 Write-Host "建模规划 Skill：已安装"
 Write-Host "一键总控 Skill：已安装"
@@ -217,6 +218,11 @@ else {
     Write-Host "[下一步] 启动 Siemens NX。新进程会读取 UGII_USER_DIR 并自动加载 Loader。"
 }
 
-Write-Host "然后重新打开/新建一个豆包对话，上传二维机械工程图并发送："
+Write-Host "[使用方式 1] 文字描述建模"
+Write-Host "新建一个 Agent 对话，直接描述你希望在 NX 中创建或修改的模型。"
+Write-Host "例如：在 NX 中创建一个 100×60×10 mm 的底板，并在四角打 Ø8 通孔。"
+Write-Host ""
+Write-Host "[使用方式 2] 二维工程图自动建模"
+Write-Host "新建一个 Agent 对话，上传二维机械工程图并发送："
 Write-Host "开始建模"
 Write-Host ""

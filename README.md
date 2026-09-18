@@ -70,10 +70,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 3. 为当前 Windows 用户配置 `UGII_USER_DIR`
 4. 构建 C# Loader
 5. 将 Loader 部署到 `%UGII_USER_DIR%\startup`
-6. 安装 Drawing Reader Skill
-7. 安装 Modeling Planner Skill
-8. 安装 Pipeline Skill
-9. 安装 Plan Runner 并执行轻量测试
+6. 安装 NX Modeling Skill（文字描述建模）
+7. 安装 Drawing Reader Skill
+8. 安装 Modeling Planner Skill
+9. 安装 Pipeline Skill
+10. 安装 Plan Runner 并执行轻量测试
 
 如果存在多个 Agent Profile，可手动指定：
 
@@ -87,11 +88,28 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -DoubaoProfile
 让新进程读取 `UGII_USER_DIR` 并自动加载新部署的 Loader。
 如果 NX 尚未启动，安装完成后直接启动即可。
 
-然后新建一个 Agent 对话，上传二维机械工程图，并发送：
+安装完成并启动 / 重启 NX 后，有两种建模方式：
+
+### 方式一：文字描述建模
+
+新建一个 Agent 对话，直接描述你希望创建或修改的 NX 模型，例如：
+
+```
+用我打开的 NX 创建一个 100×60×10 mm 的底板，四角 R8，
+并在四角各打一个 Ø8 通孔。
+```
+
+文字建模由 `nx-modeling` Skill 调用现有 NX_MCP 工具完成。
+
+### 方式二：二维工程图自动建模
+
+新建一个 Agent 对话，上传二维机械工程图，并发送：
 
 ```
 开始建模
 ```
+
+工程图模式会自动执行 Drawing Reader → Modeling Planner → Plan Runner。
 
 完整安装说明请查看 [INSTALL.md](INSTALL.md)。
 
@@ -117,9 +135,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -DoubaoProfile
 
 ---
 
-## 二维工程图 → NX 自动建模
+## 两种建模入口
 
-Agent Pack 已经**内置在本仓库中，并由 `install.ps1` 自动安装**，包含：
+Agent Pack 已经**内置在本仓库中，并由 `install.ps1` 自动安装**，同时支持文字描述建模和二维工程图自动建模，包含：
+
+- `nx-modeling`：根据文字描述直接创建或修改 NX 模型
 
 - `nx-engineering-drawing-reader`：二维机械工程图 → 结构化 JSON
 - `nx-mcp-modeling-planner`：结构化 JSON → 可执行建模计划

@@ -23,7 +23,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 If you use multiple Agent profiles, you can explicitly choose one:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AgentProfile "Profile 7"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -DoubaoProfile "Profile 7"
 ```
 
 The single installer performs the complete setup:
@@ -36,12 +36,11 @@ The single installer performs the complete setup:
 6. Auto-detects the local Siemens NX installation
 7. Builds `NX_MCP_Loader.dll`
 8. Deploys the Loader to `%UGII_USER_DIR%\startup`
-9. Installs the bundled Drawing Reader / Modeling Planner / Pipeline Skills
+9. Installs the bundled NX Modeling / Drawing Reader / Modeling Planner / Pipeline Skills
 10. Installs the generic Plan Runner
 11. Runs lightweight Agent Pack tests
 
-No separate MCP-client JSON configuration is required for the bundled Agent
-Agent Pack workflow.
+No separate MCP-client JSON configuration is required for the bundled Agent Pack workflow.
 
 ### Important: first NX start after installation
 
@@ -54,17 +53,27 @@ Agent Pack workflow.
 You should no longer need to manually create or set `UGII_USER_DIR`; the
 installer does that automatically.
 
-After NX is started with the new environment:
+After NX is started with the new environment, two workflows are available:
 
-1. Open a new Agent conversation.
-2. Upload a 2D mechanical engineering drawing.
-3. Send:
+### Text-description modeling
+
+Open a new Agent conversation and directly describe the NX model you want to create or edit. The installed `nx-modeling` Skill uses the existing NX_MCP tool surface for this workflow.
+
+Example:
+
+```
+在 NX 中创建一个 100×60×10 mm 的底板，并在四角各打一个 Ø8 通孔。
+```
+
+### 2D engineering drawing modeling
+
+Open a new Agent conversation, upload a 2D mechanical engineering drawing, and send:
 
 ```
 开始建模
 ```
 
-The normal path is:
+The drawing workflow is:
 
 ```text
 Drawing
@@ -110,6 +119,7 @@ This fixes the first-install case where the DLL existed under
 
 The installer automatically runs `install-agent.ps1` internally and installs:
 
+- `nx-modeling`
 - `nx-engineering-drawing-reader`
 - `nx-mcp-modeling-planner`
 - `nx-mcp-pipeline`

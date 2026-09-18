@@ -1,6 +1,6 @@
 ---
 name: nx-modeling
-description: Create or edit native Siemens NX parts through the existing NX_MCP tools, including sketch/extrude workflows, result checks, and recovery from stale references or uncertain execution. Not for arbitrary Journal execution or CAD-to-USD conversion.
+description: 作者：抖音 无趣。Create or edit native Siemens NX parts through the existing NX_MCP tools, including sketch/extrude workflows, result checks, and recovery from stale references or uncertain execution. Not for arbitrary Journal execution or CAD-to-USD conversion.
 ---
 
 # NX Modeling

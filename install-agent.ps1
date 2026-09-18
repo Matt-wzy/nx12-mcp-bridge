@@ -1,5 +1,5 @@
 # install-agent.ps1
-# 安装“二维机械工程图 → Siemens NX”Agent Pack。
+# 安装 NX Agent Pack：文字描述建模 + 二维机械工程图自动建模。
 # 正常用户请优先运行根目录 install.ps1；本脚本也可单独用于重装 Agent Pack。
 
 [CmdletBinding()]
@@ -20,6 +20,7 @@ $RepoRoot = (Resolve-Path $RepoRoot).Path
 $skillsSource = Join-Path $RepoRoot "skills"
 $runnerSource = Join-Path $RepoRoot "agent\nx-mcp-plan-runner"
 $requiredSkills = @(
+    "nx-modeling",
     "nx-engineering-drawing-reader",
     "nx-mcp-modeling-planner",
     "nx-mcp-pipeline"
@@ -90,7 +91,7 @@ New-Item -ItemType Directory -Force -Path $skillRoot | Out-Null
 Write-Host "[Profile] Skill 安装目标: $skillRoot"
 
 # ---------------------------------------------------------------
-# 2. 安装三个 Skill（只覆盖同名目录，不清空 .user_skills）
+# 2. 安装四个 Skill（只覆盖同名目录，不清空 .user_skills）
 # ---------------------------------------------------------------
 foreach ($s in $requiredSkills) {
     $src = Join-Path $skillsSource $s
@@ -199,6 +200,7 @@ if ($fail -ne 0) {
 
 Write-Host ""
 Write-Host "Agent Pack 安装成功"
+Write-Host "文字建模 Skill：已安装"
 Write-Host "工程图读取 Skill：已安装"
 Write-Host "建模规划 Skill：已安装"
 Write-Host "一键总控 Skill：已安装"
