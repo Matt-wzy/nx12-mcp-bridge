@@ -11,7 +11,7 @@
 **本模块 不做**：
 - 图片识别、OCR、工程图读取（由工程图读取模块 负责，完成后把结构化 JSON 交给本模块）
 - 按比例推测、重新计算或修改用户已明确给出的尺寸
-- 修改 NX_MCP-Enhanced（冻结 v2.1.1）、C# Loader，或重装环境
+- 修改 NX_MCP-Enhanced 核心、C# Loader，或重装环境
 - 新增 NX_MCP Tool；只调用现有 32 个 certified 工具（见 `references/nx-mcp-rules.md`）
 
 ## 2. 工作流程（先规划，后执行）
