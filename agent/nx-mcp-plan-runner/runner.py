@@ -648,10 +648,16 @@ class RunHistory:
     def most_recent(self, p: str) -> dict | None:
         return self.entries.get(self._key(p))
 
-    def record_start(self, p: str, mode: str, plan: str) -> None:
+    def record_start(
+        self, p: str, mode: str, plan: str, repair_attempt: int = 0
+    ) -> None:
         self.entries[self._key(p)] = {
-            "save_ok": False, "mode": mode, "plan": plan or "",
-            "started_at": _now_iso(), "saved_at": None,
+            "save_ok": False,
+            "mode": mode,
+            "plan": plan or "",
+            "repair_attempt": int(repair_attempt),
+            "started_at": _now_iso(),
+            "saved_at": None,
         }
         self.save()
 
@@ -1358,6 +1364,17 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     history_path = args.history or os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "run_history.json")
     history = RunHistory(history_path)
+
+    if args.repair_attempt == 1 and planned_for_repair:
+        prior_history = history.most_recent(planned_for_repair) or {}
+        if int(prior_history.get("repair_attempt", 0) or 0) >= 1:
+            print(json.dumps({
+                "status": "repair_precheck_blocked",
+                "failed_step": None,
+                "errors": ["controlled self-healing already consumed for this planned part"],
+            }, ensure_ascii=False, indent=2))
+            return 1
+
     blocked, info = await run_preflight(
         transport,
         plan,
@@ -1371,7 +1388,9 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         return 1
     planned_part = info["planned_part"] if info else None
     if planned_part:
-        history.record_start(planned_part, args.mode, args.plan)
+        history.record_start(
+            planned_part, args.mode, args.plan, repair_attempt=args.repair_attempt
+        )
     report = await run_plan(plan, transport, plan_path=args.plan,
                             wall_start=t_start, history=history,
                             mode=args.mode, planned_part=planned_part)
