@@ -134,7 +134,7 @@ def main() -> None:
     ]
     for rule_file in centroid_rule_files:
         text = rule_file.read_text(encoding="utf-8")
-        if "全局 XY 原点" not in text or "不是孔半径" not in text:
+        if "全局 XY 原点" not in text or "diameter/2" not in text:
             fail(f"centroid_radius global-origin semantics missing in {rule_file.name}")
 
     output_rules = (SKILL / "references" / "chinese-output.md").read_text(encoding="utf-8")
