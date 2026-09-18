@@ -117,9 +117,14 @@ def main() -> None:
     if step_56_hole_types(executable) != expected_hole_types:
         fail("runner executable example hole-face semantics are stale")
 
-    for md in [SKILL / "SKILL.md", *(SKILL / "references").glob("*.md")]:
+    release_pin_files = [
+        SKILL / "SKILL.md",
+        *(SKILL / "references").glob("*.md"),
+        RUNNER / "README.md",
+    ]
+    for md in release_pin_files:
         if "v2.1.1" in md.read_text(encoding="utf-8"):
-            fail(f"stale release pin remains in nx-agent rules: {md.name}")
+            fail(f"stale release pin remains in Agent Pack rules/docs: {md.name}")
 
     print("Agent Pack static verification passed")
 
