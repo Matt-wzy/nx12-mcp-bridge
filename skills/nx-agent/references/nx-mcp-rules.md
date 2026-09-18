@@ -31,17 +31,35 @@
 ### 草图
 | 工具 | 参数 | 说明 |
 |---|---|---|
-| `nx_create_sketch` | `plane`="XY"/"XZ"/"YZ" | 创建并激活草图，返回 `sketch_id` |
+| `nx_create_sketch` | `plane`="XY"/"XZ"/"YZ" | 创建并激活真实主基准面草图；局部二维坐标映射见下方“主平面契约” |
 | `nx_sketch_line` | `sketch_id`, `start`{x,y}, `end`{x,y} | 直线 |
 | `nx_sketch_rectangle` | `sketch_id`, `corner1`, `corner2` | 矩形（两点） |
 | `nx_sketch_circle` | `sketch_id`, `center`{x,y}, `diameter` | 圆（中心+直径） |
 | `nx_sketch_arc` | `sketch_id`, `center`, `radius`, `start_angle`, `end_angle` | 圆弧（角度制） |
 | `nx_finish_sketch` | `sketch_id` | 结束草图，之后才能挤出 |
 
+### 主平面契约（强制）
+
+`nx_create_sketch` 的二维 `{x,y}` 是**草图局部坐标**，固定映射为：
+
+| plane | 局部 x | 局部 y | `nx_extrude reverse=false` |
+|---|---|---|---|
+| `XY` | 全局 X | 全局 Y | +Z |
+| `XZ` | 全局 X | 全局 Z | +Y |
+| `YZ` | 全局 Y | 全局 Z | +X |
+
+- `reverse=true` 反转上表挤出方向。
+- `start_offset` 沿对应挤出轴偏移，不再固定解释为 Z。
+- `nx_sketch_line / rectangle / circle / arc` 均必须遵守同一局部坐标映射。
+- `nx_revolve` 的二维旋转轴也在所属 sketch 的局部平面内解释。
+- `nx_hole / nx_counterbore_hole / nx_countersink_hole` 当前仍是 **Z 轴孔工具**；
+  X/Y 轴方向的侧板/竖板孔必须在 `XZ` / `YZ` 主平面画圆，再用
+  `nx_extrude(operation="subtract")` 沿该平面法向切除，禁止拿 Z 轴孔工具硬套。
+
 ### 实体创建
 | 工具 | 参数 | 说明 |
 |---|---|---|
-| `nx_extrude` | `sketch_id`, `distance`, `reverse`=false, `start_offset`=0, `operation`="create"/"subtract", `target_body_id` | 挤出（区域模式：同心双圆→环形实体；双矩形同草图可出多体）。`start_offset` 控制起始 Z |
+| `nx_extrude` | `sketch_id`, `distance`, `reverse`=false, `start_offset`=0, `operation`="create"/"subtract", `target_body_id` | 沿该草图主平面的法向轴挤出；`reverse=false`：XY→+Z、XZ→+Y、YZ→+X；`start_offset` 沿同一挤出轴计 |
 | `nx_revolve` | `sketch_id`, `axis_start`{x,y}, `axis_end`{x,y}, `angle`=360, `reverse` | 旋转体（仅 create） |
 
 ### 特征（均改变拓扑 → 使旧 index 失效）
@@ -92,7 +110,7 @@
 3. **计数器参数约束**：counterbore：cb_dia>hole_dia、cb_depth<hole_depth；
    countersink：cs_dia>hole_dia、cs_angle∈(0,180)、锥深<hole_depth。
 4. **Unite 消费 tool body**：Unite 后不要再引用 tool body id。
-5. **Extrude 的 start_offset**：用于从非零高度开始（如 Z=12 起的壳体）。
+5. **Extrude 的 start_offset**：沿 sketch 对应挤出轴偏移；XY 沿 Z、XZ 沿 Y、YZ 沿 X。
 6. **Mirror 平面语义**：`plane="YZ"` + `offset=0` → 关于 X=0 平面镜像。
 7. **Unite 前必须确认接触面积 > 0**：仅点/线相切（如底板顶边 Y=35 与
    R35 圆立板底端单点接触）时 Unite 不可靠——工具体可能不并入目标体，
