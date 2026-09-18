@@ -14,15 +14,24 @@ NX MCP 是一套本地运行的 Siemens NX 自动化系统，可通过 Agent 自
 
 ```text
 Agent
-  -> Drawing Reader
-  -> Modeling Planner
-  -> Plan Runner
-  -> Python MCP sidecar
-  -> LoaderBridge
-  -> named pipe (localhost)
-  -> NX_MCP_Loader.dll
-  -> NXOpen
-  -> Siemens NX
+  -> 文字描述 --------┐
+  -> 二维工程图 -> Drawing Reader
+                      ↓
+               Modeling Planner
+                      ↓
+                 Plan Runner
+                      ↓
+              Python MCP sidecar
+                      ↓
+               LoaderBridge
+                      ↓
+          named pipe (localhost)
+                      ↓
+            NX_MCP_Loader.dll
+                      ↓
+                   NXOpen
+                      ↓
+                Siemens NX
 ```
 
 常驻 Loader 会在 NX 启动时自动加载，正常使用无需 `Alt+F8` 或手动运行 Journal。
@@ -40,7 +49,7 @@ Agent
 | 状态 / 查询 | `nx_status`, `nx_list_sketches`, `nx_list_bodies`, `nx_list_features` |
 | 几何检查 | `nx_list_edges`, `nx_list_faces` |
 | 草图 | `nx_create_sketch`, `nx_sketch_line`, `nx_sketch_rectangle`, `nx_sketch_circle`, `nx_sketch_arc`, `nx_finish_sketch` |
-| 拉伸 | `nx_extrude`（create / unite / subtract） |
+| 拉伸 | `nx_extrude`（create / subtract）；实体合并使用独立 `nx_unite` |
 | 孔 | `nx_hole`, `nx_counterbore_hole`, `nx_countersink_hole` |
 | 特征 | `nx_unite`, `nx_revolve`, `nx_mirror`, `nx_linear_pattern`, `nx_circular_pattern`, `nx_shell` |
 | 边处理 | `nx_edge_blend`, `nx_chamfer` |
@@ -96,7 +105,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AgentProfile 
 并在四角各打一个 Ø8 通孔。
 ```
 
-文字建模由统一 `nx-agent` Skill 调用现有 NX_MCP 工具完成。
+文字建模由统一 `nx-agent` 生成建模计划，再通过 Plan Runner → resident Loader 执行；无需额外 MCP 客户端 JSON 配置。
 
 ### 方式二：二维工程图自动建模
 
@@ -106,7 +115,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AgentProfile 
 开始建模
 ```
 
-工程图模式由统一 `nx-agent` Skill 内部执行：工程图读取 → 建模规划 → Plan Runner。
+工程图模式由统一 `nx-agent` 内部执行：工程图读取 → 建模规划 → Plan Runner；阶段 C 失败时仅允许一次受控自动修复，并从干净状态完整重跑。
 
 完整安装说明请查看 [INSTALL.md](INSTALL.md)。
 
@@ -138,7 +147,7 @@ Agent Pack 已经**内置在本仓库中，并由 `install.ps1` 自动安装**�
 
 对外只安装一个统一 Skill：
 
-- `nx-agent`：自动识别并处理文字描述建模、已有零件修改、二维工程图自动建模
+- `nx-agent`：自动识别并处理文字描述建模、工作区内已保存零件的安全修改、二维工程图自动建模
 
 工程图模式内部仍保持模块化规则：工程图读取 → 建模规划 → Plan Runner。Plan Runner 作为内部执行器安装，不再作为单独 Skill 展示。
 
