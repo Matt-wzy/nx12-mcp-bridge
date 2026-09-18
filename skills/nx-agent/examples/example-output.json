@@ -1,0 +1,93 @@
+{
+  "views": [
+    "主视图",
+    "俯视图",
+    "剖视图 A-A"
+  ],
+  "overall_dimensions": {
+    "length": 80,
+    "width": 60,
+    "height": 25,
+    "unit": "mm",
+    "source": "俯视图 80×60；总高 25 = 底板 10 + 凸台 15"
+  },
+  "coordinate_system": {
+    "origin": "part_center_xy_bottom_z0",
+    "x_positive": "right",
+    "y_positive": "up",
+    "z_positive": "up",
+    "unit": "mm"
+  },
+  "features": [
+    {
+      "name": "底板",
+      "type": "base_plate",
+      "dimensions": {
+        "length": 80,
+        "width": 60,
+        "thickness": 10
+      },
+      "position": {},
+      "count": 1,
+      "source_views": [
+        "俯视图",
+        "剖视图 A-A"
+      ],
+      "confidence": "high",
+      "required_for_modeling": true
+    },
+    {
+      "name": "中央凸台",
+      "type": "boss",
+      "dimensions": {
+        "diameter": 40,
+        "height": 15
+      },
+      "position": {
+        "center": [
+          0,
+          0
+        ]
+      },
+      "count": 1,
+      "source_views": [
+        "俯视图",
+        "剖视图 A-A"
+      ],
+      "confidence": "high",
+      "required_for_modeling": true
+    },
+    {
+      "name": "中心通孔",
+      "type": "through_hole",
+      "dimensions": {
+        "diameter": 20
+      },
+      "position": {
+        "center": [
+          0,
+          0
+        ]
+      },
+      "count": 1,
+      "source_views": [
+        "俯视图",
+        "剖视图 A-A"
+      ],
+      "confidence": "high",
+      "required_for_modeling": true
+    }
+  ],
+  "patterns": [],
+  "symmetry": [
+    "凸台与中心孔同心，并与底板中心重合"
+  ],
+  "unresolved": [],
+  "dimension_closure": {
+    "status": "closed",
+    "basis": "仅使用图上已标注数值",
+    "checks": [
+      "总高 25 = 10 + 15 ✓"
+    ]
+  }
+}

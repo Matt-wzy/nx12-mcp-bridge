@@ -1,0 +1,246 @@
+{
+  "skill": "nx-agent",
+  "example": "文字建模示例：100×60×10 底板，四角 R8，4×Ø8 通孔",
+  "mode": "FAST",
+  "part": "text_plate_demo.prt",
+  "coordinate_system": "XY 原点为板中心，Z=0 为底面，单位 mm",
+  "notes": [
+    "当前统一 plan 语法示例；输出均为 workspace 相对路径。"
+  ],
+  "operations": [
+    {
+      "step": 1,
+      "goal": "创建零件",
+      "tool": "nx_create_part",
+      "target": "-",
+      "tool_args": {
+        "path": "text_plate_demo.prt",
+        "units": "mm"
+      },
+      "topology_changes": false
+    },
+    {
+      "step": 2,
+      "goal": "创建底板草图",
+      "tool": "nx_create_sketch",
+      "target": "-",
+      "tool_args": {
+        "plane": "XY"
+      },
+      "topology_changes": false
+    },
+    {
+      "step": 3,
+      "goal": "绘制矩形",
+      "tool": "nx_sketch_rectangle",
+      "target": "sketch_base",
+      "tool_args": {
+        "sketch_id": "sketch_base",
+        "corner1": {
+          "x": -50,
+          "y": -30
+        },
+        "corner2": {
+          "x": 50,
+          "y": 30
+        }
+      },
+      "topology_changes": false
+    },
+    {
+      "step": 4,
+      "goal": "结束草图",
+      "tool": "nx_finish_sketch",
+      "target": "sketch_base",
+      "tool_args": {
+        "sketch_id": "sketch_base"
+      },
+      "topology_changes": false
+    },
+    {
+      "step": 5,
+      "goal": "挤出 10",
+      "tool": "nx_extrude",
+      "target": "sketch_base",
+      "tool_args": {
+        "sketch_id": "sketch_base",
+        "distance": 10,
+        "start_offset": 0,
+        "operation": "create"
+      },
+      "topology_changes": true,
+      "refresh_edges_after": true,
+      "refresh_faces_after": true
+    },
+    {
+      "step": 6,
+      "goal": "孔1",
+      "tool": "nx_hole",
+      "target": "body_main",
+      "tool_args": {
+        "body_id": "body_main",
+        "center": {
+          "x": -40,
+          "y": -20
+        },
+        "diameter": 8,
+        "depth": 10,
+        "start_offset": 0
+      },
+      "topology_changes": true,
+      "refresh_edges_after": true,
+      "refresh_faces_after": true
+    },
+    {
+      "step": 7,
+      "goal": "孔2",
+      "tool": "nx_hole",
+      "target": "body_main",
+      "tool_args": {
+        "body_id": "body_main",
+        "center": {
+          "x": -40,
+          "y": 20
+        },
+        "diameter": 8,
+        "depth": 10,
+        "start_offset": 0
+      },
+      "topology_changes": true,
+      "refresh_edges_after": true,
+      "refresh_faces_after": true
+    },
+    {
+      "step": 8,
+      "goal": "孔3",
+      "tool": "nx_hole",
+      "target": "body_main",
+      "tool_args": {
+        "body_id": "body_main",
+        "center": {
+          "x": 40,
+          "y": -20
+        },
+        "diameter": 8,
+        "depth": 10,
+        "start_offset": 0
+      },
+      "topology_changes": true,
+      "refresh_edges_after": true,
+      "refresh_faces_after": true
+    },
+    {
+      "step": 9,
+      "goal": "孔4",
+      "tool": "nx_hole",
+      "target": "body_main",
+      "tool_args": {
+        "body_id": "body_main",
+        "center": {
+          "x": 40,
+          "y": 20
+        },
+        "diameter": 8,
+        "depth": 10,
+        "start_offset": 0
+      },
+      "topology_changes": true,
+      "refresh_edges_after": true,
+      "refresh_faces_after": true
+    },
+    {
+      "step": 10,
+      "goal": "选择四角竖边",
+      "tool": "nx_list_edges",
+      "target": "body_main",
+      "tool_args": {
+        "body_id": "body_main"
+      },
+      "selection_criteria": {
+        "curve_type": "Linear",
+        "direction": "Z",
+        "corners_xy": [
+          [
+            -50,
+            -30
+          ],
+          [
+            -50,
+            30
+          ],
+          [
+            50,
+            -30
+          ],
+          [
+            50,
+            30
+          ]
+        ],
+        "bbox_z": {
+          "min": 0,
+          "max": 10
+        }
+      },
+      "expectation": {
+        "count": 4
+      },
+      "topology_changes": false
+    },
+    {
+      "step": 11,
+      "goal": "四角 R8",
+      "tool": "nx_edge_blend",
+      "target": "body_main",
+      "tool_args": {
+        "body_id": "body_main",
+        "radius": 8,
+        "edge_indices": "<step10 匹配的 4 个 index>"
+      },
+      "topology_changes": true,
+      "refresh_edges_after": true,
+      "refresh_faces_after": true
+    },
+    {
+      "step": 12,
+      "goal": "验证单实体",
+      "tool": "nx_list_bodies",
+      "target": "-",
+      "tool_args": {},
+      "expectation": {
+        "body_count": 1
+      },
+      "topology_changes": false
+    },
+    {
+      "step": 13,
+      "goal": "保存",
+      "tool": "nx_save_part",
+      "target": "-",
+      "tool_args": {},
+      "topology_changes": false
+    },
+    {
+      "step": 14,
+      "goal": "导出 STEP",
+      "tool": "nx_export_step",
+      "target": "-",
+      "tool_args": {
+        "path": "text_plate_demo.step"
+      },
+      "topology_changes": false
+    }
+  ],
+  "final_validation": [
+    {
+      "check": "Body 数量=1"
+    },
+    {
+      "check": "Save 成功"
+    },
+    {
+      "check": "STEP 非空"
+    }
+  ],
+  "fallbacks": []
+}

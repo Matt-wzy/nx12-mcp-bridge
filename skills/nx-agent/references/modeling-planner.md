@@ -1,9 +1,4 @@
----
-name: nx-mcp-modeling-planner
-description: 作者：抖音 无趣。用于把完整、无歧义的三维建模尺寸或结构化 JSON 转换为可靠、预先规划的 NX_MCP 建模调用序列；一次确定完整特征顺序，强制边/面索引刷新与稳定选择，默认输出 FAST/DIAGNOSTIC 建模计划。不负责图像识别、OCR 或工程图读取，也不修改 NX_MCP-Enhanced。
----
-
-# NX MCP 建模规划器
+# 建模规划模块
 
 ## 1. 适用范围与边界
 
@@ -13,8 +8,8 @@ description: 作者：抖音 无趣。用于把完整、无歧义的三维建模
 **输出**：一份可直接执行的 NX_MCP 建模计划 JSON（`mode` + `operations` +
 `final_validation` + `fallbacks`），以及执行阶段的硬性规则。
 
-**本 Skill 不做**：
-- 图片识别、OCR、工程图读取（由其他 Skill 负责，完成后把结构化 JSON 交给本 Skill）
+**本模块 不做**：
+- 图片识别、OCR、工程图读取（由工程图读取模块 负责，完成后把结构化 JSON 交给本模块）
 - 按比例推测、重新计算或修改用户已明确给出的尺寸
 - 修改 NX_MCP-Enhanced（冻结 v2.1.1）、C# Loader，或重装环境
 - 新增 NX_MCP Tool；只调用现有 32 个 certified 工具（见 `references/nx-mcp-rules.md`）
@@ -38,7 +33,7 @@ description: 作者：抖音 无趣。用于把完整、无歧义的三维建模
    自检不通过时必须在**首次生成阶段**修正，禁止先产出错误 frozen plan 再补丁。
 7. **输出计划 JSON**（结构见 §8），示例见 `examples/modeling-plan-example.json`。
 8. **按计划执行**：执行阶段遵守 §5–§7 的规则，不得临时更改整体方案。
-   当本 Skill 由 `nx-mcp-pipeline` 调用时，runner build/check 任一失败即
+   当本模块 由 `nx-agent` 总控 调用时，runner build/check 任一失败即
    **B 阶段失败并停止**，不得修改 frozen plan 后自动重跑。
 
 ## 3. 建模顺序规则
@@ -301,7 +296,7 @@ Pattern / Mirror / Edge Blend / Chamfer / 任何改变实体拓扑的操作
 
 ## 11. 版本标识
 
-- 本 Skill 冻结契约版本：
+- 本模块 冻结契约版本：
   - `runner_contract_version = "1.0"`（对应 plan_schema.json `schema_version = 1.1`）
   - `certified_tool_contract_version = "1.0"`
 - 生成 plan 时在 `notes` 中记录这两个版本号。

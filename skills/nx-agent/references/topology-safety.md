@@ -1,6 +1,6 @@
 # 拓扑安全手册（Topology Safety）
 
-> 本文件是 `nx-mcp-modeling-planner` 的执行铁律：**所有 edge/face index 都是
+> 本文件是 `nx-agent` 建模规划模块 的执行铁律：**所有 edge/face index 都是
 > 临时数据**，识别靠几何，操作靠实时重查。上一轮 V2-TEXT-CHALLENGE 的核心
 > 事故（R6 与 R8 复用同一批边索引，导致 R8 错位落在筋上）就是违反本手册造成的。
 

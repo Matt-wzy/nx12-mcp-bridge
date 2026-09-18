@@ -1,97 +1,68 @@
----
-name: nx-modeling
-description: 作者：抖音 无趣。Create or edit native Siemens NX parts through the existing NX_MCP tools, including sketch/extrude workflows, result checks, and recovery from stale references or uncertain execution. Not for arbitrary Journal execution or CAD-to-USD conversion.
----
+# 文字描述建模模块
 
-# NX Modeling
+本文件是 `nx-agent` 的内部规则，不是独立 Skill。
 
-Use the discovered default NX_MCP tools to complete the user's modeling task.
-A tool returning successfully is not, by itself, proof of the intended model.
+## 1. 输入要求
 
-## Before changing a part
+文字建模适用于用户已经用文字明确给出三维几何要求的任务。必须先确认：
 
-1. Discover the server's actual tool list and input/output schemas. Do not invent
-   tools or assume experimental tools are available. Call `nx_status`; if the
-   bridge is unavailable, report the missing prerequisite rather than attempting
-   a direct NXOpen attach. Read the [setup and validation guide](../../docs/real-nx-validation.md)
-   only when setup or acceptance is requested.
-2. Establish the target part, requested changes, units, and expected result.
-   `nx_status` identifies the active part but does not report its units. For an
-   existing part, obtain units from verified context or ask before using numeric
-   dimensions. Do not silently assume millimeters.
-3. Use paths relative to the configured `NX_MCP_WORKSPACE`. For a new part, choose
-   a fresh path and pass `units` explicitly. A disposable acceptance run requires
-   no active part; ordinary editing may use the user's explicitly selected part.
-   Do not close an unrelated part or overwrite files to make a workflow proceed.
-4. Confirm that a mutation is within the user's requested task. Do not enable
-   experimental or Journal flags to work around a missing capability. For current
-   support and evidence, read the [capability matrix](../../README.md#capabilities-and-validation).
+1. 单位明确；未明确时不得静默假设。
+2. 建模所需尺寸足以唯一确定最终几何。
+3. 不依赖图像比例、像素测量或猜尺寸。
+4. 不超出当前 certified tools 能力边界。
 
-## Modeling workflow
+如果缺少会改变最终几何的关键尺寸，先向用户确认，不进入 Runner。
 
-Use explicit object IDs returned by tools, not guessed names. Query the relevant
-objects before editing and retain the current part identity. If the active part
-changes unexpectedly, stop and establish which part the user wants to modify.
+## 2. 统一执行链路
 
-For example, to create a **20 x 10 x 12.5 mm** rectangular solid in a new part:
+文字建模不直接依赖 MCP 客户端 JSON 配置，也不由 Agent 临时逐步调用 NX_MCP。
 
-1. `nx_create_part(path=<fresh relative .prt path>, units="mm")` and record the part ID.
-2. `nx_list_bodies` to establish the baseline body count.
-3. `nx_create_sketch(plane="XY")` and capture its `object.id` as `sketch_id`.
-4. `nx_sketch_rectangle(sketch_id, corner1={x: 0, y: 0}, corner2={x: 20, y: 10})`.
-5. `nx_finish_sketch(sketch_id)` before `nx_extrude(sketch_id, distance=12.5)`.
-6. Query bodies/features and verify the expected new body and feature. These
-   queries check model structure, not exact dimensional metrology.
-7. Save or export STEP only as requested. Check the returned export path and, if
-   filesystem access is available, verify a newly created nonempty file. Report
-   any verification that could not be performed rather than claiming it passed.
+```text
+用户文字 → 结构化建模意图 → 建模规划模块 → frozen plan → runner build/check → Plan Runner → resident C# Loader → Siemens NX → PRT + STEP
+```
 
-Do not copy the acceptance runner's undo/cleanup into an ordinary modeling task:
-that runner deliberately exports the solid, then undoes it before saving the
-`.prt`. Saving normally should retain the user's intended model. Save and close
-operate on the work part, not its entire assembly tree; `nx_close_part` saves by
-default, so always choose its `save` argument deliberately when closing is requested.
+读取并遵循：
 
-## Extended modeling tools
+- `references/modeling-planner.md`
+- `references/nx-mcp-rules.md`
+- `references/topology-safety.md`
+- `references/runner-contract.md`
+- `references/certified-tool-contract.json`
+- `references/pipeline-contract.md` 中阶段 C / Controlled Self-Healing 规则
 
-Beyond sketch/extrude, the certified tool list includes:
+## 3. 路径
 
-- `nx_sketch_circle(sketch_id, center, diameter)` — circle in an active sketch.
-- `nx_sketch_arc(sketch_id, center, radius, start_angle, end_angle)` — arc in
-  an active sketch (degrees).
-- `nx_extrude(..., operation="create"|"subtract", target_body_id=...)` —
-  boolean subtract for cutting features.
-- `nx_hole(body_id, center, diameter, depth, start_offset=0)` — circle sketch
-  + boolean-subtract extrude.
-- `nx_edge_blend(body_id, radius, edge_indices=None)` — blends all (or listed)
-  edges; NX-rejected edges are skipped and reported.
-- `nx_chamfer(body_id, offset, edge_indices=None)` — symmetric-offset chamfer,
-  all (or listed) edges, per-edge tolerant.
-- `nx_release()` — stop the visual bridge and unlock the NX GUI.
+- 新零件使用工作区相对路径。
+- `nx_create_part` 显式写 `units`。
+- PRT / STEP / plan / report 必须位于 `runtime-config.json.workspace_root`。
+- 禁止把聊天目录或任意绝对路径作为输出目录。
 
-The batch workflow (`examples/batch_build_gui.py`) accepts a JSON task
-(`batch_task.json`) with `rect_extrude`, `hole`, `edge_blend`, `chamfer`
-features and produces `.prt` + `.step` without a bridge. See
-[README](../../README.md#two-workflows) and
-[examples/batch_task.sample.json](../../examples/batch_task.sample.json).
+## 4. 已有零件修改
 
-## Recovery and stopping conditions
+一体化零配置路径只允许修改：用户明确指定、已经保存、位于 `NX_MCP_WORKSPACE` 内、可由 `nx_open_part` 以工作区相对路径打开的零件。
 
-- On validation errors, correct the inputs; do not repeat an unchanged request.
-- After undo or failed-mutation rollback, discard cached object references,
-  including `nx_status.active_part.id`. Call `nx_status` and query fresh object
-  IDs before continuing. IDs are session references, not persistent asset identities.
-- For `details.execution_state="unknown"` (including uncertain timeout or
-  disconnect), do not automatically replay a mutation. Reconnect if necessary,
-  inspect the active part and relevant objects, then reconcile the observed state
-  with the requested result. If queries cannot resolve the uncertainty, ask for
-  inspection rather than guessing that the operation failed.
-- `not_started` alone is not permission to retry: only a documented retryable
-  failure whose cause has been resolved can be reissued. Never loop on errors.
-- On `NX_ROLLBACK_FAILED`, stop writes. Read the [recovery contract](../../docs/architecture.md#object-and-operation-lifecycle).
-  Discard-close/reopen only an owned disposable part or with explicit permission
-  to discard unsaved work. Restarting a bridge does not repair an uncertain model.
+如果当前 NX 中有无关零件或未保存工作，Runner preflight 必须阻止覆盖。禁止为了继续任务自动关闭无关零件。
 
-Finish with the part/artifact paths, checks actually performed, and any remaining
-uncertainty. Keep bridge tokens and descriptors out of reports. Batch acceptance
-is not evidence of a responsive interactive NX GUI.
+## 5. 规划规则
+
+- 只使用 32 个 certified tools。
+- `tool_args` 只含真实工具参数。
+- edge/face 选择写入 `selection_criteria`。
+- `expectation` 只做判定。
+- 拓扑变化后重新 list。
+- 圆角/倒角放在最终 Boolean 和孔之后。
+- 分离闭合轮廓遵守 Separated Closed Profiles Rule。
+- 连续主轮廓遵守 Profile-First Rule。
+- build/check 必须一次通过。
+
+## 6. 执行与自修复
+
+第一次执行失败时，当前 attempt 立即停止。只允许按 `references/pipeline-contract.md` 判断是否可做一次受控自动修复。不得在失败模型上接着补；repair 后从头完整重跑；第二次失败结束。
+
+## 7. `nx_release` 语义
+
+在 resident C# Loader 架构下，`nx_release` 不会停止 Loader，也不会关闭 named pipe。它只清除当前任务状态并恢复正常 NX 交互；Loader 在整个 NX 会话中继续保持 ready。
+
+## 8. 最终汇报
+
+只报告实际完成并验证的内容：状态、自动修复次数、实体数量、模型尺寸、PRT/STEP 路径、真实总耗时；若修复过，必须披露首次失败与修复内容。

@@ -1,6 +1,6 @@
 # NX_MCP 已验证工具规则（v2.1.1 / 32 certified tools）
 
-> 本文件为 `nx-mcp-modeling-planner` 的规则底稿。只描述**已冻结、已验证**的
+> 本文件为 `nx-agent` 建模规划模块 的规则底稿。只描述**已冻结、已验证**的
 > 32 个 certified 工具（`src/nx_mcp/certified.py` 的 `CERTIFIED_TOOL_NAMES`）。
 > 不得修改 NX_MCP-Enhanced、C# Loader 或现有环境。
 
@@ -15,7 +15,7 @@
 | `nx_save_part` | `{}` | 保存活动工作零件 |
 | `nx_close_part` | `save`=true | 关闭活动零件（默认先保存） |
 | `nx_export_step` | `path`（工作区相对路径，.step） | 导出 STEP |
-| `nx_release` | `{}` | 停止 bridge，释放 NX GUI |
+| `nx_release` | `{}` | 清除当前任务状态并恢复正常 NX 交互；resident Loader / named pipe 保持 ready |
 | `nx_undo` | `{}` | 撤销最近一次 NX MCP 操作 |
 | `nx_fit_view` | `{}` | 适配建模视图 |
 
