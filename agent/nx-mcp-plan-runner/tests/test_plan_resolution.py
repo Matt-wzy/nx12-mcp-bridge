@@ -525,6 +525,80 @@ def test_run_plan_mirror_object_binding():
     assert rep["status"] == "success", rep["steps"]
 
 
+
+# --------------------------------------------------------------------------
+# controlled self-healing + runtime config
+# --------------------------------------------------------------------------
+def test_load_runtime_config_missing_is_empty():
+    missing = os.path.join(PROJECT, "__missing_runtime_config__.json")
+    assert R.load_runtime_config(missing) == {}
+
+
+def test_repair_request_first_attempt_rejects_report():
+    errs = R.repair_request_errors(
+        0,
+        "normal",
+        False,
+        r"C:\\ws\\part.prt",
+        {
+            "status": "failed",
+            "failed_step": 4,
+            "repair_attempt": 0,
+            "planned_part": r"C:\\ws\\part.prt",
+        },
+    )
+    assert any("only valid" in e for e in errs)
+
+
+def test_repair_request_second_attempt_requires_benchmark_overwrite():
+    prev = {
+        "status": "failed",
+        "failed_step": 4,
+        "repair_attempt": 0,
+        "planned_part": r"C:\\ws\\part.prt",
+    }
+    errs = R.repair_request_errors(1, "normal", False, r"C:\\ws\\part.prt", prev)
+    assert any("benchmark" in e for e in errs)
+    assert any("allow-overwrite" in e for e in errs)
+
+
+def test_repair_request_second_attempt_accepts_same_failed_part():
+    prev = {
+        "status": "failed",
+        "failed_step": 4,
+        "repair_attempt": 0,
+        "planned_part": r"C:\\ws\\part.prt",
+    }
+    assert R.repair_request_errors(
+        1, "benchmark", True, r"C:\\ws\\part.prt", prev
+    ) == []
+
+
+def test_repair_request_rejects_second_repair():
+    prev = {
+        "status": "failed",
+        "failed_step": 8,
+        "repair_attempt": 1,
+        "planned_part": r"C:\\ws\\part.prt",
+    }
+    errs = R.repair_request_errors(
+        1, "benchmark", True, r"C:\\ws\\part.prt", prev
+    )
+    assert any("already consumed" in e for e in errs)
+
+
+def test_repair_request_rejects_different_part():
+    prev = {
+        "status": "failed",
+        "failed_step": 4,
+        "repair_attempt": 0,
+        "planned_part": r"C:\\ws\\part-a.prt",
+    }
+    errs = R.repair_request_errors(
+        1, "benchmark", True, r"C:\\ws\\part-b.prt", prev
+    )
+    assert any("different part" in e for e in errs)
+
 # --------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------
