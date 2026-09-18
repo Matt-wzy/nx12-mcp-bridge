@@ -1,4 +1,9 @@
-"""Acceptance test for a dedicated runner with a live Siemens NX session."""
+"""Legacy Python-bridge real-NX acceptance tests.
+
+The primary V2 validation path is the resident C# Loader workflow in
+.github/workflows/real-nx.yml. These tests are retained only for the optional
+legacy Python-bridge fallback.
+"""
 
 from __future__ import annotations
 
