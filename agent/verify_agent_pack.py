@@ -73,10 +73,53 @@ def main() -> None:
     if len(tools) != 32:
         fail(f"expected 32 certified tools, got {len(tools)}")
 
+    runner_examples: dict[str, dict] = {}
     for example in (RUNNER / "examples").glob("*.json"):
         data = json.loads(example.read_text(encoding="utf-8"))
+        runner_examples[example.name] = data
         if "skill" in data and data["skill"] != "nx-agent":
             fail(f"runner example has stale skill metadata: {example.name}")
+
+    frozen = runner_examples.get("modeling-plan-example.json")
+    executable = runner_examples.get("modeling-plan-executable.json")
+    if frozen is None or executable is None:
+        fail("runner modeling examples are incomplete")
+
+    if frozen.get("fallbacks") != executable.get("fallbacks"):
+        fail("runner frozen/executable fallback safety rules differ")
+
+    def validation_c(data: dict) -> dict:
+        for item in data.get("final_validation", []):
+            if str(item.get("check", "")).startswith("C."):
+                return item
+        return {}
+
+    if validation_c(frozen).get("how") != validation_c(executable).get("how"):
+        fail("runner frozen/executable final validation C differs")
+
+    def step_56_hole_types(data: dict) -> set[str]:
+        for op in data.get("operations", []):
+            if op.get("step") == 56:
+                face_type = (
+                    op.get("selection_criteria", {})
+                    .get("holes_reasonable", {})
+                    .get("face_type")
+                )
+                if isinstance(face_type, str):
+                    return {face_type}
+                if isinstance(face_type, list):
+                    return {str(x) for x in face_type}
+        return set()
+
+    expected_hole_types = {"Swept", "Cylindrical"}
+    if step_56_hole_types(frozen) != expected_hole_types:
+        fail("runner frozen example hole-face semantics are stale")
+    if step_56_hole_types(executable) != expected_hole_types:
+        fail("runner executable example hole-face semantics are stale")
+
+    for md in [SKILL / "SKILL.md", *(SKILL / "references").glob("*.md")]:
+        if "v2.1.1" in md.read_text(encoding="utf-8"):
+            fail(f"stale release pin remains in nx-agent rules: {md.name}")
 
     print("Agent Pack static verification passed")
 
