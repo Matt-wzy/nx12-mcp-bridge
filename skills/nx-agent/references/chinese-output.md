@@ -2,6 +2,15 @@
 
 > 用户可见输出的唯一权威模板。内部英文键不得原样展示。
 
+## 0. 状态权威来源
+
+- 阶段 C 的最终状态以 **Runner report 的 `status`** 为唯一权威来源。
+- 只有 `report.status == "success"` 才允许向用户输出“状态：成功”。
+- 若 `report.status == "failed"` 或存在 `failed_step`，即使 PRT/STEP 已经生成、模型肉眼看起来正确，也必须按“失败”汇报；文件存在不能覆盖 Runner 失败状态。
+- 首次失败只有在符合 Controlled Self-Healing 且第二次 Runner report 明确 `status == "success"` 后，才允许输出“成功（自动修复后）”。
+- 禁止把“建模动作已完成但最终验证失败”包装成成功。
+
+
 ## 1. 一次通过成功
 
 ```
