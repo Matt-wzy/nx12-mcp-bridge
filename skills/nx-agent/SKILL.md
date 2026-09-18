@@ -9,15 +9,24 @@ description: 作者：抖音 无趣。Siemens NX 自动建模统一入口。支�
 
 ## 1. 自动选择模式
 
-### 模式 A：文字描述建模
+### 模式 A：文字描述建模（Fast Path）
 用户直接用文字描述零件、尺寸、孔位、圆角、倒角等要求时：
 
-1. 读取 `references/text-modeling.md`。
-2. 不经过工程图读取模块。
-3. 把明确的文字尺寸整理为结构化建模意图。
-4. 读取 `references/modeling-planner.md`、`references/nx-mcp-rules.md`、`references/topology-safety.md`、`references/runner-contract.md` 和 `references/certified-tool-contract.json`。
-5. 生成 frozen plan → build/check → Plan Runner。
-6. 执行与工程图模式相同的阶段 C 安全规则和 Controlled Self-Healing。
+1. **正常路径只读取** `references/text-modeling.md` 与
+   `references/certified-tool-contract.json`；本 `SKILL.md` 已包含阶段 C、
+   拓扑和输出硬规则。禁止为了“确认规则”重复读取其它 reference。
+2. 不经过工程图读取模块；把明确文字尺寸直接整理为结构化建模意图。
+3. 按 `text-modeling.md` 的固定 runtime-config 路径一次定位 Runner；
+   **禁止扫描 Skill 目录、仓库目录、安装脚本、Python 环境或聊天目录**。
+4. 正常新零件任务禁止主动读取 `run_history.json`、旧 frozen/executable plan、
+   旧 report 或旧 PRT/STEP 内容。历史安全判断由 Runner preflight 自己完成。
+5. 直接生成 frozen plan → build/check → Plan Runner。
+6. 只有以下触发条件才读取详细 reference：
+   - build/check 明确报告 schema/contract incompatibility → `runner-contract.md`；
+   - attempt 1 失败且符合 Controlled Self-Healing → `pipeline-contract.md` +
+     与失败类型直接相关的 `topology-safety.md`；
+   - 用户明确要求解释底层 Planner 规则 → 再读取对应详细文档。
+   正常一次通过路径不得预读这些文件。
 
 默认用于创建新零件。修改已有零件时，仅允许打开 `NX_MCP_WORKSPACE` 内、用户明确指定路径的已保存零件；不得自动接管无关或未保存的当前零件。
 
