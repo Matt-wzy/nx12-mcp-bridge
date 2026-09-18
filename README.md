@@ -5,6 +5,8 @@
 > (`NX_MCP_Loader`), extended modeling tools, and an integrated Agent Pack for
 > drawing-to-NX automation.
 
+作者：抖音 无趣
+
 NX MCP is a local Model Context Protocol server for Siemens NX automation.
 Everything runs on your own machine; no cloud service is involved.
 
