@@ -41,7 +41,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AgentProfile 
 之后自动执行：
 
 ```text
-工程图 → Drawing Reader → Modeling Planner → Plan Runner → Siemens NX → PRT + STEP
+工程图 → Drawing Reader → Modeling Planner → Plan Runner → resident Loader → Siemens NX → PRT + STEP
 ```
 
 ## 当前适合
@@ -64,6 +64,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AgentProfile 
 - 复杂自由曲面
 
 **尺寸闭合约束**：如果图纸关键尺寸不闭合，Pipeline 必须停止，不允许猜尺寸。
+
+**Controlled Self-Healing**：阶段 C 若发生可确定的 edge/face 选择类计划错误，
+允许最多 1 次受控自动修复。修复后必须由 Runner 安全清理本任务自己的失败零件，
+并从第 1 步完整重跑；第二次失败立即结束。
 
 ## 组件
 
