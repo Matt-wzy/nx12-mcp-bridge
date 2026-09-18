@@ -533,11 +533,11 @@ def create_certified_server(
 
     @mcp.tool()
     async def nx_release() -> OperationResult:
-        """Gracefully stop the bridge and release the NX GUI for manual editing.
+        """Clear the current task state and return NX to normal interaction.
 
-        The current command completes, then the journal ends and NX becomes
-        fully interactive (no restart of NX required). Start the bridge again
-        later by running the launcher journal (Alt+F8) again.
+        With the resident C# Loader backend, the Loader and named pipe remain
+        alive for the entire NX session; nx_release does not unload the plugin
+        or require Alt+F8 to start it again.
         """
         return OperationResult(**await call("nx_release", {}))
 
