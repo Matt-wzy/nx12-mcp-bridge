@@ -429,12 +429,22 @@ def test_preflight_planned_clean_normal_allowed():
     assert dec == "allow"
 
 
-def test_preflight_planned_dirty_benchmark_overwrite_allowed():
+def test_preflight_planned_dirty_controlled_repair_allowed():
     dec, payload = R.preflight_decision(
         active_path=r"C:\work\test.prt", planned_path=r"C:\work\test.prt",
-        mode="benchmark", overwrite_allowed=True, dirty=True, runner_parts=())
+        mode="benchmark", overwrite_allowed=True, dirty=True, runner_parts=(),
+        repair_authorized=True)
     assert dec == "allow"
-    assert payload["state"] == "planned_dirty_benchmark_overwrite"
+    assert payload["state"] == "planned_dirty_controlled_repair"
+
+
+def test_preflight_planned_dirty_benchmark_without_repair_blocked():
+    dec, payload = R.preflight_decision(
+        active_path=r"C:\work\test.prt", planned_path=r"C:\work\test.prt",
+        mode="benchmark", overwrite_allowed=True, dirty=True, runner_parts=(),
+        repair_authorized=False)
+    assert dec == "blocked"
+    assert payload["reason"] == "planned_part_dirty"
 
 
 def test_preflight_planned_dirty_normal_blocked():
