@@ -161,6 +161,40 @@ def main() -> None:
         if token not in plane_rules:
             fail(f"principal-plane planning contract missing: {token}")
 
+    text_fast = (SKILL / "references" / "text-modeling.md").read_text(encoding="utf-8")
+    for token in (
+        "正常一次通过路径只需要本文件",
+        "禁止递归搜索 runtime-config",
+        "正常新零件任务**不主动读取**",
+        "build/check 必须一次通过；成功后直接进入 Runner",
+    ):
+        if token not in text_fast:
+            fail(f"text-mode Fast Path regression: missing {token}")
+
+    for token in (
+        "正常路径只读取",
+        "禁止扫描 Skill 目录",
+        "正常新零件任务禁止主动读取",
+    ):
+        if token not in top:
+            fail(f"SKILL Mode A Fast Path regression: missing {token}")
+
+    runner_source = (RUNNER / "runner.py").read_text(encoding="utf-8")
+    for token in (
+        '"nx_modeling_elapsed"',
+        '"validation_ops_elapsed"',
+        '"export_call_elapsed"',
+        '"export_settle_elapsed"',
+        '"preflight_elapsed"',
+        '"final_validation_elapsed": round(validation_ops_elapsed, 3)',
+    ):
+        if token not in runner_source:
+            fail(f"Runner timing regression: missing {token}")
+
+    timing_tests = (RUNNER / "tests" / "test_bbox_report.py").read_text(encoding="utf-8")
+    if "test_timing_bucket_separates_postprocess_from_validation" not in timing_tests:
+        fail("Runner timing phase regression test missing")
+
     installer = (ROOT / "install.ps1").read_text(encoding="utf-8")
     if 'pip install -e ".[dev]"' in installer:
         fail("normal install.ps1 must not install development extras")
