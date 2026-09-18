@@ -157,6 +157,23 @@ group 模式：criteria 所有 value 均为条件对象时按命名组独立筛�
 
 expectation 语法：`count` / `count_range` / `body_count`（nx_list_bodies）/ `<group>_count` / `<group>_count_range` / `x_min..z_max`（selection extents，Linear 边贡献 X/Y、face centroid 贡献 Z；`tolerance_mm` 覆盖默认 0.5）/ `done`（edge_blend / chamfer 走 raw 通道解析 done=N）；`purpose` / `note` / `*auxiliary*` / `*_approx` 只记录不判失败。
 
+### 9.1 Runner report 计时字段
+
+为避免把 STEP 后台落盘误算成“最终验证”，Runner report 的计时口径固定为：
+
+- `preflight_elapsed`：Runner preflight（状态/安全检查）耗时。
+- `nx_modeling_elapsed`：最后一次拓扑变化完成前的建模 operations 墙钟时间。
+- `save_elapsed`：`nx_save_part` operations 耗时。
+- `export_call_elapsed`：`nx_export_step` 调用本身耗时，不含文件落盘等待。
+- `export_settle_elapsed`：STEP translator 返回后等待目标文件出现且非空的耗时。
+- `validation_ops_elapsed`：最后一次拓扑变化后的 list/status 类几何验证耗时。
+- `final_validation_elapsed`：兼容字段，**等于 `validation_ops_elapsed`**，不再包含 save/export。
+- `nx_execution_elapsed`：全部 Runner operations 从第一步到最后一步的连续墙钟跨度。
+- `total_runner_elapsed`：Runner CLI 从启动到 report 完成的总耗时。
+
+旧字段 `step_export_settle_elapsed` 暂时保留为
+`export_settle_elapsed` 的兼容别名。
+
 ## 10. Runtime Config 与 repair CLI
 
 Runner 安装目录包含 `runtime-config.json`，正常执行优先使用其中的 `python_exe` 与 `workspace_root`。
