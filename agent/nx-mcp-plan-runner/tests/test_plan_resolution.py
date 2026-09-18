@@ -263,6 +263,48 @@ def test_face_selection_centroid_radius_and_centroid_z():
     assert sel2["count"] == 2
 
 
+def test_centroid_radius_is_global_xy_distance_not_local_face_radius():
+    # centroid_radius is sqrt(global_x^2 + global_y^2), not a cylinder/hole radius.
+    face = make_face(0, face_type="Swept", centroid=[10, 10, 5])
+    wrong = R.run_selection(
+        [face], {"centroid_radius": {"value": 4.0, "tol": 0.5}}, "faces"
+    )
+    assert wrong["count"] == 0
+
+    correct = R.run_selection(
+        [face], {"centroid_radius": {"value": 14.142, "tol": 0.5}}, "faces"
+    )
+    assert [it["index"] for it in correct["items"]] == [0]
+
+
+def test_hole_face_verification_by_explicit_centroid_groups():
+    faces = [
+        make_face(0, face_type="Swept", centroid=[10, 10, 5]),
+        make_face(1, face_type="Swept", centroid=[90, 10, 5]),
+        make_face(2, face_type="Cylindrical", centroid=[10, 50, 5]),
+        make_face(3, face_type="Swept", centroid=[90, 50, 5]),
+        make_face(4, face_type="Planar", centroid=[50, 30, 10]),
+    ]
+    crit = {
+        "hole_1": {"face_type": ["Swept", "Cylindrical"], "centroid": [10, 10, 5]},
+        "hole_2": {"face_type": ["Swept", "Cylindrical"], "centroid": [90, 10, 5]},
+        "hole_3": {"face_type": ["Swept", "Cylindrical"], "centroid": [10, 50, 5]},
+        "hole_4": {"face_type": ["Swept", "Cylindrical"], "centroid": [90, 50, 5]},
+    }
+    sel = R.run_selection(faces, crit, "faces")
+    assert sel["count"] == 4
+    assert R.check_expectation(
+        {
+            "hole_1_count": 1,
+            "hole_2_count": 1,
+            "hole_3_count": 1,
+            "hole_4_count": 1,
+        },
+        sel,
+        {},
+    ) == []
+
+
 # --------------------------------------------------------------------------
 # 7. topology cache invalidation
 # --------------------------------------------------------------------------
