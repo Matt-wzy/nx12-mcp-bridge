@@ -31,7 +31,9 @@ description: 作者：抖音 无趣。用于把完整、无歧义的三维建模
 6. **发布前静态自检**：在 frozen plan 落盘并调用 runner build 之前，
    先在生成阶段检查所有 `selection_criteria` 是否符合冻结契约，尤其禁止：
    `direction` 向量、`midpoint_x` / `midpoint_y`、错误的 `groups` 包装、
-   以及可由 `corners_xy` 表达却拆成脆弱精确 midpoint group 的四角边选择。
+   可由 `corners_xy` 表达却拆成脆弱精确 midpoint group 的四角边选择，
+   以及对 `Circular / Elliptical / Conical` 等曲线边使用
+   `bbox / bbox_x / bbox_y / bbox_z / corners_xy`。
    自检不通过时必须在**首次生成阶段**修正，禁止先产出错误 frozen plan 再补丁。
 7. **输出计划 JSON**（结构见 §8），示例见 `examples/modeling-plan-example.json`。
 8. **按计划执行**：执行阶段遵守 §5–§7 的规则，不得临时更改整体方案。
@@ -144,6 +146,13 @@ Pattern / Mirror / Edge Blend / Chamfer / 任何改变实体拓扑的操作
   “精确 midpoint + direction 向量”的 group。
 - `midpoint` 若使用，必须是完整三维数组 `[x,y,z]`；只需要高度时用
   `midpoint_z`。禁止虚构 `midpoint_x` / `midpoint_y`。
+- **曲线边筛选规则（强制）**：`nx_list_edges` 对 Circular / Elliptical /
+  Conical 等曲线边不提供可靠 bbox；这类边**禁止**使用 `bbox`、`bbox_x`、
+  `bbox_y`、`bbox_z` 或 `corners_xy`。优先使用
+  `curve_type + length + midpoint_z + expectation.count`。
+  例如两个 Ø34 凸台的顶面外圆边用于 C1.5 倒角，应按圆周长度约
+  `π×34 ≈ 106.81`、顶面 `midpoint_z≈36`、`count=2` 一次选齐，
+  不按左右 X 位置分别筛选。
 - group mode 只用于**确实需要不同几何条件的多组目标**。group 的每个 value
   必须直接是合法 criteria 对象；**禁止额外包一层 `groups` 键**。
 - 详见 `references/topology-safety.md`。
