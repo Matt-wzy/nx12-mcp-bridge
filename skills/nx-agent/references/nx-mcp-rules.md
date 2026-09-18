@@ -82,9 +82,13 @@
 
 1. **index = GetEdges()/GetFaces() 实时下标**：任何拓扑操作后顺序即变，
    旧 index 无意义（见 `topology-safety.md`）。
-2. **曲线边 bbox 为 null**：只对 Linear 边用 bbox；圆形边用
-   `curve_type=Circular` + `length`（如 Ø104 → 2π×52 ≈ 326.73）+
-   `midpoint` 的 z 坐标（圆上任意点的 z 一致）。
+2. **曲线边 bbox 为 null / 不可靠**：只对 Linear 边使用 bbox。
+   当前 Loader 实测完整圆边在 `nx_list_edges` 中通常报告为 `Elliptical`，
+   **不是固定的 `Circular`**。因此完整圆边统一优先使用
+   `curve_type:["Elliptical","Circular"]` + `length` +
+   `midpoint_z` + `expectation.count`。
+   Circular / Elliptical / Conical 等曲线边禁止使用
+   `bbox / bbox_x / bbox_y / bbox_z / corners_xy`。
 3. **计数器参数约束**：counterbore：cb_dia>hole_dia、cb_depth<hole_depth；
    countersink：cs_dia>hole_dia、cs_angle∈(0,180)、锥深<hole_depth。
 4. **Unite 消费 tool body**：Unite 后不要再引用 tool body id。
@@ -97,6 +101,10 @@
 8. **边选择协议必须使用 Runner 冻结语法**：Linear 方向只写 `"X"/"Y"/"Z"`；
    多个板件角棱优先 `corners_xy + bbox_z/midpoint_z`；禁止方向向量、
    `midpoint_x/midpoint_y`、以及为相同条件四角创建脆弱的精确 midpoint group。
+9. **完整圆边禁止写死 `Circular`**：当前 Loader 完整圆通常报告为
+   `Elliptical`。完整圆边必须优先使用候选
+   `["Elliptical","Circular"]`，再以 `length + midpoint_z + count` 限定。
+   例如两个 Ø34 凸台顶圆边：`length≈106.81`、`midpoint_z≈36`、`count=2`。
 
 ## 4. 工具参数与规划条件分离（tool_args / selection_criteria / expectation）
 
@@ -131,5 +139,19 @@
 其中 `direction` 是枚举字符串，不是 `[0,0,1]`；只需要 Z 高度时使用
 `midpoint_z`，不要虚构 `midpoint_x/midpoint_y`。四角目标条件相同、只有
 XY 不同时优先 `corners_xy`，不要拆成四个精确 midpoint group。
+
+典型写法（两个 Ø34 凸台顶外圆）：
+```json
+{
+  "tool": "nx_list_edges",
+  "tool_args": { "body_id": "body_main" },
+  "selection_criteria": {
+    "curve_type": ["Elliptical", "Circular"],
+    "length": { "value": 106.81, "tol": 1.0 },
+    "midpoint_z": { "value": 36.0, "tol": 0.5 }
+  },
+  "expectation": { "count": 2 }
+}
+```
 
 非查询类工具一般只有 `tool_args`（如 `nx_extrude` 的 sketch_id/distance/start_offset）。
