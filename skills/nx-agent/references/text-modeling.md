@@ -59,7 +59,8 @@
 - 拓扑变化后重新 list。
 - 圆角/倒角放在最终 Boolean 和孔之后。
 - 分离闭合轮廓遵守 Separated Closed Profiles Rule。
-- 连续主轮廓遵守 Profile-First Rule。
+- 连续主轮廓遵守 Profile-First Rule；按真实主截面选择 XY / XZ / YZ，禁止为了绕开非 XY 几何而错误拆体。
+- 竖板/侧板上的 X/Y 轴孔使用对应主平面圆草图 + extrude subtract；hole 系列仅用于 Z 轴孔。
 - build/check 必须一次通过。
 
 ## 6. 执行与自修复
