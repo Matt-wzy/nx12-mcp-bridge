@@ -31,7 +31,10 @@ description: 作者：抖音 无趣。用于把完整、无歧义的三维建模
 6. **发布前静态自检**：在 frozen plan 落盘并调用 runner build 之前，
    先在生成阶段检查所有 `selection_criteria` 是否符合冻结契约，尤其禁止：
    `direction` 向量、`midpoint_x` / `midpoint_y`、错误的 `groups` 包装、
-   以及可由 `corners_xy` 表达却拆成脆弱精确 midpoint group 的四角边选择。
+   可由 `corners_xy` 表达却拆成脆弱精确 midpoint group 的四角边选择，
+   对曲线边使用 bbox 类条件，以及把完整圆边只写死为 `"Circular"`。
+   **当前 Loader 实测完整圆边通常报告为 `"Elliptical"`；生成完整圆边选择条件时
+   必须优先写候选 `["Elliptical","Circular"]`，再配合 `length + midpoint_z + count`。**
    自检不通过时必须在**首次生成阶段**修正，禁止先产出错误 frozen plan 再补丁。
 7. **输出计划 JSON**（结构见 §8），示例见 `examples/modeling-plan-example.json`。
 8. **按计划执行**：执行阶段遵守 §5–§7 的规则，不得临时更改整体方案。
@@ -144,6 +147,12 @@ Pattern / Mirror / Edge Blend / Chamfer / 任何改变实体拓扑的操作
   “精确 midpoint + direction 向量”的 group。
 - `midpoint` 若使用，必须是完整三维数组 `[x,y,z]`；只需要高度时用
   `midpoint_z`。禁止虚构 `midpoint_x` / `midpoint_y`。
+- **完整圆边类型规则（强制）**：当前 Loader 的 `nx_list_edges` 会把完整圆边
+  通常报告为 `Elliptical`。禁止仅写 `curve_type:"Circular"`。
+  对完整圆边统一优先使用 `curve_type:["Elliptical","Circular"]`，并用
+  `length + midpoint_z + expectation.count` 进一步限定。
+- **曲线边禁止 bbox**：Circular / Elliptical / Conical 等曲线边不得使用
+  `bbox` / `bbox_x` / `bbox_y` / `bbox_z` / `corners_xy`。
 - group mode 只用于**确实需要不同几何条件的多组目标**。group 的每个 value
   必须直接是合法 criteria 对象；**禁止额外包一层 `groups` 键**。
 - 详见 `references/topology-safety.md`。
