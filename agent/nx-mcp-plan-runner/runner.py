@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""nx-mcp-plan-runner — a generic, plan-driven executor for nx-mcp-modeling-planner plans.
+"""nx-mcp-plan-runner — a generic, plan-driven executor for nx-agent modeling plans.
 
 This Runner is PART-AGNOSTIC and PLAN-AGNOSTIC:
 - it never branches on step numbers, feature names, or part dimensions;
@@ -87,6 +87,25 @@ TOOL_PARAMS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
 LIST_PARAMS = {"edge_indices", "tool_body_ids"}
 # tools whose raw loader result carries a "done=N" count that the bridge drops
 RAW_PIPE_TOOLS = {"nx_edge_blend", "nx_chamfer"}
+
+RUNTIME_CONFIG_FILENAME = "runtime-config.json"
+
+
+def load_runtime_config(path: str | None = None) -> dict:
+    """Load installer-written runtime config; missing/invalid config is non-fatal."""
+    cfg_path = path or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), RUNTIME_CONFIG_FILENAME
+    )
+    if not os.path.isfile(cfg_path):
+        return {}
+    try:
+        with open(cfg_path, encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
 
 DEFAULT_TOL = 0.5
 
@@ -502,18 +521,29 @@ class NXTransport:
         self._bridge = None
         self._lb = None
         self._ws = None
-        self.workspace_root = workspace_root or os.environ.get("NX_MCP_WORKSPACE") or ""
+        self._runtime_config = load_runtime_config()
+        self.workspace_root = (
+            workspace_root
+            or os.environ.get("NX_MCP_WORKSPACE")
+            or str(self._runtime_config.get("workspace_root") or "")
+        )
 
     def _ensure(self):
         if self._bridge is not None:
             return
-        src = os.environ.get("NX_MCP_ENHANCED_SRC") or ""
+        src = (
+            os.environ.get("NX_MCP_ENHANCED_SRC")
+            or str(self._runtime_config.get("nx_mcp_src") or "")
+        )
         if not src:
-            cand = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                                "NX_MCP-Enhanced", "src")
+            cand = os.path.join(
+                os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                "NX_MCP-Enhanced",
+                "src",
+            )
             if os.path.isdir(cand):
                 src = cand
-        if src:
+        if src and os.path.isdir(src):
             sys.path.insert(0, src)
         try:
             from nx_mcp.loader_bridge import LoaderBridge
@@ -695,6 +725,47 @@ def derive_planned_part(plan: dict, transport) -> str | None:
             if isinstance(p, str):
                 return transport.resolve_path(p)
     return None
+
+
+def repair_request_errors(
+    repair_attempt: int,
+    mode: str,
+    overwrite_allowed: bool,
+    planned_part: str | None,
+    previous_report: dict | None,
+) -> list[str]:
+    """Validate the one-shot Controlled Self-Healing gate."""
+    if repair_attempt not in (0, 1):
+        return ["repair_attempt must be 0 or 1"]
+
+    errors: list[str] = []
+    if repair_attempt == 0:
+        if previous_report is not None:
+            errors.append("repair_report is only valid when repair_attempt=1")
+        return errors
+
+    if mode != "benchmark":
+        errors.append("repair attempt requires --mode benchmark")
+    if not overwrite_allowed:
+        errors.append("repair attempt requires --allow-overwrite")
+    if previous_report is None:
+        errors.append("repair attempt requires a previous failed report")
+        return errors
+
+    if previous_report.get("status") != "failed":
+        errors.append("previous report is not failed")
+    if previous_report.get("failed_step") is None:
+        errors.append("previous report has no failed_step")
+    if int(previous_report.get("repair_attempt", 0) or 0) != 0:
+        errors.append("controlled self-healing already consumed")
+
+    previous_part = previous_report.get("planned_part")
+    if not previous_part or not planned_part:
+        errors.append("planned part is missing from repair metadata")
+    elif _norm_path(str(previous_part)) != _norm_path(str(planned_part)):
+        errors.append("repair plan targets a different part")
+
+    return errors
 
 
 async def run_preflight(transport, plan: dict, mode: str, overwrite_allowed: bool,
@@ -940,6 +1011,7 @@ async def run_plan(plan: dict, transport: NXTransport, plan_path: str = "",
         "prt_path": prt_path,
         "step_path": step_path,
         "plan": plan_path,
+        "planned_part": planned_part,
         "mode": plan.get("mode"),
         "run_mode": mode,
         "modified_nx_mcp_enhanced": False,
@@ -1251,6 +1323,36 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         print(json.dumps({"status": "failed", "failed_step": None,
                           "errors": ["loader pipe not reachable"]}, ensure_ascii=False))
         return 1
+
+    planned_for_repair = derive_planned_part(plan, transport)
+    previous_report = None
+    if args.repair_report:
+        try:
+            with open(args.repair_report, encoding="utf-8-sig") as f:
+                previous_report = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            print(json.dumps({
+                "status": "repair_precheck_blocked",
+                "failed_step": None,
+                "errors": [f"cannot read repair report: {exc}"],
+            }, ensure_ascii=False, indent=2))
+            return 1
+
+    repair_errors = repair_request_errors(
+        args.repair_attempt,
+        args.mode,
+        args.allow_overwrite,
+        planned_for_repair,
+        previous_report,
+    )
+    if repair_errors:
+        print(json.dumps({
+            "status": "repair_precheck_blocked",
+            "failed_step": None,
+            "errors": repair_errors,
+        }, ensure_ascii=False, indent=2))
+        return 1
+
     history_path = args.history or os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "run_history.json")
     history = RunHistory(history_path)
@@ -1265,6 +1367,8 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     report = await run_plan(plan, transport, plan_path=args.plan,
                             wall_start=t_start, history=history,
                             mode=args.mode, planned_part=planned_part)
+    report["repair_attempt"] = int(args.repair_attempt)
+    report["repair_source_report"] = args.repair_report
     print("===REPORT===")
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if args.report:
@@ -1310,6 +1414,10 @@ def main(argv: list[str] | None = None) -> int:
                          "(required in benchmark mode when the part is dirty)")
     pr.add_argument("--history", default=None,
                     help="run-history JSON (default: run_history.json next to runner.py)")
+    pr.add_argument("--repair-attempt", type=int, choices=(0, 1), default=0,
+                    help="0=normal first attempt; 1=the single allowed controlled repair attempt")
+    pr.add_argument("--repair-report", default=None,
+                    help="attempt-1 failed report; required when --repair-attempt 1")
     pr.set_defaults(func=_cmd_run)
 
     pc = sub.add_parser("check", help="static plan check (no NX)")
