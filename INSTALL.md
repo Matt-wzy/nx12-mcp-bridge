@@ -1,120 +1,136 @@
 # NX MCP — Installation Guide (V2)
 
-From-scratch setup on Windows with a local Siemens NX installation.
+From-scratch setup on Windows with Siemens NX and Doubao.
 
 Validated environment: **Siemens NX 2506 on Windows**. Other NX versions are
-not formally certified; paths are auto-detected, but please validate on your
-own install.
+not formally certified; the installer auto-detects installed NX paths.
 
 ## Prerequisites
 
 - Windows 10/11
 - Siemens NX installed (`ugraf.exe` present)
-- .NET SDK / MSBuild that ships with the NX .NET runtime (used by
-  `loader\build.bat`)
-- Python 3.10+ (the sidecar interpreter; separate from NX's embedded Python)
+- Python 3.10+
+- Doubao desktop installed and launched at least once
 
-## 1. Install the Python sidecar
+## Recommended: integrated one-click installation
 
-```powershell
-cd <repo-root>
-python -m venv .venv
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-```
-
-The `-e` install links `src` into the venv.
-
-## 2. Set up the workspace
-
-The workspace is the only directory MCP may write into.
+Clone the repository, enter its root directory, then run:
 
 ```powershell
-# optional: point NX_MCP_WORKSPACE anywhere you like
-setx NX_MCP_WORKSPACE "%USERPROFILE%\my_nx_workspace"
-# if unset, tools default to %USERPROFILE%\NX_MCP_WORKSPACE
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-## 3. Build and deploy the C# Loader (recommended)
-
-The Loader is a small NXOpen .NET add-in DLL. It loads automatically when NX
-starts, so there is no `Alt+F8` and no Journal in the normal flow.
+If you use multiple Doubao profiles, you can explicitly choose one:
 
 ```powershell
-# 3a. build the DLL (UGII_BASE_DIR is auto-detected if unset)
-.\loader\build.bat
-
-# 3b. deploy into your NX user startup directory
-#     default: %USERPROFILE%\.nx_mcp_user\startup
-#     if UGII_USER_DIR is set, use %UGII_USER_DIR%\startup instead
-copy loader\NX_MCP_Loader.dll  %USERPROFILE%\.nx_mcp_user\startup\
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -DoubaoProfile "Profile 7"
 ```
 
-On NX start the Loader opens a localhost named pipe and logs
-`pipe thread + scheduler window started` to
-`%USERPROFILE%\NX_MCP_WORKSPACE\nx_mcp_loader.log`.
+The single installer performs the complete setup:
 
-Verify the Loader is ready:
+1. Checks Python 3.10+
+2. Creates/reuses `.venv`
+3. Installs NX_MCP-Enhanced and its Python dependencies
+4. Creates/uses `%USERPROFILE%\NX_MCP_WORKSPACE`
+5. Auto-detects the local Siemens NX installation
+6. Builds `NX_MCP_Loader.dll`
+7. Deploys the Loader into the NX user startup directory
+8. Installs the bundled Drawing Reader / Modeling Planner / Pipeline Skills
+9. Installs the generic Plan Runner
+10. Runs lightweight Agent Pack tests
 
-```powershell
-.\.venv\Scripts\python.exe -m nx_mcp.server   # then call nx_status
-# expected: ready:true, nx_version:"2506"
-```
+No separate MCP-client JSON configuration is required for the bundled Doubao
+Agent Pack workflow.
 
-To **uninstall** the Loader, delete the DLL from
-`%USERPROFILE%\.nx_mcp_user\startup\` (or run `loader\uninstall.bat`); NX then
-starts without it and the sidecar falls back automatically.
+After installation:
 
-### Agent Pack (Doubao)
-
-For the integrated drawing-to-NX workflow, install the bundled Agent Pack:
-
-```powershell
-.\install-agent.ps1
-```
-
-Then restart / open a new Doubao conversation, upload a 2D mechanical drawing,
-and send:
+1. Start or restart Siemens NX so the resident Loader can auto-load.
+2. Open a new Doubao conversation.
+3. Upload a 2D mechanical engineering drawing.
+4. Send:
 
 ```
 开始建模
 ```
 
-See `docs/DRAWING_TO_NX.md` for details.
+The normal path is:
 
-## 4. Compatibility: Batch Journal (no persistent bridge)
+```text
+Drawing
+→ Drawing Reader
+→ Modeling Planner
+→ Plan Runner
+→ NX_MCP-Enhanced
+→ C# Loader
+→ Siemens NX
+→ PRT + STEP
+```
 
-For one-shot scripted output:
+## What `install.ps1` installs
 
-1. Write `batch_task.json` in the workspace (copy
-   `examples\batch_task.sample.json`).
-2. In NX press `Alt+F8`, pick `examples\batch_build_gui.py`, run.
-3. Find `<part>.prt`, `<part>.step`, `batch_result.json` in the workspace.
+### NX_MCP-Enhanced core
 
-There is no persistent bridge lock; the journal completes and NX returns to
-normal.
+- Python sidecar in `.venv`
+- 32 certified tools
+- `NX_MCP_BACKEND=auto` runtime behavior
+- workspace at `%USERPROFILE%\NX_MCP_WORKSPACE` unless overridden
 
-## 5. Compatibility: Python visual bridge (legacy)
+### Resident Loader
 
-Kept for compatibility. Inside NX press `Alt+F8`, pick
-`examples\start_nx_bridge_gui.py`, run. Call `nx_release` to stop the bridge and
-restore manual editing. This mode blocks NX GUI while the bridge is up; prefer
-the C# Loader for interactive work.
+The installer calls `loader\build.bat`. NX is auto-detected in this order:
 
-## 6. Optional: license server
+1. `UGII_BASE_DIR`
+2. Windows Registry
+3. `PATH` / `ugraf.exe`
+4. `%ProgramFiles%\Siemens\NX*`
 
-If your license server differs from `27800@localhost`:
+The compiled DLL is deployed to:
+
+- `%UGII_USER_DIR%\startup` when `UGII_USER_DIR` is set, otherwise
+- `%USERPROFILE%\.nx_mcp_user\startup`
+
+If NX is already running during installation, restart it afterward.
+
+### Integrated Agent Pack
+
+The installer automatically runs `install-agent.ps1` internally and installs:
+
+- `nx-engineering-drawing-reader`
+- `nx-mcp-modeling-planner`
+- `nx-mcp-pipeline`
+- `nx-mcp-plan-runner`
+
+`install-agent.ps1` remains available only as an advanced helper when you want
+to reinstall the Agent Pack without reinstalling the NX_MCP core.
+
+## Manual / advanced installation
+
+If you intentionally want the core without the integrated Agent Pack:
 
 ```powershell
-setx UGS_LICENSE_SERVER "27000@lic-server"
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+.\loader\build.bat
 ```
+
+Then deploy `loader\NX_MCP_Loader.dll` to the NX user startup directory
+described above.
 
 ## Verification
 
-Unit suite (no NX required):
+The integrated installer verifies:
 
-```powershell
-.\.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider -m "not real_nx" --basetemp .pytest-tmp
-```
+- `nx_mcp` can be imported from the repository venv
+- built and deployed Loader DLL SHA256 values match
+- all three Skill frontmatter names are correct
+- Plan Runner files exist
+- Plan Runner lightweight tests pass
 
-Real-NX smoke: start NX (Loader auto-loads), then call `nx_status`
-(`ready:true`) and create a simple part through the installed workflow.
+It deliberately does **not** execute a real modeling task during installation.
+
+## Uninstall / rollback notes
+
+- Loader only: run `loader\uninstall.bat` and restart NX.
+- Agent Pack only: remove the three installed Skill folders and
+  `%USERPROFILE%\NX_MCP_WORKSPACE\nx-mcp-plan-runner`.
+- Repository venv: remove `.venv` if you no longer need this installation.

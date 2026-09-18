@@ -1,21 +1,13 @@
-﻿# install-agent.ps1
-# 一次性安装“二维机械工程图 → Siemens NX”Agent Pack。
-# 内容：三个已验证 Skill（nx-engineering-drawing-reader / nx-mcp-modeling-planner /
-#       nx-mcp-pipeline）+ 通用 Plan Runner（nx-mcp-plan-runner）。
-# 不修改 NX_MCP-Enhanced 核心、Loader、named pipe / resident Loader 架构。
-#
-# 用法：
-#   .\install-agent.ps1
-#   .\install-agent.ps1 -DoubaoProfile "Profile 7"
-#
-# 参数：
-#   -DoubaoProfile  手动指定 Doubao Profile 名称（Default 或 Profile *），跳过自动检测
-#   -RepoRoot       仓库根目录（默认取本脚本所在目录）
+# install-agent.ps1
+# 安装“二维机械工程图 → Siemens NX”Agent Pack。
+# 正常用户请优先运行根目录 install.ps1；本脚本也可单独用于重装 Agent Pack。
 
 [CmdletBinding()]
 param(
     [string]$DoubaoProfile = "",
-    [string]$RepoRoot     = ""
+    [string]$RepoRoot = "",
+    [string]$PythonExe = "",
+    [switch]$SkipTests
 )
 
 $ErrorActionPreference = "Stop"
@@ -24,6 +16,7 @@ $ErrorActionPreference = "Stop"
 # 0. 定位仓库
 # ---------------------------------------------------------------
 if ([string]::IsNullOrWhiteSpace($RepoRoot)) { $RepoRoot = $PSScriptRoot }
+$RepoRoot = (Resolve-Path $RepoRoot).Path
 $skillsSource = Join-Path $RepoRoot "skills"
 $runnerSource = Join-Path $RepoRoot "agent\nx-mcp-plan-runner"
 $requiredSkills = @(
@@ -43,54 +36,57 @@ if (-not (Test-Path (Join-Path $runnerSource "runner.py"))) {
 Write-Host "[仓库] $RepoRoot"
 
 # ---------------------------------------------------------------
-# 1. 检测 Doubao Profile（不写死任何 Profile）
+# 1. 检测 Doubao Profile
 # ---------------------------------------------------------------
 $doubaoRoot = Join-Path $env:LOCALAPPDATA "Doubao\User Data"
 if (-not (Test-Path $doubaoRoot)) {
-    throw "未找到 Doubao User Data 目录: $doubaoRoot"
+    throw "未找到 Doubao User Data 目录: $doubaoRoot。请先安装并启动一次豆包电脑版。"
 }
 
-function Get-UserSkillsRoot {
+function Get-UserSkillsPath {
     param([string]$ProfileName)
     $profileDir = Join-Path $doubaoRoot $ProfileName
     if (-not (Test-Path $profileDir)) { return $null }
-    $candidate = Join-Path $profileDir ".doubao\agent_mode\workspace\.user_skills"
-    if (Test-Path $candidate) { return $candidate }
-    return $null
+    return (Join-Path $profileDir ".doubao\agent_mode\workspace\.user_skills")
 }
 
 $skillRoot = $null
 if (-not [string]::IsNullOrWhiteSpace($DoubaoProfile)) {
-    # 手动指定
-    $skillRoot = Get-UserSkillsRoot -ProfileName $DoubaoProfile
+    $skillRoot = Get-UserSkillsPath -ProfileName $DoubaoProfile
     if (-not $skillRoot) {
-        throw "指定的 Profile 不存在或其中没有 .doubao\agent_mode\workspace\.user_skills: $DoubaoProfile"
+        throw "指定的 Doubao Profile 不存在: $DoubaoProfile"
     }
     Write-Host "[Profile] 手动指定: $DoubaoProfile"
 }
 else {
-    # 自动检测：仅收集“已包含 .user_skills”的 Default / Profile *
-    $valid = @()
-    $dirs = Get-ChildItem -Path $doubaoRoot -Directory -Force -ErrorAction SilentlyContinue
+    $dirs = Get-ChildItem -Path $doubaoRoot -Directory -Force -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -eq "Default" -or $_.Name -like "Profile*" }
+
+    if (-not $dirs -or $dirs.Count -eq 0) {
+        throw "未在 $doubaoRoot 中找到 Default / Profile *"
+    }
+
+    # 优先使用已经存在 .user_skills 的 Profile；否则选择最近使用的 Profile 并创建目录。
+    $withSkills = @()
     foreach ($d in $dirs) {
-        if ($d.Name -eq "Default" -or $d.Name -like "Profile*") {
-            if (Get-UserSkillsRoot -ProfileName $d.Name) { $valid += $d.Name }
+        $candidate = Get-UserSkillsPath -ProfileName $d.Name
+        if ($candidate -and (Test-Path $candidate)) {
+            $withSkills += $d
         }
     }
-    if ($valid.Count -eq 0) {
-        throw "未在 $doubaoRoot 中找到包含 .user_skills 的 Doubao Profile（Default / Profile *）"
-    }
-    if ($valid.Count -eq 1) {
-        $chosen = $valid[0]
-        Write-Host "[Profile] 仅发现一个有效 Skill 根目录，自动使用: $chosen"
+
+    if ($withSkills.Count -gt 0) {
+        $chosenDir = $withSkills | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        Write-Host "[Profile] 使用最近的有效 Skill Profile: $($chosenDir.Name)"
     }
     else {
-        # 多个：优先选择最近使用的（按 Profile 目录 LastWriteTime）
-        $chosen = $valid | Sort-Object { (Get-Item (Join-Path $doubaoRoot $_)).LastWriteTime } -Descending | Select-Object -First 1
-        Write-Host "[Profile] 发现多个有效 Profile，选择最近使用的: $chosen"
+        $chosenDir = $dirs | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        Write-Host "[Profile] 尚无 .user_skills，选择最近使用的 Profile 并初始化: $($chosenDir.Name)"
     }
-    $skillRoot = Get-UserSkillsRoot -ProfileName $chosen
+    $skillRoot = Get-UserSkillsPath -ProfileName $chosenDir.Name
 }
+
+New-Item -ItemType Directory -Force -Path $skillRoot | Out-Null
 Write-Host "[Profile] Skill 安装目标: $skillRoot"
 
 # ---------------------------------------------------------------
@@ -105,7 +101,7 @@ foreach ($s in $requiredSkills) {
 }
 
 # ---------------------------------------------------------------
-# 3. 安装 Runner（统一位置 %USERPROFILE%\NX_MCP_WORKSPACE\nx-mcp-plan-runner）
+# 3. 安装 Runner
 # ---------------------------------------------------------------
 $runnerDst = Join-Path $env:USERPROFILE "NX_MCP_WORKSPACE\nx-mcp-plan-runner"
 New-Item -ItemType Directory -Force -Path (Split-Path $runnerDst -Parent) | Out-Null
@@ -118,7 +114,6 @@ Write-Host "[Runner] 已安装: $runnerDst"
 # ---------------------------------------------------------------
 $fail = 0
 
-# 4.1 三个 SKILL.md 存在 + frontmatter name 正确
 foreach ($s in $requiredSkills) {
     $md = Join-Path $skillRoot "$s\SKILL.md"
     if (-not (Test-Path $md)) {
@@ -144,7 +139,6 @@ foreach ($s in $requiredSkills) {
     }
 }
 
-# 4.2 Runner 关键文件存在
 if (-not (Test-Path (Join-Path $runnerDst "runner.py"))) {
     Write-Host "[FAIL] runner.py 缺失"
     $fail++
@@ -154,28 +148,47 @@ if (-not (Test-Path (Join-Path $runnerDst "plan_schema.json"))) {
     $fail++
 }
 
-# 4.3 Runner 单元测试（不触 NX）
-if ($fail -eq 0) {
-    $oldEAP = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    Push-Location $runnerDst
-    try {
-        python tests/test_plan_resolution.py 2>&1 | Out-Host
-        $rc1 = $LASTEXITCODE
-        python tests/test_bbox_report.py 2>&1 | Out-Host
-        $rc2 = $LASTEXITCODE
+if ([string]::IsNullOrWhiteSpace($PythonExe)) {
+    $repoVenvPython = Join-Path $RepoRoot ".venv\Scripts\python.exe"
+    if (Test-Path $repoVenvPython) {
+        $PythonExe = $repoVenvPython
     }
-    finally {
-        Pop-Location
-        $ErrorActionPreference = $oldEAP
+    else {
+        $pythonCmd = Get-Command python -ErrorAction SilentlyContinue | Select-Object -First 1
+        if ($pythonCmd) { $PythonExe = $pythonCmd.Source }
     }
-    if ($rc1 -ne 0 -or $rc2 -ne 0) {
-        Write-Host "[FAIL] Runner 单元测试未全部通过（test_plan_resolution=$rc1, test_bbox_report=$rc2）"
+}
+
+if (-not $SkipTests -and $fail -eq 0) {
+    if ([string]::IsNullOrWhiteSpace($PythonExe) -or -not (Test-Path $PythonExe)) {
+        Write-Host "[FAIL] 未找到可用于 Runner 测试的 Python: $PythonExe"
         $fail++
     }
     else {
-        Write-Host "[OK] Runner 单元测试通过"
+        $oldEAP = $ErrorActionPreference
+        $ErrorActionPreference = "Continue"
+        Push-Location $runnerDst
+        try {
+            & $PythonExe tests/test_plan_resolution.py 2>&1 | Out-Host
+            $rc1 = $LASTEXITCODE
+            & $PythonExe tests/test_bbox_report.py 2>&1 | Out-Host
+            $rc2 = $LASTEXITCODE
+        }
+        finally {
+            Pop-Location
+            $ErrorActionPreference = $oldEAP
+        }
+        if ($rc1 -ne 0 -or $rc2 -ne 0) {
+            Write-Host "[FAIL] Runner 单元测试未全部通过（test_plan_resolution=$rc1, test_bbox_report=$rc2）"
+            $fail++
+        }
+        else {
+            Write-Host "[OK] Runner 单元测试通过"
+        }
     }
+}
+elseif ($SkipTests) {
+    Write-Host "[SKIP] Runner 单元测试已跳过"
 }
 
 if ($fail -ne 0) {
@@ -184,17 +197,9 @@ if ($fail -ne 0) {
     exit 1
 }
 
-# ---------------------------------------------------------------
-# 5. 完成
-# ---------------------------------------------------------------
 Write-Host ""
 Write-Host "Agent Pack 安装成功"
 Write-Host "工程图读取 Skill：已安装"
 Write-Host "建模规划 Skill：已安装"
 Write-Host "一键总控 Skill：已安装"
 Write-Host "通用 Runner：已安装"
-Write-Host ""
-Write-Host "重新打开一个豆包对话后，"
-Write-Host "上传二维机械工程图并发送："
-Write-Host "开始建模"
-Write-Host "即可使用。"
