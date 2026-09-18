@@ -83,6 +83,11 @@ Runner 已验证的 edge criteria 关键语法：
   位置的 Linear 竖边。
 - `bbox_z`：可用 `{"min":z0,"max":z1}` 或区间形式约束实际 Z 范围。
 - `linear_only:true`：当不需要依赖 curve_type 文本时可直接排除曲线边。
+- **完整圆边类型语义**：当前 Loader 实测中，完整圆通常在 `nx_list_edges`
+  报告为 `"Elliptical"`，而不是 `"Circular"`。为兼容版本差异，Planner
+  对完整圆边必须优先使用候选 `["Elliptical","Circular"]`。
+- **曲线边无可靠 bbox**：Circular / Elliptical / Conical 等曲线边禁止
+  `bbox` / `bbox_x` / `bbox_y` / `bbox_z` / `corners_xy`。
 
 **板件四角 R 圆角的推荐模板：**
 
@@ -101,6 +106,23 @@ Runner 已验证的 edge criteria 关键语法：
 ```
 
 随后 `nx_edge_blend.edge_indices` 引用该 selection 的全部命中项。
+
+**两个 Ø34 凸台顶外圆做 C1.5 倒角的推荐模板：**
+
+```json
+{
+  "tool": "nx_list_edges",
+  "tool_args": {"body_id": "body_main"},
+  "selection_criteria": {
+    "curve_type": ["Elliptical", "Circular"],
+    "length": {"value": 106.81, "tol": 1.0},
+    "midpoint_z": {"value": 36.0, "tol": 0.5}
+  },
+  "expectation": {"count": 2}
+}
+```
+
+随后 `nx_chamfer.edge_indices` 引用这两个命中边。
 
 **禁止模板：**
 - `"direction":[0,0,1]`
@@ -165,7 +187,9 @@ Z 高度 / 数量 / face type / 直径相关几何。**
 |---|---|
 | R8 选到筋/耳板其他竖直边 | 匹配条件必须同时限定 bbox x∈{±115} **且** y∈{±22}，不可只按方向+长度 |
 | 板件四角圆角查边返回空 | 不用方向向量或四组精确 midpoint；使用 `direction="Z" + corners_xy + bbox_z/midpoint_z`，一次选齐四条边 |
-| 法兰顶圆与底圆混淆 | 圆边无 bbox；用 `length`（Ø104→326.73）**且** `midpoint.z`（顶=56，底=48） |
+| 完整圆边查找为空 | 当前 Loader 完整圆常报 `Elliptical`；不要只写 `Circular`，用 `["Elliptical","Circular"] + length + midpoint_z + count` |
+| 凸台顶圆边查找为空 | 圆边无可靠 bbox；禁止 `bbox_x/bbox_y/bbox_z`，改用候选 curve_type + `length + midpoint_z + count` |
+| 法兰顶圆与底圆混淆 | 圆边无 bbox；用候选 `["Elliptical","Circular"]` + `length`（Ø104→326.73）+ `midpoint_z`（顶=56，底=48） |
 | Ø104 外圆与 Ø72 内圆混淆 | 长度不同（326.73 vs 226.19） |
 | 圆角后角棱消失 | 先 R6 后找 R8 时，R8 边仍在（互不相邻），但必须重查 |
 | Shell 移除面猜错 | 顶面唯一判定：Planar + centroid.z=48 + normal=[0,0,1]（面积≈5541.77 仅辅助） |
