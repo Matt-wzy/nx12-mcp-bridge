@@ -138,9 +138,29 @@ group 模式：criteria 所有 value 均为条件对象时按命名组独立筛�
 
 expectation 语法：`count` / `count_range` / `body_count`（nx_list_bodies）/ `<group>_count` / `<group>_count_range` / `x_min..z_max`（selection extents，Linear 边贡献 X/Y、face centroid 贡献 Z；`tolerance_mm` 覆盖默认 0.5）/ `done`（edge_blend / chamfer 走 raw 通道解析 done=N）；`purpose` / `note` / `*auxiliary*` / `*_approx` 只记录不判失败。
 
-## 10. 当前路径与版本
+## 10. Runtime Config 与 repair CLI
 
-- Runner 路径：`%USERPROFILE%\NX_MCP_WORKSPACE\nx-mcp-plan-runner\runner.py`
-- plan_schema：`%USERPROFILE%\NX_MCP_WORKSPACE\nx-mcp-plan-runner\plan_schema.json`（schema_version 1.1）
+Runner 安装目录包含 `runtime-config.json`，正常执行优先使用其中的 `python_exe` 与 `workspace_root`。
+
+`run` 额外支持：
+
+- `--repair-attempt 0|1`
+- `--repair-report <attempt1-report.json>`
+
+当 `repair-attempt=1` 时，Runner 强制要求：
+
+- `--mode benchmark`
+- `--allow-overwrite`
+- previous report status=failed
+- previous failed_step 非空
+- previous planned_part 与当前 plan 一致
+- previous repair_attempt=0
+
+Runner 只做 repair 门禁与安全 preflight，不自行修改 plan。
+
+## 11. 当前路径与版本
+
+- Runner 路径：`<runtime-config.workspace_root>\nx-mcp-plan-runner\runner.py`
+- plan_schema：`<runtime-config.workspace_root>\nx-mcp-plan-runner\plan_schema.json`（schema_version 1.1）
 - certified 参数来源：runner.py TOOL_PARAMS（冻结镜像于 certified-tool-contract.json v1.0）
 - 本契约版本：`runner_contract_version = 1.0`；`certified_tool_contract_version = 1.0`
