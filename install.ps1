@@ -88,6 +88,48 @@ $env:NX_MCP_BACKEND = "auto"
 Write-Host "[Workspace] $workspace"
 
 # ---------------------------------------------------------------
+# 3.1 NX user directory
+# ---------------------------------------------------------------
+# NX 只有在进程启动时知道 UGII_USER_DIR。旧安装器在该变量未设置时只是把
+# Loader 复制到 ~/.nx_mcp_user/startup，却没有告诉 NX 去那里加载，导致首次
+# 安装后 Loader 日志不存在。这里统一确定目录，并把 UGII_USER_DIR 持久化到
+# 当前用户环境，同时写入当前 PowerShell 进程。
+$userUgii = [Environment]::GetEnvironmentVariable("UGII_USER_DIR", "User")
+$machineUgii = [Environment]::GetEnvironmentVariable("UGII_USER_DIR", "Machine")
+
+if (-not [string]::IsNullOrWhiteSpace($env:UGII_USER_DIR)) {
+    $nxUserDir = $env:UGII_USER_DIR
+}
+elseif (-not [string]::IsNullOrWhiteSpace($userUgii)) {
+    $nxUserDir = $userUgii
+}
+elseif (-not [string]::IsNullOrWhiteSpace($machineUgii)) {
+    $nxUserDir = $machineUgii
+}
+else {
+    $nxUserDir = Join-Path $env:USERPROFILE ".nx_mcp_user"
+}
+
+$nxUserDir = [Environment]::ExpandEnvironmentVariables($nxUserDir)
+New-Item -ItemType Directory -Force -Path $nxUserDir | Out-Null
+
+# 如果当前用户级变量与实际使用目录不一致，则持久化。这样从开始菜单/桌面
+# 新启动的 NX 也能继承正确的 UGII_USER_DIR。
+if ($userUgii -ne $nxUserDir) {
+    [Environment]::SetEnvironmentVariable("UGII_USER_DIR", $nxUserDir, "User")
+    # setx 会通知 Windows 环境已变化；失败不影响注册表写入结果。
+    try {
+        & setx.exe UGII_USER_DIR "$nxUserDir" 2>&1 | Out-Null
+    }
+    catch {
+        Write-Host "[提示] setx 通知失败，但用户级 UGII_USER_DIR 已写入。"
+    }
+}
+
+$env:UGII_USER_DIR = $nxUserDir
+Write-Host "[NX] UGII_USER_DIR=$nxUserDir"
+
+# ---------------------------------------------------------------
 # 4. Build + deploy resident C# Loader
 # ---------------------------------------------------------------
 $buildBat = Join-Path $RepoRoot "loader\build.bat"
@@ -112,12 +154,8 @@ if (-not (Test-Path $builtLoader)) {
     throw "Loader 构建完成但未找到 DLL: $builtLoader"
 }
 
-if (-not [string]::IsNullOrWhiteSpace($env:UGII_USER_DIR)) {
-    $startupDir = Join-Path $env:UGII_USER_DIR "startup"
-}
-else {
-    $startupDir = Join-Path $env:USERPROFILE ".nx_mcp_user\startup"
-}
+# 始终部署到当前已经设置/持久化的 UGII_USER_DIR\startup。
+$startupDir = Join-Path $nxUserDir "startup"
 New-Item -ItemType Directory -Force -Path $startupDir | Out-Null
 
 $deployedLoader = Join-Path $startupDir "NX_MCP_Loader.dll"
@@ -161,20 +199,22 @@ Write-Host " 一体化安装成功"
 Write-Host "========================================"
 Write-Host "NX_MCP-Enhanced 核心：已安装"
 Write-Host "Python sidecar：已安装"
+Write-Host "UGII_USER_DIR：已配置"
 Write-Host "C# Loader：已构建并部署"
 Write-Host "工程图读取 Skill：已安装"
 Write-Host "建模规划 Skill：已安装"
 Write-Host "一键总控 Skill：已安装"
 Write-Host "通用 Plan Runner：已安装"
 Write-Host "Workspace：$workspace"
+Write-Host "NX 用户目录：$nxUserDir"
 Write-Host ""
 
 $nxRunning = Get-Process -Name ugraf -ErrorAction SilentlyContinue
 if ($nxRunning) {
-    Write-Host "[提示] Siemens NX 当前正在运行。请重启 NX，使新部署的 Loader DLL 生效。"
+    Write-Host "[重要] Siemens NX 在安装前已经运行。请保存工作并重启 NX 一次，使新的 UGII_USER_DIR 和 Loader DLL 生效。"
 }
 else {
-    Write-Host "[下一步] 启动 Siemens NX，Loader 将自动加载。"
+    Write-Host "[下一步] 启动 Siemens NX。新进程会读取 UGII_USER_DIR 并自动加载 Loader。"
 }
 
 Write-Host "然后重新打开/新建一个豆包对话，上传二维机械工程图并发送："
