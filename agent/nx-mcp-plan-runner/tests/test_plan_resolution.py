@@ -537,6 +537,42 @@ def test_run_plan_mirror_object_binding():
 
 
 
+
+def test_build_existing_single_body_part_binding():
+    frozen = {
+        "mode": "FAST",
+        "operations": [
+            {
+                "step": 1,
+                "tool": "nx_open_part",
+                "tool_args": {"path": "existing.prt"},
+                "topology_changes": False,
+            },
+            {
+                "step": 2,
+                "tool": "nx_list_bodies",
+                "tool_args": {},
+                "expectation": {"body_count": 1},
+                "topology_changes": False,
+            },
+            {
+                "step": 3,
+                "tool": "nx_hole",
+                "tool_args": {
+                    "body_id": "body_main",
+                    "center": {"x": 0, "y": 0},
+                    "diameter": 8,
+                    "depth": 10,
+                },
+                "topology_changes": True,
+            },
+        ],
+    }
+    exe = R.build_executable_plan(frozen)
+    assert exe["operations"][1]["result_bindings"] == {"objects": "body_main"}
+    assert exe["operations"][2]["tool_args"]["body_id"] == "$body_main"
+    assert R.check_plan(exe, executable=True) == []
+
 # --------------------------------------------------------------------------
 # controlled self-healing + runtime config
 # --------------------------------------------------------------------------
