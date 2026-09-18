@@ -1,6 +1,6 @@
 # NX MCP — Installation Guide (V2)
 
-From-scratch setup on Windows with Siemens NX and Doubao.
+From-scratch setup on Windows with Siemens NX and Agent.
 
 Validated environment: **Siemens NX 2506 on Windows**. Other NX versions are
 not formally certified; the installer auto-detects installed NX paths.
@@ -10,7 +10,7 @@ not formally certified; the installer auto-detects installed NX paths.
 - Windows 10/11
 - Siemens NX installed (`ugraf.exe` present)
 - Python 3.10+
-- Doubao desktop installed and launched at least once
+- Agent desktop installed and launched at least once
 
 ## Recommended: integrated one-click installation
 
@@ -20,10 +20,10 @@ Clone the repository, enter its root directory, then run:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-If you use multiple Doubao profiles, you can explicitly choose one:
+If you use multiple Agent profiles, you can explicitly choose one:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -DoubaoProfile "Profile 7"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AgentProfile "Profile 7"
 ```
 
 The single installer performs the complete setup:
@@ -40,7 +40,7 @@ The single installer performs the complete setup:
 10. Installs the generic Plan Runner
 11. Runs lightweight Agent Pack tests
 
-No separate MCP-client JSON configuration is required for the bundled Doubao
+No separate MCP-client JSON configuration is required for the bundled Agent
 Agent Pack workflow.
 
 ### Important: first NX start after installation
@@ -56,7 +56,7 @@ installer does that automatically.
 
 After NX is started with the new environment:
 
-1. Open a new Doubao conversation.
+1. Open a new Agent conversation.
 2. Upload a 2D mechanical engineering drawing.
 3. Send:
 
