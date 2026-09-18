@@ -131,13 +131,13 @@ check（executable）检查项：
 验证孔时 `face_type` 用候选 `["Swept", "Cylindrical"]`。其中
 `centroid_radius` 的 Runner 固定语义是
 `sqrt(centroid_x² + centroid_y²)`，即 face 质心到**全局 XY 原点**的径向距离，
-**不是圆柱/孔半径，禁止把 diameter/2 写入该字段**。已知孔中心时优先使用
-named group：每个 group 用 `face_type + centroid:[hole_x,hole_y,sidewall_mid_z]`
-并以 `<group>_count=1` 验证；只有 PCD/同心于全局原点的布局才使用
-`centroid_radius + centroid_z + count`。centroid_z 必须按该位置
-**最终实际材料 Z 区间**中点推算（counterbore 截断、hole depth 超出材料
-高度时以实际区间为准）。完整契约见 topology-safety.md §4；Runner 代码禁止
-硬编码，Planner 从每个零件的最终几何关系推导。
+**不是圆柱/孔半径，禁止把 diameter/2 写入该字段**。已知孔中心和孔轴方向时
+优先使用 named group：每个 group 用 `face_type + centroid:[cx,cy,cz]`，
+其中 centroid 是孔轴在最终实体材料内实际侧壁区间的**全局三维中点**，
+并以 `<group>_count=1` 验证；该规则适用于 Z/X/Y 轴孔。只有 Z 轴孔且
+PCD/同心于全局 XY 原点的布局才使用 `centroid_radius + centroid_z + count`。
+完整契约见 topology-safety.md §4；Runner 代码禁止硬编码，Planner 从每个零件
+的最终几何关系推导。
 
 selection_criteria 值语法：精确值（默认容差 0.5，可 `{"value":n,"tol":t}`）、`{"min","max"}` 范围、`[lo,hi]`、候选数组、`{"any":[...]}`。
 face 额外冻结语义：对唯一顶/底 Planar 面，Planner 优先 `face_type:"Planar" + centroid_z + expectation.count`；`normal` 只作辅助，不作为首要硬筛选条件；`area` 只辅助。
