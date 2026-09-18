@@ -101,6 +101,7 @@ frozen plan 首次落盘前必须完成静态自检。B 阶段 build/check 失�
 ## 7. 输出
 
 - 用户可见回复全部使用自然中文。
+- 阶段 C 状态必须与 Runner report 完全一致：只有 `report.status="success"` 才能写“成功”；若 `report.status="failed"` 或存在 `failed_step`，即使 PRT/STEP 已生成也必须写“失败”。
 - 自动修复后成功必须披露首次失败步骤、原因和修复内容，不能伪装成一次通过。
 - 总耗时必须是真实 wall clock，包含失败、诊断、修复、清理和第二次执行。
 - 不输出长 plan、内部 JSON 状态或调试噪音。
