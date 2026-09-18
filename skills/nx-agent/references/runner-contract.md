@@ -60,6 +60,8 @@
   - `nx_mirror` / `nx_unite` → 注册新 body；字段 `object`（桥接适配响应字段）。
   - `nx_linear_pattern` / `nx_circular_pattern` → 注册 count-1 个副本；字段 `objects`（按序绑定副本）。
   - `nx_extrude(operation=subtract)` 不注册产出者。
+  - `nx_list_bodies`：仅当 frozen plan 明确 `expectation.body_count=1` 时，
+    可把唯一返回 body 作为 `objects` producer，用于安全修改已有单实体零件。
 - 绑定规则：
   - sketch 引用：从最近的未绑定 sketch 产出者取。
   - body 引用：unite 的 `target_body_id` 取**最早**未绑定 body；其余 body 引用取**最近**未绑定 body。
