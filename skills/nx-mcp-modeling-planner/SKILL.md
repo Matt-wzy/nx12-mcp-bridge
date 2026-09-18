@@ -28,9 +28,15 @@ description: 作者：抖音 无趣。Use when a complete, unambiguous set of 3D
 4. **标记拓扑**：为每个操作填写 `topology_changes` / `refresh_edges_after` /
    `refresh_faces_after`（见 §4）。
 5. **编写验证与兜底**：默认 FAST 轻量验证；对已识别的风险写 `fallbacks`。
-6. **输出计划 JSON**（结构见 §8），示例见 `examples/modeling-plan-example.json`。
-7. **按计划执行**：执行阶段遵守 §5–§7 的规则，不得临时更改整体方案；
-   失败按 §6 处理，只允许针对原因做一次最小修正。
+6. **发布前静态自检**：在 frozen plan 落盘并调用 runner build 之前，
+   先在生成阶段检查所有 `selection_criteria` 是否符合冻结契约，尤其禁止：
+   `direction` 向量、`midpoint_x` / `midpoint_y`、错误的 `groups` 包装、
+   以及可由 `corners_xy` 表达却拆成脆弱精确 midpoint group 的四角边选择。
+   自检不通过时必须在**首次生成阶段**修正，禁止先产出错误 frozen plan 再补丁。
+7. **输出计划 JSON**（结构见 §8），示例见 `examples/modeling-plan-example.json`。
+8. **按计划执行**：执行阶段遵守 §5–§7 的规则，不得临时更改整体方案。
+   当本 Skill 由 `nx-mcp-pipeline` 调用时，runner build/check 任一失败即
+   **B 阶段失败并停止**，不得修改 frozen plan 后自动重跑。
 
 ## 3. 建模顺序规则
 
@@ -123,11 +129,23 @@ Pattern / Mirror / Edge Blend / Chamfer / 任何改变实体拓扑的操作
   多组 index（如 R6、R8、C2）再连续使用。**
 - face 操作同理；Shell 前必须重新 `nx_list_faces`。
 - 边/面识别优先使用几何信息，**禁止仅根据 index 数字判断**：
-  - 边：`curve_type` / `start` / `end` / `midpoint` / `length` /
-    `bbox_min` / `bbox_max` / `direction` / `adjacent_faces`
+  - 边：`curve_type` / `start` / `end` / `midpoint` / `midpoint_z` /
+    `length` / `bbox_min` / `bbox_max` / `bbox_x` / `bbox_y` /
+    `bbox_z` / `corners_xy` / `direction` / `adjacent_faces`
   - 面：`face_type` / `centroid` / `area` / `normal`（仅 planar）/ 邻接边数
   - 这些筛选条件写入计划步骤的 `selection_criteria`（见 §8），**不放入
     `tool_args`**。
+- **Linear 边方向语法固定为字符串**：`"X"` / `"Y"` / `"Z"` / `"OTHER"`。
+  **禁止**写成向量 `[0,0,1]`、`[1,0,0]` 等。
+- **矩形/板件四角竖直棱的稳定选择规则（强制）**：当多个目标边共享同一 Z
+  范围、仅 XY 位置不同，优先使用一个 flat criteria：
+  `curve_type="Linear" + direction="Z" + corners_xy=[[x1,y1],...] + bbox_z`
+  （或 `midpoint_z` 带容差）+ `expectation.count`。禁止为四个角分别用
+  “精确 midpoint + direction 向量”的 group。
+- `midpoint` 若使用，必须是完整三维数组 `[x,y,z]`；只需要高度时用
+  `midpoint_z`。禁止虚构 `midpoint_x` / `midpoint_y`。
+- group mode 只用于**确实需要不同几何条件的多组目标**。group 的每个 value
+  必须直接是合法 criteria 对象；**禁止额外包一层 `groups` 键**。
 - 详见 `references/topology-safety.md`。
 
 ## 5. Pattern / Mirror / Boolean 规则
@@ -144,6 +162,10 @@ Pattern / Mirror / Edge Blend / Chamfer / 任何改变实体拓扑的操作
   外形尺寸**的微小内部重叠建模方式；最终几何尺寸不能改变。
 
 ## 6. 失败处理
+
+> 本节的“一次最小修正”只适用于独立使用 Planner/执行器时的运行时操作错误。
+> **当由 nx-mcp-pipeline 调用时，B 阶段 runner build/check 失败必须直接上报，
+> 禁止修改 frozen plan 后继续 build/check。**
 
 一个操作失败后**禁止立刻无脑重复同一调用**。必须先判断错误属于：
 - **参数错误** → 修正参数后重试一次；
@@ -282,6 +304,8 @@ Pattern / Mirror / Edge Blend / Chamfer / 任何改变实体拓扑的操作
 → 检查 unresolved / dimension closure
 → 读取本地冻结契约（runner-contract.md + certified-tool-contract.json）
 → 生成 FAST plan（含版本号）
+→ 发布前静态自检 selection_criteria
+→ frozen plan 落盘
 → 调用 runner build
 → 调用 runner check
 → 输出结果

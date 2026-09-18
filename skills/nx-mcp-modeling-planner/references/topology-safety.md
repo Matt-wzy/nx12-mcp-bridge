@@ -72,6 +72,44 @@ nx_shell(body_id, thickness, remove_face_index=<确认的 index>, inward=true)
 | `normal` | 仅 Planar：顶面 [0,0,1]、底面 [0,0,-1] |
 | 邻接边数 | 辅助确认 |
 
+### 4.1 边筛选稳定语法（Planner 强制）
+
+Runner 已验证的 edge criteria 关键语法：
+
+- `direction`：只允许 `"X"` / `"Y"` / `"Z"` / `"OTHER"` 字符串，
+  **不是方向向量**。
+- `midpoint`：完整 `[x,y,z]`；只筛 Z 高度用 `midpoint_z`。
+- `corners_xy`：`[[x1,y1],[x2,y2],...]`，用于一次选择多个指定 XY
+  位置的 Linear 竖边。
+- `bbox_z`：可用 `{"min":z0,"max":z1}` 或区间形式约束实际 Z 范围。
+- `linear_only:true`：当不需要依赖 curve_type 文本时可直接排除曲线边。
+
+**板件四角 R 圆角的推荐模板：**
+
+```json
+{
+  "tool": "nx_list_edges",
+  "tool_args": {"body_id": "body_main"},
+  "selection_criteria": {
+    "curve_type": "Linear",
+    "direction": "Z",
+    "corners_xy": [[-90,-60],[-90,60],[90,-60],[90,60]],
+    "bbox_z": {"min": 0, "max": 14}
+  },
+  "expectation": {"count": 4}
+}
+```
+
+随后 `nx_edge_blend.edge_indices` 引用该 selection 的全部命中项。
+
+**禁止模板：**
+- `"direction":[0,0,1]`
+- 四角分别 group + 精确 `midpoint`，只为表达不同 XY
+- `midpoint_x` / `midpoint_y`
+- `{"groups": {...}}` 这种额外包装
+
+只有各组确实需要**不同类型/长度/高度等不同条件**时才使用 group mode。
+
 ### Loader Face Semantics Contract（冻结实测，2026-09-18）
 
 > 本小节记录当前 Loader/NX 实机语义；**Runner 代码禁止硬编码这些数值/类型**，
@@ -126,6 +164,7 @@ Z 高度 / 数量 / face type / 直径相关几何。**
 | 陷阱 | 规避 |
 |---|---|
 | R8 选到筋/耳板其他竖直边 | 匹配条件必须同时限定 bbox x∈{±115} **且** y∈{±22}，不可只按方向+长度 |
+| 板件四角圆角查边返回空 | 不用方向向量或四组精确 midpoint；使用 `direction="Z" + corners_xy + bbox_z/midpoint_z`，一次选齐四条边 |
 | 法兰顶圆与底圆混淆 | 圆边无 bbox；用 `length`（Ø104→326.73）**且** `midpoint.z`（顶=56，底=48） |
 | Ø104 外圆与 Ø72 内圆混淆 | 长度不同（326.73 vs 226.19） |
 | 圆角后角棱消失 | 先 R6 后找 R8 时，R8 边仍在（互不相邻），但必须重查 |

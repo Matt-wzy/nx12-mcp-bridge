@@ -94,6 +94,9 @@
    R35 圆立板底端单点接触）时 Unite 不可靠——工具体可能不并入目标体，
    后续孔报"工具体完全在目标体外"。此类主体必须改单一 profile 建模
    （见 SKILL.md §3.0 Profile-First Rule）。
+8. **边选择协议必须使用 Runner 冻结语法**：Linear 方向只写 `"X"/"Y"/"Z"`；
+   多个板件角棱优先 `corners_xy + bbox_z/midpoint_z`；禁止方向向量、
+   `midpoint_x/midpoint_y`、以及为相同条件四角创建脆弱的精确 midpoint group。
 
 ## 4. 工具参数与规划条件分离（tool_args / selection_criteria / expectation）
 
@@ -111,13 +114,22 @@
 - 因为 planner 自定义字段导致 MCP 参数错误；
 - 把 `selection_criteria` / `expectation` 原样发送给工具。
 
-典型写法：
+典型写法（板件四角竖边，一次稳定选齐）：
 ```json
 {
   "tool": "nx_list_edges",
   "tool_args": { "body_id": "body_main" },
-  "selection_criteria": { "curve_type": "Linear", "direction": "Z", "length": 12.0, "bbox_x": [-90.0, 90.0], "bbox_y": [-60.0, 60.0] },
+  "selection_criteria": {
+    "curve_type": "Linear",
+    "direction": "Z",
+    "corners_xy": [[-90.0,-60.0],[-90.0,60.0],[90.0,-60.0],[90.0,60.0]],
+    "bbox_z": {"min": 0.0, "max": 14.0}
+  },
   "expectation": { "count": 4 }
 }
 ```
+其中 `direction` 是枚举字符串，不是 `[0,0,1]`；只需要 Z 高度时使用
+`midpoint_z`，不要虚构 `midpoint_x/midpoint_y`。四角目标条件相同、只有
+XY 不同时优先 `corners_xy`，不要拆成四个精确 midpoint group。
+
 非查询类工具一般只有 `tool_args`（如 `nx_extrude` 的 sketch_id/distance/start_offset）。

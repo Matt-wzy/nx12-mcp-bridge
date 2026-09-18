@@ -119,7 +119,15 @@ check（executable）检查项：
 高度时以实际区间为准）。完整契约见 topology-safety.md §4；Runner 代码禁止
 硬编码，Planner 从每个零件的最终几何关系推导。
 
-selection_criteria 值语法：精确值（默认容差 0.5，可 `{"value":n,"tol":t}`）、`{"min","max"}` 范围、`[lo,hi]`、候选数组、`{"any":[...]}`。group 模式：criteria 所有 value 均为条件对象时按命名组独立筛选。
+selection_criteria 值语法：精确值（默认容差 0.5，可 `{"value":n,"tol":t}`）、`{"min","max"}` 范围、`[lo,hi]`、候选数组、`{"any":[...]}`。
+edge 额外冻结语法：`direction` 必须是 `"X"|"Y"|"Z"|"OTHER"` 字符串；
+`midpoint` 是完整 `[x,y,z]`；只筛高度用 `midpoint_z`；
+`corners_xy` 是 `[[x1,y1],...]`，用于一次匹配多个指定 XY 位置的 Linear 边。
+禁止 `direction:[0,0,1]`、`midpoint_x`、`midpoint_y`。
+对于四角竖边等“条件相同、仅 XY 不同”的目标，优先 flat criteria +
+`corners_xy` + `expectation.count`，不要拆成 group。
+group 模式：criteria 所有 value 均为条件对象时按命名组独立筛选；
+每个 group value 本身就是 criteria 对象，禁止外层再加 `groups` 键。
 
 expectation 语法：`count` / `count_range` / `body_count`（nx_list_bodies）/ `<group>_count` / `<group>_count_range` / `x_min..z_max`（selection extents，Linear 边贡献 X/Y、face centroid 贡献 Z；`tolerance_mm` 覆盖默认 0.5）/ `done`（edge_blend / chamfer 走 raw 通道解析 done=N）；`purpose` / `note` / `*auxiliary*` / `*_approx` 只记录不判失败。
 
