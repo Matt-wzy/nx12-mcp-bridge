@@ -216,10 +216,11 @@ Pattern / Mirror / Edge Blend / Chamfer / 任何改变实体拓扑的操作
 - 布尔切孔侧面（hole / counterbore / countersink）在 `nx_list_faces` 中
   通常报告为 **`Swept`**，不是 `Cylindrical`；验证孔时 `face_type` 使用
   `["Swept", "Cylindrical"]` 候选，禁止只凭 `Cylindrical` 判断孔。
-- 已知每个孔中心时，优先使用 named group：每个 group 用
-  `face_type:["Swept","Cylindrical"] + centroid:[hole_x,hole_y,sidewall_mid_z]`，
-  并用 `<group>_count=1` 验证每个孔。多个孔不得把孔半径误写成
-  `centroid_radius`。
+- 已知每个孔中心与孔轴方向时，优先使用 named group：每个 group 用
+  `face_type:["Swept","Cylindrical"] + centroid:[cx,cy,cz]`，其中
+  `[cx,cy,cz]` 是**最终实体中孔侧壁轴段的全局 XYZ 中点**，并用
+  `<group>_count=1` 验证每个孔。该规则同时适用于 Z/X/Y 轴孔；多个孔不得把
+  孔半径误写成 `centroid_radius`。
 - 只有当目标特征本来就按**全局 XY 原点**做同心/PCD 分布时，
   `centroid_radius` 才可用于验证该全局径向位置，再配合
   `centroid_z + count`；它仍然不是孔半径。
@@ -234,8 +235,10 @@ Pattern / Mirror / Edge Blend / Chamfer / 任何改变实体拓扑的操作
 （Ø9 被 Ø16 沉孔截断后 centroid_z≈9.5 而非 7.0）、hole depth 超过局部材料
 高度时侧壁只存在于实际区间（depth=36 但实体仅 Z=0..24 → centroid_z≈12.0
 而非 18.0）、后续 Unite/subtract/blend/chamfer 是否改变面范围。
-推算：孔侧壁 centroid_z = 该位置实际材料 Z 区间中点；若使用 centroid_radius，
-其值 = 孔侧壁 face 质心（即孔轴 XY）到**全局 XY 原点**的径向距离，绝不是孔半径。
+推算：孔侧壁 face 的完整 `centroid=[cx,cy,cz]` = 该孔轴在最终实体材料内
+实际存在区间的三维中点。Z 轴孔可进一步使用 centroid_z；若使用
+centroid_radius，其值 = 孔轴 XY 到**全局 XY 原点**的径向距离，绝不是孔半径。
+X/Y 轴孔不要用 centroid_radius 代替完整 centroid。
 - **默认禁止**：
   - 大规模解析 STEP 文本
   - 搜索 AXIS2_PLACEMENT_3D
