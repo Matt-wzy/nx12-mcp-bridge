@@ -19,8 +19,7 @@ NX_MCP-Enhanced 仓库已内置完整 Agent Pack：
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 ```
 
-它会一次完成 NX_MCP-Enhanced 核心、C# Loader、三个 Agent Skill 和 Plan
-Runner 的安装。正常用户不需要再单独执行 `install-agent.ps1`。
+它会一次完成 NX_MCP-Enhanced 核心、C# Loader、统一 `nx-agent` Skill 和 Plan Runner 的安装。正常用户不需要再单独执行 `install-agent.ps1`。
 
 多 Profile 环境可手动指定：
 
@@ -68,10 +67,15 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AgentProfile 
 
 ## 组件
 
-- `nx-engineering-drawing-reader`：二维工程图 → 结构化 JSON
-- `nx-mcp-modeling-planner`：JSON → FAST modeling plan → executable plan
+对外只安装一个 Skill：
+
+- `nx-agent`：统一入口，自动识别文字建模 / 已有零件修改 / 二维工程图建模
+
+工程图模式内部仍按以下模块执行：
+
+- 工程图读取：二维工程图 → 结构化 JSON
+- 建模规划：JSON → FAST modeling plan → executable plan
 - `nx-mcp-plan-runner`：确定性执行 plan
-- `nx-mcp-pipeline`：总控 A → B → C
 
 Agent Pack 不修改 NX_MCP-Enhanced 核心、C# Loader、named pipe / resident
 Loader 架构，也不新增 NX 建模工具。
