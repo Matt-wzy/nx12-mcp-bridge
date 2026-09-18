@@ -815,6 +815,26 @@ def _validate_params(tool: str, args: dict) -> None:
             raise PlanError(f"{tool}: illegal param {k!r} (certified params: {', '.join(required + optional)})")
 
 
+def _timing_bucket(tool: str, op_index: int, validation_start_idx: int) -> str:
+    """Classify operation wall time for report diagnostics.
+
+    Save/export are separated from geometric validation so an asynchronous STEP
+    file settle cannot make "final validation" look slow.
+    """
+    if tool == "nx_save_part":
+        return "save"
+    if tool == "nx_export_step":
+        return "export"
+    if op_index >= validation_start_idx and tool in {
+        "nx_list_bodies", "nx_list_faces", "nx_list_edges", "nx_list_features",
+        "nx_list_sketches", "nx_status", "nx_fit_view",
+    }:
+        return "validation"
+    if op_index < validation_start_idx:
+        return "modeling"
+    return "other"
+
+
 async def run_plan(plan: dict, transport: NXTransport, plan_path: str = "",
                    wall_start: float | None = None, history: RunHistory | None = None,
                    mode: str = "normal", planned_part: str | None = None) -> dict:
@@ -833,6 +853,13 @@ async def run_plan(plan: dict, transport: NXTransport, plan_path: str = "",
     total_retries = 0
     selections: dict[str, Any] = {}
     export_settle_elapsed = 0.0
+    phase_elapsed = {
+        "modeling": 0.0,
+        "validation": 0.0,
+        "save": 0.0,
+        "export": 0.0,
+        "other": 0.0,
+    }
 
     # validation phase = first step after the last topology-changing operation
     validation_start_idx = len(ops)
@@ -971,6 +998,8 @@ async def run_plan(plan: dict, transport: NXTransport, plan_path: str = "",
                     raise PlanError(f"STEP export returned but file not present/non-empty: {target}")
 
             dur = time.monotonic() - t0
+            bucket = _timing_bucket(tool, idx, validation_start_idx)
+            phase_elapsed[bucket] += dur
             operations_completed += 1
             last_op_at = time.monotonic()
             msg = str(resp.get("message") or resp.get("result") or "")
@@ -979,15 +1008,17 @@ async def run_plan(plan: dict, transport: NXTransport, plan_path: str = "",
                 msg += f" done={done}"
             steps_log.append({
                 "step": step, "tool": tool, "started_at": started_at,
-                "elapsed_seconds": round(dur, 3), "status": "ok",
+                "elapsed_seconds": round(dur, 3), "phase": bucket, "status": "ok",
                 "retry_count": retried, "note": (msg + topo_note).strip(),
             })
         except Exception as e:
             dur = time.monotonic() - t0
+            bucket = _timing_bucket(tool, idx, validation_start_idx)
+            phase_elapsed[bucket] += dur
             last_op_at = time.monotonic()
             steps_log.append({
                 "step": step, "tool": tool, "started_at": started_at,
-                "elapsed_seconds": round(dur, 3), "status": "failed",
+                "elapsed_seconds": round(dur, 3), "phase": bucket, "status": "failed",
                 "retry_count": retried, "error": str(e),
             })
             status = "failed"
@@ -998,15 +1029,22 @@ async def run_plan(plan: dict, transport: NXTransport, plan_path: str = "",
 
     loop_end = time.monotonic()
     nx_execution = (last_op_at - first_op_at) if (first_op_at and last_op_at) else 0.0
-    validation_elapsed = ((last_op_at - validation_start_at)
-                          if (validation_start_at is not None and last_op_at) else 0.0)
+    validation_ops_elapsed = phase_elapsed["validation"]
+    export_total_elapsed = phase_elapsed["export"]
+    export_call_elapsed = max(0.0, export_total_elapsed - export_settle_elapsed)
     report = {
         "status": status,
         "elapsed_seconds": round(loop_end - loop_start, 3),
         "runner_start_to_first_nx_call": round(first_op_at - wall_start, 3) if wall_start and first_op_at else None,
         "nx_execution_elapsed": round(nx_execution, 3),
-        "final_validation_elapsed": round(validation_elapsed, 3),
+        "nx_modeling_elapsed": round(phase_elapsed["modeling"], 3),
+        "final_validation_elapsed": round(validation_ops_elapsed, 3),
+        "validation_ops_elapsed": round(validation_ops_elapsed, 3),
+        "save_elapsed": round(phase_elapsed["save"], 3),
+        "export_call_elapsed": round(export_call_elapsed, 3),
+        "export_settle_elapsed": round(export_settle_elapsed, 3),
         "step_export_settle_elapsed": round(export_settle_elapsed, 3),
+        "other_ops_elapsed": round(phase_elapsed["other"], 3),
         "total_runner_elapsed": round(time.monotonic() - wall_start, 3) if wall_start else None,
         "operations_total": len(ops),
         "operations_completed": operations_completed,
@@ -1381,6 +1419,7 @@ async def _cmd_run(args: argparse.Namespace) -> int:
             }, ensure_ascii=False, indent=2))
             return 1
 
+    t_preflight = time.monotonic()
     blocked, info = await run_preflight(
         transport,
         plan,
@@ -1389,6 +1428,7 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         history,
         repair_authorized=(args.repair_attempt == 1),
     )
+    preflight_elapsed = time.monotonic() - t_preflight
     if blocked is not None:
         print(json.dumps(blocked, ensure_ascii=False, indent=2))
         return 1
@@ -1400,6 +1440,7 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     report = await run_plan(plan, transport, plan_path=args.plan,
                             wall_start=t_start, history=history,
                             mode=args.mode, planned_part=planned_part)
+    report["preflight_elapsed"] = round(preflight_elapsed, 3)
     report["repair_attempt"] = int(args.repair_attempt)
     report["repair_source_report"] = args.repair_report
     print("===REPORT===")
