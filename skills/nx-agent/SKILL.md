@@ -68,7 +68,8 @@ B 阶段必须在 frozen plan 首次落盘前完成静态自检。禁止先生�
 - Linear 边 `direction` 只能是 `"X"|"Y"|"Z"|"OTHER"`
 - 四角竖边优先 `corners_xy + bbox_z/midpoint_z`
 - Circular / Elliptical / Conical 曲线边禁止 bbox 类条件
-- 曲线边优先 `curve_type + length + midpoint_z + expectation.count`
+- **完整圆边在当前 Loader 的 `nx_list_edges` 中可能报告为 `Elliptical`，不得只写死 `Circular`**
+- 完整圆边优先使用 `curve_type:["Elliptical","Circular"] + length + midpoint_z + expectation.count`
 - 连续多个圆角/倒角必须每次重新 `nx_list_edges`
 - 禁止只按 index 数字猜边/面
 
