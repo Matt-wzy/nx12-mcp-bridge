@@ -126,6 +126,11 @@ edge 额外冻结语法：`direction` 必须是 `"X"|"Y"|"Z"|"OTHER"` 字符串�
 禁止 `direction:[0,0,1]`、`midpoint_x`、`midpoint_y`。
 对于四角竖边等“条件相同、仅 XY 不同”的目标，优先 flat criteria +
 `corners_xy` + `expectation.count`，不要拆成 group。
+**完整圆边语义**：当前 Loader 的 `nx_list_edges` 实测完整圆通常报告为
+`"Elliptical"`。Planner 不得把完整圆边写死为 `"Circular"`；统一优先使用
+候选数组 `["Elliptical","Circular"]`，并结合 `length + midpoint_z + count`。
+当 curve_type 为 Circular / Elliptical / Conical（或候选仅含这些曲线类型）时，
+禁止同时生成 `bbox / bbox_x / bbox_y / bbox_z / corners_xy`。
 group 模式：criteria 所有 value 均为条件对象时按命名组独立筛选；
 每个 group value 本身就是 criteria 对象，禁止外层再加 `groups` 键。
 
