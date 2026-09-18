@@ -77,7 +77,7 @@ def main() -> None:
                 fail(f"broken nx-agent reference in {md.name}: {rel}")
 
     sys.path.insert(0, str(RUNNER))
-    import runner  # type: ignore
+    import runner  # type: ignore  # noqa: E402
 
     contract = json.loads((SKILL / "references" / "certified-tool-contract.json").read_text(encoding="utf-8"))
     tools = set(contract["tools"])
@@ -85,6 +85,11 @@ def main() -> None:
         fail("certified-tool-contract.json and Runner CERTIFIED_TOOLS differ")
     if len(tools) != 32:
         fail(f"expected 32 certified tools, got {len(tools)}")
+
+    for example in (RUNNER / "examples").glob("*.json"):
+        data = json.loads(example.read_text(encoding="utf-8"))
+        if "skill" in data and data["skill"] != "nx-agent":
+            fail(f"runner example has stale skill metadata: {example.name}")
 
     print("Agent Pack static verification passed")
 
