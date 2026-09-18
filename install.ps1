@@ -85,6 +85,7 @@ else {
 New-Item -ItemType Directory -Force -Path $workspace | Out-Null
 $env:NX_MCP_WORKSPACE = $workspace
 $env:NX_MCP_BACKEND = "auto"
+$env:NX_MCP_ENHANCED_SRC = Join-Path $RepoRoot "src"
 Write-Host "[Workspace] $workspace"
 
 # ---------------------------------------------------------------
@@ -181,6 +182,7 @@ Write-Host "[Agent Pack] 安装统一 nx-agent Skill（文字建模 + 工程图�
 $agentParams = @{
     RepoRoot  = $RepoRoot
     PythonExe = $venvPython
+    Workspace = $workspace
 }
 if (-not [string]::IsNullOrWhiteSpace($AgentProfile)) {
     $agentParams["AgentProfile"] = $AgentProfile
@@ -202,7 +204,7 @@ Write-Host "Python sidecar：已安装"
 Write-Host "UGII_USER_DIR：已配置"
 Write-Host "C# Loader：已构建并部署"
 Write-Host "NX Agent Skill：已安装（统一入口）"
-Write-Host "通用 Plan Runner：已安装"
+Write-Host "通用 Plan Runner：已安装（含 runtime-config）"
 Write-Host "Workspace：$workspace"
 Write-Host "NX 用户目录：$nxUserDir"
 Write-Host ""
