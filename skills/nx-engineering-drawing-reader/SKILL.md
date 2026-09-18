@@ -1,63 +1,101 @@
 ---
 name: nx-engineering-drawing-reader
-description: 作者：抖音 无趣。Use when a 2D mechanical engineering drawing must be converted quickly into structured JSON for 3D CAD modeling (e.g. NX) — extract overall dimensions, thickness, holes, counterbores, countersinks, PCD, fillets, chamfers, counts, symmetry, mirror, and patterns in a single pass, without pixel measurement or scale guessing.
+description: 作者：抖音 无趣。用于把二维机械工程图快速转换为三维 CAD 建模所需的结构化 JSON；一次提取总尺寸、厚度、孔、沉孔、沉头孔、PCD、圆角、倒角、数量、对称、镜像和阵列信息，禁止像素测量和按比例猜尺寸。
 ---
 
-# NX Engineering Drawing Reader Skill
+# NX 工程图读取器
 
-## Overview
-This skill provides a fast, single-pass procedure for converting 2D mechanical engineering drawings into structured JSON that feeds 3D CAD modeling. It extracts only information that changes the 3D geometry result, deliberately ignores manufacturing/administrative content, and never estimates dimensions from pixels or drawing scale.
+## 1. 作用
 
----
+本 Skill 用于把二维机械工程图快速转换为可供三维 CAD 建模使用的结构化 JSON。
 
-## Role & Goal
-You act as a **Mechanical CAD Modeling Engineer**. In one look at the whole drawing, identify the views, read every printed callout that affects 3D geometry, merge duplicate dimensions across views, run a dimension closure check using only stated values, and emit a single structured JSON. Speed and structured output take priority over manufacturing-report completeness.
+只提取**会改变最终三维几何结果**的信息；制造、行政或与三维形状无关的内容主动忽略。
 
----
+核心原则：
 
-## Step-by-Step Procedure
+- 清晰标注直接采信。
+- 禁止根据像素、轮廓比例或图纸比例反推尺寸。
+- 优先一次整图读取，不为非关键内容反复裁剪、放大或 OCR。
+- 最终只输出一份结构化 JSON。
 
-### Step 1: Whole-Drawing Observation (one pass)
-1. Look at the ENTIRE drawing once before zooming into anything.
-2. Identify which views are present: Main view (主视图), Top view (俯视图), Side view (侧视图), Section view (剖视图), Detail view (局部放大图).
-3. In that single pass, read every dimension and callout you can see. Trust clear printed text immediately — never re-measure it.
-4. Record which view each callout belongs to, for later cross-view merging.
+## 2. 角色与目标
 
-### Step 2: Extract Modeling Features Only
-Extract only information that affects the 3D model:
-- 总长 overall length, 总宽 overall width, 总高 overall height
-- 厚度 thickness, 壳体壁厚 shell wall thickness
-- 线性尺寸 linear dimensions, 中心距 center distance
-- Ø 直径, R 圆角, C 倒角
-- 通孔 through holes, 沉孔 counterbores, 沉头孔 countersinks
-- 孔位 hole positions, PCD 分布圆
-- 数量 quantities (2×, 4×, 6× …)
-- 对称 symmetry, 镜像 mirror, 线性阵列 linear pattern, 矩形阵列 rectangular array, 圆周阵列 circular pattern
+按**机械 CAD 建模工程师**的方式读取图纸：
 
-### Step 3: Default Ignore List
-Skip without analysis:
-- 标题栏 title block, 材料 material, 表面粗糙度 surface roughness
-- 普通技术要求 general technical notes, 加工工艺说明 process/manufacturing notes
-- 与三维几何无关的 GD&T (GD&T that does not affect the 3D geometry result)
+1. 先观察整张图，识别各视图。
+2. 读取所有会影响三维几何的印刷标注。
+3. 把多个视图中重复表达的同一特征合并。
+4. 只使用图纸明确给出的数值执行尺寸闭合检查。
+5. 输出唯一的一份结构化 JSON。
 
-### Step 4: Strict Rules
-1. When a clear numeric callout exists, NEVER estimate it again via pixel ratio, outline measurement, Hough, OpenCV, or any other method.
-2. NEVER guess a dimension from drawing scale (禁止按比例猜尺寸).
-3. NEVER repeatedly crop / zoom / OCR / loop to confirm non-critical information.
-4. When the same geometric feature shows the same dimension/callout in multiple views (top / main / section), treat it as cross-confirmation: merge it into ONE feature entry, include ALL source views in `source_views`, RAISE its confidence, and NEVER create an `unresolved` entry from cross-view duplication (e.g. one boss-top chamfer `C2×45°` appearing in two views → exactly one chamfer feature). Only when two callouts clearly point to DIFFERENT geometric positions and the target cannot be judged is `unresolved` allowed.
-5. Information the drawing does not define, but whose absence does not change the unique 3D modeling result → set the field to `null`, mark `required_for_modeling: false`, and stop analyzing it. Exception — circular-pattern orientation: when the drawing DOES express orientation via centerlines/symmetry lines, it must be output (see "Circular pattern orientation"); `start_angle_deg: null` is allowed only when the drawing expresses no orientation AND the direction does not affect the model.
-6. Only information that genuinely affects modeling AND cannot be read is marked `unresolved`.
-7. Run ONE dimension closure check, based only on values already printed on the drawing; never invent dimensions to close it.
-8. Generate nothing else: no bbox annotation images, no HTML, no legends, no quality reports, no extra documents.
-9. The final output is a single structured JSON.
+速度、结构化和建模可执行性优先于制造质量报告的完整度。
 
-### Step 5: Fixed Output Coordinate System
-Use ONE fixed coordinate system for every part, and convert ALL hole centers, boss positions, and feature coordinates into it before output:
-- XY origin = center of the part's overall outline (零件整体外形中心)
-- Z = 0 = the part's bottom face (零件底面)
-- +X = right, +Y = up (top view), +Z = up
+## 3. 读取流程
 
-The final JSON MUST include:
+### 3.1 整图观察
+
+1. 在局部放大前，先完整观察整张工程图一次。
+2. 识别存在的视图：主视图、俯视图、侧视图、剖视图、局部放大图。
+3. 第一轮尽可能读取所有清晰的尺寸和标注；清晰印刷数值直接采信，不重新测量。
+4. 记录每条标注来自哪个视图，便于后续跨视图合并。
+
+### 3.2 只提取建模信息
+
+只提取会影响三维模型的信息，包括：
+
+- 总长、总宽、总高
+- 厚度、壳体壁厚
+- 线性尺寸、中心距
+- Ø 直径、R 圆角、C 倒角
+- 通孔、沉孔、沉头孔
+- 孔位、PCD 分布圆
+- 数量（2×、4×、6×……）
+- 对称、镜像、线性阵列、矩形阵列、圆周阵列
+
+### 3.3 默认忽略
+
+以下内容默认跳过，不做额外分析：
+
+- 标题栏
+- 材料
+- 表面粗糙度
+- 普通技术要求
+- 加工工艺说明
+- 不会改变三维几何结果的 GD&T
+
+## 4. 严格规则
+
+1. 图纸已有清晰数值标注时，**禁止**使用像素比例、轮廓测量、Hough、OpenCV 或其它方式重新估算。
+2. **禁止按图纸比例猜尺寸。**
+3. 禁止为了确认非关键内容反复裁剪、放大、OCR 或循环检查。
+4. 同一几何特征在多个视图中出现相同尺寸/标注时，视为**交叉确认**：
+   - 合并为一个 feature；
+   - `source_views` 记录全部来源视图；
+   - 提升 `confidence`；
+   - 不得因为重复标注产生 `unresolved`。
+   例如同一个凸台顶外圆 `C2×45°` 在两个视图出现，只输出一个 chamfer feature。
+5. 图纸未定义某项信息，但缺失该项**不会影响唯一三维建模结果**时：
+   - 对应字段设为 `null`；
+   - `required_for_modeling: false`；
+   - 停止继续分析。
+   例外：圆周阵列方向。如果图纸通过中心线、对称线等明确表达方向，必须输出该方向。
+6. 只有真正影响建模、且确实无法读取的信息才进入 `unresolved`。
+7. 尺寸闭合只允许使用图纸已经印刷的数值；禁止为了闭合而补尺寸。
+8. 禁止额外生成 bbox 标注图、HTML、图例、质量报告或其它文档。
+9. 最终输出只有一个结构化 JSON。
+
+## 5. 固定输出坐标系
+
+所有零件统一使用以下坐标系，并在输出前把孔中心、凸台位置和其它特征坐标全部转换进去：
+
+- XY 原点 = 零件整体外形中心
+- Z = 0 = 零件底面
+- +X = 向右
+- +Y = 俯视图向上
+- +Z = 向上
+
+最终 JSON 必须包含：
+
 ```json
 "coordinate_system": {
   "origin": "part_center_xy_bottom_z0",
@@ -67,17 +105,34 @@ The final JSON MUST include:
   "unit": "mm"
 }
 ```
-Never leave the downstream modeling side to guess the origin.
 
-Example: on a 160×100 base plate with hole centers 20 mm from all edges, the four hole centers must be output as `[-60,-30] [-60,30] [60,-30] [60,30]`.
+禁止把原点定义留给下游建模阶段猜测。
 
-### Step 6: Dimension Closure Check
-- Verify stated dimensions are mutually consistent (e.g. 总高 = 底板厚度 + 凸台高度; 总宽 = 2 × 孔中心距 + 直径).
-- Use ONLY numbers printed on the drawing. Do not add dimensions.
-- Status is one of: `"closed"` (consistent) | `"incomplete"` (stated values insufficient to verify) | `"conflict"` (stated values contradict each other).
+示例：160×100 底板，四个孔中心距四周边缘均为 20 mm，则四个孔中心必须输出为：
 
-### Step 7: Output Schema
-Always format the final result as a single JSON object wrapped in ```json ... ```:
+```text
+[-60,-30] [-60,30] [60,-30] [60,30]
+```
+
+## 6. 尺寸闭合检查
+
+只验证图纸已给数值之间是否自洽，例如：
+
+- 总高 = 底板厚度 + 凸台高度
+- 总宽 = 已标注的各宽度链之和
+- 孔中心距、对称关系、数量关系是否互相一致
+
+`dimension_closure.status` 只允许：
+
+- `"closed"`：已给数值足够且互相一致
+- `"incomplete"`：已给数值不足以确认闭合
+- `"conflict"`：图纸已给数值互相矛盾
+
+禁止自行添加尺寸来把状态变成 `closed`。
+
+## 7. 输出结构
+
+最终结果必须是一个 ```json ... ``` 包裹的 JSON 对象：
 
 ```json
 {
@@ -100,7 +155,7 @@ Always format the final result as a single JSON object wrapped in ```json ... ``
 }
 ```
 
-Every feature SHOULD carry:
+每个 feature 建议包含：
 
 ```json
 {
@@ -115,7 +170,7 @@ Every feature SHOULD carry:
 }
 ```
 
-Every pattern entry:
+每个 pattern 建议包含：
 
 ```json
 {
@@ -130,7 +185,12 @@ Every pattern entry:
 }
 ```
 
-**2D array semantics (strict):** a hole group with spacing in BOTH X and Y must NEVER be written as a single `linear` pattern. For a regular rectangular array output:
+### 7.1 二维阵列语义（强制）
+
+一个孔组如果同时在 X 和 Y 两个方向存在间距，禁止写成单一 `linear` pattern。
+
+规则矩形阵列应输出：
+
 ```json
 {
   "type": "rectangular",
@@ -140,9 +200,17 @@ Every pattern entry:
   "spacing_y": 60
 }
 ```
-If the array form cannot be clearly determined, keep `explicit_centers` with explicit coordinates instead of forcing a classification. `circular` keeps the existing format.
 
-**Circular pattern orientation (strict):** besides `count` / `pcd` / `angle`, the array orientation relative to the part coordinate system MUST be determined. When the drawing expresses hole orientation through centerlines, symmetry lines, or explicit geometric relations, read that alignment directly — this is NOT scale measurement and NOT dimension guessing. Example: 4×Ø6.6 on PCD Ø44 lying on the X/Y centerlines → output:
+如果无法明确判断阵列类型，保留 `explicit_centers` 的明确坐标，不强行分类。
+
+### 7.2 圆周阵列方向（强制）
+
+除了 `count` / `pcd` / `angle`，必须确定阵列相对零件坐标系的方向。
+
+如果图纸通过中心线、对称线或明确几何关系表达孔位方向，应直接读取这种对齐关系；这不属于比例测量，也不属于尺寸猜测。
+
+例如：4×Ø6.6，PCD Ø44，孔位落在 X/Y 中心线上：
+
 ```json
 {
   "type": "circular",
@@ -156,42 +224,54 @@ If the array form cannot be clearly determined, keep `explicit_centers` with exp
   "required_for_modeling": true
 }
 ```
-Rules:
-1. When the drawing clearly aligns the holes with a centerline / datum direction, MUST output the direction or `explicit_centers`.
-2. Do NOT drop a centerline alignment explicitly expressed in the drawing merely because there is no separate "0°" callout.
-3. Only when the drawing truly does not express the array rotation direction AND that direction does not affect the model may `start_angle_deg` be `null`.
-4. If the array rotation changes the final 3D model, `required_for_modeling` MUST be `true`.
-5. Never compute angles from pixel distances or ratios — read only explicit centerlines, symmetry lines, and horizontal/vertical geometric relations.
 
----
+规则：
 
-## Complex Contour & Detail Rules (mandatory for profile-first parts)
+1. 图纸明确把孔与中心线/基准方向对齐时，必须输出方向或 `explicit_centers`。
+2. 不得因为图上没有单独标注“0°”，就丢弃已经明确表达的中心线对齐关系。
+3. 只有图纸确实没有表达阵列旋转方向，且方向不会影响最终模型时，`start_angle_deg` 才允许为 `null`。
+4. 如果阵列旋转方向会改变最终三维模型，则 `required_for_modeling` 必须为 `true`。
+5. 禁止根据像素距离或比例计算角度；只能读取明确的中心线、对称线和水平/垂直几何关系。
 
-### Rule 1: Complex Contour Completeness Gate
-When the main view expresses a CONTINUOUS outer profile, it is FORBIDDEN to replace it with bounding primitives (e.g. rectangle + circle). The extracted geometry MUST uniquely reconstruct the contour:
-- Straight line segments
-- Arcs (radius, start/end angles, center)
-- Fillets / blends (R values)
-- Angled edges (degree, reference)
-- Tangency relations
-- Endpoint / intersection / tangent point locations
+## 8. 复杂轮廓与 DETAIL / SECTION 规则
 
-If any segment cannot be uniquely determined, that segment MUST go into `unresolved` with `required_for_modeling: true`. Never auto-simplify a complex profile into primitives.
+### 8.1 复杂轮廓完整性门禁
 
-### Rule 2: DETAIL / SECTION Priority
-DETAIL views and section views are HIGH-PRIORITY evidence for local geometry. When overview and DETAIL/SECTION describe the same location:
-- DETAIL/SECTION supplies: local contour, hole positions, depths, thicknesses, fillets/chamfers, local cutouts
-- Never ignore DETAIL/SECTION and guess local geometry from the main view scale
+当主视图表达一个**连续外轮廓**时，禁止用包络基本图元（例如“矩形 + 圆”）替代真实轮廓。
 
-### Rule 3: Cross-View Topology Consistency Check
-Before setting `dimension_closure.status = "closed"`, MUST verify:
-- Every hole center lies within the final solid material region
-- Every cutout does NOT remove a hole/boss that another view explicitly confirms exists
-- Main view contour, DETAIL, and SECTION do not contradict each other
-- Any contradiction goes into `unresolved` and status MUST be `"conflict"` or `"incomplete"` — never `"closed"` with unresolved conflicts
+输出必须足以唯一重建：
 
-### Rule 4: Profile-First Output Schema
-For profile-first parts, JSON MUST include a `profile` object describing the continuous outer contour:
+- 直线段
+- 圆弧（圆心、半径、起止角）
+- 圆角 / blend（R）
+- 斜边（角度、参考方向）
+- 相切关系
+- 端点 / 交点 / 切点位置
+
+任一轮廓段无法唯一确定时，必须加入 `unresolved`，并设置 `required_for_modeling: true`。禁止自动把复杂 profile 简化成基本图元。
+
+### 8.2 DETAIL / SECTION 优先
+
+DETAIL 和 SECTION 是局部几何的高优先级证据。
+
+当总览视图与 DETAIL / SECTION 描述同一位置时：
+
+- DETAIL / SECTION 用于确定局部轮廓、孔位、深度、厚度、圆角/倒角和局部切除；
+- 禁止忽略 DETAIL / SECTION，再根据主视图比例猜局部结构。
+
+### 8.3 跨视图拓扑一致性
+
+在把 `dimension_closure.status` 设为 `"closed"` 之前，必须确认：
+
+- 每个孔中心都位于最终实体材料区域内；
+- 每个切除不会把其它视图明确确认存在的孔/凸台完全删除；
+- 主视图轮廓、DETAIL 和 SECTION 之间没有拓扑矛盾；
+- 任何矛盾都必须加入 `unresolved`，状态只能是 `"conflict"` 或 `"incomplete"`，禁止带着矛盾输出 `"closed"`。
+
+### 8.4 Profile-First 输出结构
+
+对 Profile-First 零件，JSON 必须包含 `profile`：
+
 ```json
 "profile": {
   "plane": "XY",
@@ -203,22 +283,27 @@ For profile-first parts, JSON MUST include a `profile` object describing the con
   ]
 }
 ```
-Each segment must carry enough to reconstruct it. If exact segment coordinates cannot be determined from printed callouts, mark `required_for_modeling: true` + add to `unresolved`.
 
----
+每个 segment 必须提供足够信息用于重建。如果印刷标注不足以确定精确坐标，则把该段设为建模必需，并加入 `unresolved`。
 
-## Performance Rules
-1. Default: view the whole drawing exactly once.
-2. The first round MUST capture all modeling information possible.
-3. No per-dimension repeated cropping or confirmation.
-4. When text is clearly legible, trust the callout — do not perform pixel measurement.
-5. Only re-view a local region when it affects the unique modeling result AND genuinely cannot be read.
-6. When a second view confirms the same feature dimension, treat it as cross-confirmation — do not re-parse from scratch.
-7. No image beautification, redraw, HTML output, or bbox visualization.
-8. No manufacturing-quality analysis unrelated to 3D modeling.
-9. Prioritize speed and structured results; do not chase CTQ-report completeness.
+## 9. 性能规则
 
----
+1. 默认整张图只完整观察一次。
+2. 第一轮必须尽可能提取全部建模信息。
+3. 禁止针对每个尺寸反复裁剪或确认。
+4. 文本清晰可读时直接信任标注，禁止像素测量。
+5. 只有某个局部确实影响唯一建模结果、且第一轮无法读取时，才允许重新查看该局部。
+6. 第二个视图确认同一特征尺寸时，只做交叉确认，不从头重新解析。
+7. 不做图片美化、重绘、HTML 输出或 bbox 可视化。
+8. 不做与三维建模无关的制造质量分析。
+9. 优先保证速度和结构化结果，不追求与建模无关的 CTQ 报告完整度。
 
-## Reference
-See `references/nx-drawing-rules.md` for quick recognition rules of view layout, callout symbols, patterns, and dimension closure. See `examples/example-output.json` for a complete worked example.
+## 10. 参考
+
+快速识别视图布局、标注符号、阵列和尺寸闭合规则见：
+
+`references/nx-drawing-rules.md`
+
+完整输出示例见：
+
+`examples/example-output.json`

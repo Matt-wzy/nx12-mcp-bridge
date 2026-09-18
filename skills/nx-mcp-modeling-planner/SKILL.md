@@ -1,9 +1,9 @@
 ---
 name: nx-mcp-modeling-planner
-description: 作者：抖音 无趣。Use when a complete, unambiguous set of 3D modeling dimensions or structured JSON must be turned into a reliable, pre-planned call sequence for the existing NX_MCP tools (Siemens NX). Plans the full feature order up front (base solid → additive features → unite → shell → pattern/mirror → holes → blends/chamfers → validation → save/STEP), enforces edge/face index freshness, avoids boolean retries and deep STEP audits, and outputs a FAST/DIAGNOSTIC operation plan. Does NOT do image recognition, OCR, or drawing reading; does NOT modify NX_MCP-Enhanced.
+description: 作者：抖音 无趣。用于把完整、无歧义的三维建模尺寸或结构化 JSON 转换为可靠、预先规划的 NX_MCP 建模调用序列；一次确定完整特征顺序，强制边/面索引刷新与稳定选择，默认输出 FAST/DIAGNOSTIC 建模计划。不负责图像识别、OCR 或工程图读取，也不修改 NX_MCP-Enhanced。
 ---
 
-# NX MCP Modeling Planner
+# NX MCP 建模规划器
 
 ## 1. 适用范围与边界
 

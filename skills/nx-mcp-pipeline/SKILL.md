@@ -1,6 +1,6 @@
 ---
 name: nx-mcp-pipeline
-description: 作者：抖音 无趣。Use when a user uploads a 2D mechanical engineering drawing and gives a single start instruction such as “开始建模” — this skill is the top-level orchestrator that chains three frozen stages end to end without user confirmation: A nx-engineering-drawing-reader (drawing → structured modeling JSON), B nx-mcp-modeling-planner (JSON → FAST modeling plan → executable plan via runner build/check), C nx-mcp-plan-runner (executable plan → Siemens NX → PRT + STEP). Enforces strict stage-entry gates, keeps an internal pipeline-state.json, and reports the final result only in natural Chinese. Orchestration only: it never parses the drawing, never reinterprets dimensions, never generates modeling operations, never calls NX_MCP tools itself, and never modifies the frozen stages.
+description: 作者：抖音 无趣。用于用户上传二维机械工程图并发送“开始建模”等启动指令时，作为顶层总控自动串联 A 工程图读取、B 建模规划、C Plan Runner 三个冻结阶段；执行严格门禁、维护 pipeline-state.json，并只用自然中文汇报最终结果。总控只负责编排，不解析图纸、不重新解释尺寸、不生成建模 operation、不直接调用 NX_MCP tools，也不修改冻结阶段。
 ---
 
 # nx-mcp-pipeline — 总控编排器
@@ -81,7 +81,7 @@ C nx-mcp-plan-runner                executable plan → Siemens NX → PRT + STE
 
 ## 6. 阶段 C 接口
 
-### 6.0 Preflight（Runner 启动前，唯一允许的环境准备）
+### 6.0 预检（Preflight，Runner 启动前唯一允许的环境准备）
 在真正调用 `runner.py run` 之前，总控**只允许**做以下只读/环境准备，且这些都属于 preflight，不属于 repair：
 - 检查 NX 进程是否已运行；未运行时启动 NX
 - 等待并验证 C# Loader 的 named pipe `nx_mcp_loader` 就绪
@@ -116,7 +116,7 @@ preflight 只处理"Runner 尚未正式开始建模"的环境问题。一旦 `ru
    - Runner 一次性连续执行全部 operation，等待其完整报告
 3. 禁止：Agent 人工逐步骤执行 NX_MCP、临时生成专用 Python 驱动、修改 `runner.py`、`step == N` 特判。
 
-### 6.2 Fail-fast（最高优先级，强制执行）
+### 6.2 快速失败（Fail-fast，最高优先级，强制执行）
 - Runner 任意 operation 返回失败（`status=failed` / exit≠0 / `failed_step` 非空），即 Runner failed = Pipeline failed，整个 Pipeline **立即停止**。
 - Runner 一旦进入正式建模阶段，任何 modeling step 失败都必须立即终止本次 Pipeline，**不得尝试"修一下继续"**。
 - 失败后**严格禁止**以下任一行为：
