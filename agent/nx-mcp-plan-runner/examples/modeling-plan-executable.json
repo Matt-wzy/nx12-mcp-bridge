@@ -1077,8 +1077,11 @@
           "face_type": "Conical"
         },
         "holes_reasonable": {
-          "face_type": "Cylindrical",
-          "note": "只做数量合理性，不逐面核对"
+          "face_type": [
+            "Swept",
+            "Cylindrical"
+          ],
+          "note": "孔侧面兼容 Swept/Cylindrical，只做数量合理性辅助"
         }
       },
       "expectation": {
@@ -1091,8 +1094,8 @@
         "boss_tops_count": 4,
         "countersink_cones_count": 2,
         "holes_reasonable_count_range": [
-          4,
-          12
+          15,
+          28
         ]
       },
       "topology_changes": false,
@@ -1168,7 +1171,7 @@
     },
     {
       "check": "C. 关键结构：法兰顶部 Z=56、4 个凸台存在、2 个沉头锥面存在、关键孔数量合理",
-      "how": "nx_list_faces：Planar centroid(0,0,56) 计 1；Planar centroid z≈20 计 4；Conical 计 2；Cylindrical 数量 15..28 合理性",
+      "how": "nx_list_faces：Planar centroid(0,0,56) 计 1；Planar centroid z≈20 计 4；Conical 计 2；Swept/Cylindrical 数量 15..28 合理性",
       "expect": "计数达标；面积仅辅助（法兰顶环面≈3782.48、凸台顶环面≈220.26，±5%，不作为单点失败条件）",
       "fail_action": "关键特征缺失才进入 DIAGNOSTIC"
     },
@@ -1187,28 +1190,16 @@
   ],
   "fallbacks": [
     {
-      "trigger": "nx_unite（壳体+法兰）报 Boolean 不相交",
-      "fix": "先 nx_list_bodies 确认两 body 均存在且 id 未失效；确认后以相同参数重试一次（该组合上次已验证成功）。仍失败则进入 DIAGNOSTIC，禁止反复重试。"
+      "trigger": "edge/face selection_criteria 匹配失败或数量不符",
+      "fix": "当前 attempt 立即停止；仅当根因明确且不改变几何语义时，允许生成 repair plan v1，经 build/check 后从干净状态完整重跑一次。"
     },
     {
-      "trigger": "nx_linear_pattern 方向与预期相反",
-      "fix": "reverse=true 重试一次。"
+      "trigger": "Boolean、尺寸、能力边界或其它建模错误",
+      "fix": "直接失败并上报；禁止在 dirty model 上 nx_undo 后继续，禁止手动补建。"
     },
     {
-      "trigger": "nx_mirror / nx_circular_pattern 返回实例数不符",
-      "fix": "核对 count 语义（count 含原始）；用 nx_list_bodies 核对实例数后再 Unite。"
-    },
-    {
-      "trigger": "孔类操作报 body 选择错误",
-      "fix": "nx_list_bodies 取当前 body_main 实际 id 后重试一次。"
-    },
-    {
-      "trigger": "边匹配数量不足（如 R6 只找到 3 条）",
-      "fix": "用 bbox/方向/长度复核，选取几何完全匹配的边；禁止按 index 猜测补齐。"
-    },
-    {
-      "trigger": "FAST 验证失败",
-      "fix": "仅当 Body 数量错误 / Bounding Box 明显错误 / 关键特征缺失 / Save 或 STEP 失败时才进入 DIAGNOSTIC；单个 face area 与理论值细微差异（如法兰顶环面 3782.48±5%）不进入 DIAGNOSTIC。进入 DIAGNOSTIC 后：nx_list_faces / nx_list_edges 复核关键面与边，定位失败步骤后用 nx_undo 回退最近一次操作并最小修正，禁止无脑重跑全流程。"
+      "trigger": "repair attempt 再次失败",
+      "fix": "最终失败；禁止第三次执行。"
     }
   ]
 }
