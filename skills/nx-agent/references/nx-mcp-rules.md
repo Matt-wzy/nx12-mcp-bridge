@@ -1,4 +1,4 @@
-# NX_MCP 已验证工具规则（v2.1.1 / 32 certified tools）
+# NX_MCP 已验证工具规则（32 certified tools）
 
 > 本文件为 `nx-agent` 建模规划模块 的规则底稿。只描述**已冻结、已验证**的
 > 32 个 certified 工具（`src/nx_mcp/certified.py` 的 `CERTIFIED_TOOL_NAMES`）。
