@@ -77,6 +77,10 @@ import 路径；总控应使用其中的 `python_exe` 启动 Runner。
 
 ## Controlled Self-Healing 门禁
 
+已有零件计划支持安全的单实体绑定：`nx_open_part` 后紧跟
+`nx_list_bodies` 且 `expectation.body_count=1`，Runner 才会把唯一 body
+绑定给后续逻辑名；多实体不会自动猜目标 body。
+
 Runner 不自行修改 plan，但会机器校验第二次 repair：
 
 - `--repair-attempt 1`
