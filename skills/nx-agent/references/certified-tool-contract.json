@@ -3,282 +3,37 @@
   "frozen_at": "2026-09-18",
   "source": "nx-mcp-plan-runner runner.py TOOL_PARAMS（由 NX_MCP-Enhanced certified.py 派生），冻结为 Planner 参数契约；仅含 Planner 生成 plan 所需签名，不含实现代码",
   "tools": {
-    "nx_status": {
-      "required": [],
-      "optional": [],
-      "planner_note": "状态检查；plan 中一般不用"
-    },
-    "nx_create_part": {
-      "required": [
-        "path"
-      ],
-      "optional": [
-        "units"
-      ],
-      "planner_note": "path 为 workspace 相对路径（如 xxx.prt）；units 显式传 mm"
-    },
-    "nx_open_part": {
-      "required": [
-        "path"
-      ],
-      "optional": [],
-      "planner_note": "打开已有零件；plan 中一般不用"
-    },
-    "nx_save_part": {
-      "required": [],
-      "optional": [],
-      "planner_note": "无参数；Runner 自动为其声明 retry {max:1, if_error_contains:[撤消]}"
-    },
-    "nx_close_part": {
-      "required": [],
-      "optional": [
-        "save"
-      ],
-      "planner_note": "plan 中一般不用"
-    },
-    "nx_export_step": {
-      "required": [
-        "path"
-      ],
-      "optional": [],
-      "planner_note": "path 为 workspace 相对路径（如 xxx.step）；FAST 收尾验证文件非空"
-    },
-    "nx_list_sketches": {
-      "required": [],
-      "optional": [],
-      "planner_note": "一般不用"
-    },
-    "nx_list_bodies": {
-      "required": [],
-      "optional": [],
-      "planner_note": "FAST 验证 Body 数量（expectation.body_count）"
-    },
-    "nx_list_features": {
-      "required": [],
-      "optional": [],
-      "planner_note": "一般不用"
-    },
-    "nx_list_edges": {
-      "required": [
-        "body_id"
-      ],
-      "optional": [],
-      "planner_note": "只查边；selection_criteria 按边几何筛选；bbox 仅 Linear 边精确，direction 仅 Linear；完整圆报 Elliptical"
-    },
-    "nx_list_faces": {
-      "required": [
-        "body_id"
-      ],
-      "optional": [],
-      "planner_note": "只查面；selection_criteria 按 face_type/centroid/centroid_z/centroid_radius/normal/area 筛选"
-    },
-    "nx_create_sketch": {
-      "required": [],
-      "optional": [
-        "plane",
-        "name"
-      ],
-      "planner_note": "plane=XY|XZ|YZ；局部二维坐标映射：XY→(X,Y)、XZ→(X,Z)、YZ→(Y,Z)；返回 object id 绑定逻辑名"
-    },
-    "nx_sketch_line": {
-      "required": [
-        "sketch_id",
-        "start",
-        "end"
-      ],
-      "optional": [],
-      "planner_note": "start/end 为 {x,y}"
-    },
-    "nx_sketch_rectangle": {
-      "required": [
-        "sketch_id",
-        "corner1",
-        "corner2"
-      ],
-      "optional": [],
-      "planner_note": "corner1/corner2 为对角 {x,y}；Runner 自动适配为中心+宽高（见 runner-contract §7）"
-    },
-    "nx_sketch_circle": {
-      "required": [
-        "sketch_id",
-        "center",
-        "diameter"
-      ],
-      "optional": [],
-      "planner_note": "center 为 {x,y}，diameter 数值"
-    },
-    "nx_sketch_arc": {
-      "required": [
-        "sketch_id",
-        "center",
-        "radius"
-      ],
-      "optional": [
-        "start_angle",
-        "end_angle"
-      ],
-      "planner_note": "角度为度数；一般不用"
-    },
-    "nx_finish_sketch": {
-      "required": [
-        "sketch_id"
-      ],
-      "optional": [],
-      "planner_note": "挤出前必须结束草图"
-    },
-    "nx_extrude": {
-      "required": [
-        "sketch_id",
-        "distance"
-      ],
-      "optional": [
-        "reverse",
-        "start_offset",
-        "operation",
-        "target_body_id"
-      ],
-      "planner_note": "operation=create|subtract；subtract 必须带 target_body_id；reverse=false：XY→+Z、XZ→+Y、YZ→+X；start_offset 沿对应挤出轴；区域模式（同心双圆）得环形"
-    },
-    "nx_hole": {
-      "required": [
-        "body_id",
-        "center",
-        "diameter",
-        "depth"
-      ],
-      "optional": [
-        "start_offset"
-      ],
-      "planner_note": "圆草图+布尔减；Z 从 start_offset 到 start_offset+depth；通孔 depth=总高、start_offset=0"
-    },
-    "nx_counterbore_hole": {
-      "required": [
-        "body_id",
-        "center",
-        "hole_diameter",
-        "hole_depth",
-        "counterbore_diameter",
-        "counterbore_depth"
-      ],
-      "optional": [
-        "start_offset"
-      ],
-      "planner_note": "约束 counterbore_diameter>hole_diameter 且 counterbore_depth<hole_depth；沉孔段从 start_offset 起"
-    },
-    "nx_countersink_hole": {
-      "required": [
-        "body_id",
-        "center",
-        "hole_diameter",
-        "hole_depth",
-        "countersink_diameter"
-      ],
-      "optional": [
-        "countersink_angle",
-        "start_offset"
-      ],
-      "planner_note": "约束 countersink_diameter>hole_diameter；锥体大端在 start_offset 底面"
-    },
-    "nx_shell": {
-      "required": [
-        "body_id",
-        "thickness",
-        "remove_face_index"
-      ],
-      "optional": [
-        "inward"
-      ],
-      "planner_note": "remove_face_index 来自 nx_list_faces selection（单元素自动解包为标量）；inward=true 保外尺寸；Shell 前必须 list_faces 按几何确认"
-    },
-    "nx_edge_blend": {
-      "required": [
-        "body_id",
-        "radius"
-      ],
-      "optional": [
-        "edge_indices"
-      ],
-      "planner_note": "edge_indices 来自紧邻的 nx_list_edges selection；走 raw 通道，expectation.done=N 判定；NX 拒绝的边自动跳过"
-    },
-    "nx_chamfer": {
-      "required": [
-        "body_id",
-        "offset"
-      ],
-      "optional": [
-        "edge_indices"
-      ],
-      "planner_note": "对称 offset 倒角；edge_indices 来自紧邻的 nx_list_edges selection；expectation.done=N"
-    },
-    "nx_unite": {
-      "required": [
-        "target_body_id",
-        "tool_body_ids"
-      ],
-      "optional": [],
-      "planner_note": "tool_body_ids 为列表；能批量合并就一次 Unite；target 绑定最早未绑定实体"
-    },
-    "nx_revolve": {
-      "required": [
-        "sketch_id",
-        "axis_start",
-        "axis_end"
-      ],
-      "optional": [
-        "angle",
-        "reverse"
-      ],
-      "planner_note": "旋转体；axis_start/axis_end 为所属 sketch 的局部 {x,y}；一般不用"
-    },
-    "nx_mirror": {
-      "required": [
-        "body_id",
-        "plane"
-      ],
-      "optional": [
-        "offset"
-      ],
-      "planner_note": "plane=YZ|XZ|XY；对称结构先建一侧再 Mirror；返回 object 绑定副本"
-    },
-    "nx_linear_pattern": {
-      "required": [
-        "body_id",
-        "direction",
-        "count",
-        "spacing"
-      ],
-      "optional": [
-        "reverse"
-      ],
-      "planner_note": "count 含原始实体；spacing 为相邻实例间距；pattern 只作用于 body；pattern 后如需 Unite 先完成 pattern 再一次 Unite"
-    },
-    "nx_circular_pattern": {
-      "required": [
-        "body_id",
-        "axis",
-        "center",
-        "count",
-        "angle"
-      ],
-      "optional": [
-        "reverse"
-      ],
-      "planner_note": "count 含原始实体；360° 整圆均匀分布不重复末位；axis 为 {x,y} 方向"
-    },
-    "nx_undo": {
-      "required": [],
-      "optional": [],
-      "planner_note": "失败最小修正用；一次回退一步"
-    },
-    "nx_fit_view": {
-      "required": [],
-      "optional": [],
-      "planner_note": "一般不用"
-    },
-    "nx_release": {
-      "required": [],
-      "optional": [],
-      "planner_note": "收尾释放桥接；plan 中一般不用"
-    }
+    "nx_status": { "required": [], "optional": [], "planner_note": "状态检查；plan 中一般不用" },
+    "nx_create_part": { "required": ["path"], "optional": ["units"], "planner_note": "path 为 workspace 相对路径（如 xxx.prt）；units 显式传 mm" },
+    "nx_open_part": { "required": ["path"], "optional": [], "planner_note": "打开已有零件；plan 中一般不用" },
+    "nx_save_part": { "required": [], "optional": [], "planner_note": "无参数；Runner 自动为其声明 retry {max:1, if_error_contains:[撤消]}" },
+    "nx_close_part": { "required": [], "optional": ["save"], "planner_note": "plan 中一般不用" },
+    "nx_export_step": { "required": ["path"], "optional": [], "planner_note": "path 为 workspace 相对路径（如 xxx.step）；FAST 收尾验证文件非空" },
+    "nx_list_sketches": { "required": [], "optional": [], "planner_note": "一般不用" },
+    "nx_list_bodies": { "required": [], "optional": [], "planner_note": "FAST 验证 Body 数量（expectation.body_count）" },
+    "nx_list_features": { "required": [], "optional": [], "planner_note": "一般不用" },
+    "nx_list_edges": { "required": ["body_id"], "optional": [], "planner_note": "只查边；selection_criteria 按边几何筛选；bbox 仅 Linear 边精确，direction 仅 Linear；完整圆报 Elliptical" },
+    "nx_list_faces": { "required": ["body_id"], "optional": [], "planner_note": "只查面；selection_criteria 按 face_type/centroid/centroid_z/centroid_radius/normal/area 筛选" },
+    "nx_create_sketch": { "required": [], "optional": ["plane", "name"], "planner_note": "plane=XY|XZ|YZ；局部二维坐标映射：XY→(X,Y)、XZ→(X,Z)、YZ→(Y,Z)；返回 object id 绑定逻辑名" },
+    "nx_sketch_line": { "required": ["sketch_id", "start", "end"], "optional": [], "planner_note": "start/end 为 {x,y}" },
+    "nx_sketch_rectangle": { "required": ["sketch_id", "corner1", "corner2"], "optional": [], "planner_note": "corner1/corner2 为对角 {x,y}；Runner 自动适配为中心+宽高（见 runner-contract §7）" },
+    "nx_sketch_circle": { "required": ["sketch_id", "center", "diameter"], "optional": [], "planner_note": "center 为 {x,y}，diameter 数值" },
+    "nx_sketch_arc": { "required": ["sketch_id", "center", "radius"], "optional": ["start_angle", "end_angle"], "planner_note": "角度为度数；一般不用" },
+    "nx_finish_sketch": { "required": ["sketch_id"], "optional": [], "planner_note": "挤出前必须结束草图" },
+    "nx_extrude": { "required": ["sketch_id", "distance"], "optional": ["reverse", "start_offset", "operation", "target_body_id"], "planner_note": "operation=create|subtract；subtract 必须带 target_body_id；reverse=false：XY→+Z、XZ→+Y、YZ→+X；start_offset 沿对应挤出轴；区域模式（同心双圆）得环形" },
+    "nx_hole": { "required": ["body_id", "center", "diameter", "depth"], "optional": ["start_offset"], "planner_note": "圆草图+布尔减；Z 从 start_offset 到 start_offset+depth；通孔 depth=总高、start_offset=0" },
+    "nx_counterbore_hole": { "required": ["body_id", "center", "hole_diameter", "hole_depth", "counterbore_diameter", "counterbore_depth"], "optional": ["start_offset"], "planner_note": "约束 counterbore_diameter>hole_diameter 且 counterbore_depth<hole_depth；沉孔段从 start_offset 起" },
+    "nx_countersink_hole": { "required": ["body_id", "center", "hole_diameter", "hole_depth", "countersink_diameter"], "optional": ["countersink_angle", "start_offset"], "planner_note": "约束 countersink_diameter>hole_diameter；锥体大端在 start_offset 底面" },
+    "nx_shell": { "required": ["body_id", "thickness", "remove_face_index"], "optional": ["inward"], "planner_note": "remove_face_index 来自 nx_list_faces selection（单元素自动解包为标量）；inward=true 保外尺寸；Shell 前必须 list_faces 按几何确认" },
+    "nx_edge_blend": { "required": ["body_id", "radius"], "optional": ["edge_indices"], "planner_note": "edge_indices 来自紧邻的 nx_list_edges selection；走 raw 通道，expectation.done=N 判定；NX 拒绝的边自动跳过" },
+    "nx_chamfer": { "required": ["body_id", "offset"], "optional": ["edge_indices"], "planner_note": "对称 offset 倒角；edge_indices 来自紧邻的 nx_list_edges selection；expectation.done=N" },
+    "nx_unite": { "required": ["target_body_id", "tool_body_ids"], "optional": [], "planner_note": "tool_body_ids 为列表；能批量合并就一次 Unite；target 绑定最早未绑定实体" },
+    "nx_revolve": { "required": ["sketch_id", "axis_start", "axis_end"], "optional": ["angle", "reverse"], "planner_note": "旋转体；axis_start/axis_end 为所属 sketch 的局部 {x,y}；一般不用" },
+    "nx_mirror": { "required": ["body_id", "plane"], "optional": ["offset"], "planner_note": "plane=YZ|XZ|XY；对称结构先建一侧再 Mirror；返回 object 绑定副本" },
+    "nx_linear_pattern": { "required": ["body_id", "direction", "count", "spacing"], "optional": ["reverse"], "planner_note": "count 含原始实体；spacing 为相邻实例间距；pattern 只作用于 body；pattern 后如需 Unite 先完成 pattern 再一次 Unite" },
+    "nx_circular_pattern": { "required": ["body_id", "axis", "center", "count", "angle"], "optional": ["reverse"], "planner_note": "count 含原始实体；360° 整圆均匀分布不重复末位；axis 为 {x,y} 方向" },
+    "nx_undo": { "required": [], "optional": [], "planner_note": "失败最小修正用；一次回退一步" },
+    "nx_fit_view": { "required": [], "optional": [], "planner_note": "一般不用" },
+    "nx_release": { "required": [], "optional": [], "planner_note": "收尾释放桥接；plan 中一般不用" }
   }
 }
