@@ -1,21 +1,19 @@
 # NX MCP — Enhanced Edition (V2)
 
-> **Original project**: [DreamEnding/NX_MCP](https://github.com/DreamEnding/NX_MCP) — MIT License.
-> This is an **enhanced edition** that adds a C# resident NXOpen backend
-> (`NX_MCP_Loader`), extended modeling tools, and an integrated Agent Pack for
-> drawing-to-NX automation.
+> **原始项目**：[DreamEnding/NX_MCP](https://github.com/DreamEnding/NX_MCP) — MIT License.
+> 本项目为 **增强版**，在原项目基础上增加了 C# 常驻 NXOpen 后端
+>（`NX_MCP_Loader`）、扩展建模工具，以及用于“二维工程图 → NX 自动建模”的一体化 Agent Pack。
 
 作者：抖音 无趣
 
-NX MCP is a local Model Context Protocol server for Siemens NX automation.
-Everything runs on your own machine; no cloud service is involved.
+NX MCP 是一套本地运行的 Siemens NX 自动化系统，可通过 Agent 自动读取二维机械工程图、生成建模计划并驱动 Siemens NX 完成建模。所有组件均在本机运行，不依赖云端服务。
 
 ---
 
-## Recommended architecture (V2)
+## 推荐架构（V2）
 
 ```text
-Doubao / Agent Pack
+Agent
   -> Drawing Reader
   -> Modeling Planner
   -> Plan Runner
@@ -27,9 +25,8 @@ Doubao / Agent Pack
   -> Siemens NX
 ```
 
-The resident Loader auto-loads at NX startup, so the normal flow does not need
-`Alt+F8` or a Journal. `NX_MCP_BACKEND=auto` prefers the Loader and falls back
-to the legacy Python bridge only when needed.
+常驻 Loader 会在 NX 启动时自动加载，正常使用无需 `Alt+F8` 或手动运行 Journal。
+`NX_MCP_BACKEND=auto` 默认优先使用 Loader，仅在 Loader 不可用时回退到旧版 Python bridge。
 
 ---
 
