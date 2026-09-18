@@ -84,10 +84,27 @@ C nx-mcp-plan-runner                executable plan → Siemens NX → PRT + STE
 ### 6.0 Preflight（Runner 启动前，唯一允许的环境准备）
 在真正调用 `runner.py run` 之前，总控**只允许**做以下只读/环境准备，且这些都属于 preflight，不属于 repair：
 - 检查 NX 进程是否已运行；未运行时启动 NX
-- 等待 Loader named pipe 就绪
+- 等待并验证 C# Loader 的 named pipe `nx_mcp_loader` 就绪
 - 检查 Python 解释器（NX_MCP-Enhanced venv）是否存在可调用
 - 检查 `runner.py`、executable plan 文件存在且非空
 - 检查 workspace 目录存在
+
+**Loader 就绪判定（强制，不得自行换成其它检测方式）：**
+1. Resident C# Loader 的真实就绪信号是 named pipe `nx_mcp_loader` 可连接并能返回有效响应。
+2. 优先使用当前 NX_MCP-Enhanced 仓库中的 `loader/nx_client.ps1`：
+   ```powershell
+   powershell -NoProfile -ExecutionPolicy Bypass -File "<repo>\loader\nx_client.ps1" -Cmd nx_status
+   ```
+   返回包含 `CONNECTED`，且响应 JSON 中 `"ok":true`、`"ready":true` 时，立即判定 Loader 已就绪并进入 C。
+   也允许使用 `-Cmd ping`，收到 `pong` 即视为 named pipe 已就绪。
+3. **禁止使用 `%LOCALAPPDATA%\nx-mcp\bridge.json` 判断 resident Loader 是否加载。**
+   该文件属于旧版 Python visual bridge 的 descriptor；在当前推荐的 C# resident Loader 模式下它可以始终不存在。
+   **bridge.json 不存在 ≠ Loader 未加载，绝不能因此要求用户再次重启 NX。**
+4. 如果 named pipe 探测失败：
+   - NX 未运行 → 启动 NX，等待界面完成加载后重试 named pipe；
+   - NX 已运行 → 只读检查 `%UGII_USER_DIR%\startup\NX_MCP_Loader.dll` 和 `%USERPROFILE%\NX_MCP_WORKSPACE\nx_mcp_loader.log`，然后再次探测 named pipe；
+   - 不允许仅因为 `bridge.json` 缺失进入重启循环。
+5. 同一次任务中，只有在 NX 确实是在 Loader 安装/环境变量设置之前启动、且 named pipe 探测失败时，才允许要求一次重启；重启后必须用 named pipe 结果决定是否继续。
 
 preflight 只处理"Runner 尚未正式开始建模"的环境问题。一旦 `runner.py run` 已启动并进入建模阶段，preflight 不再适用。
 
