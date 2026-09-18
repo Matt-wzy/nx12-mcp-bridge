@@ -140,7 +140,7 @@ python runner.py run <executable-plan.json> [--workspace DIR] [--report out.json
   - `normal` 或 `benchmark` 模式由本次任务决定（默认 `normal`；仅当任务明确要求对测试件安全覆盖时用 `benchmark` + `--allow-overwrite`）
   - Runner 一次性连续执行全部 operation，等待完整报告
 - 禁止：
-  - 豆包人工逐步骤执行 NX_MCP
+  - Agent 人工逐步骤执行 NX_MCP
   - 临时生成专用 Python 驱动
   - 修改 `runner.py`
   - `step == N` 特判

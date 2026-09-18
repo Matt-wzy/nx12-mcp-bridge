@@ -25,13 +25,13 @@ Runner 的安装。正常用户不需要再单独执行 `install-agent.ps1`。
 多 Profile 环境可手动指定：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -DoubaoProfile "Profile 7"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AgentProfile "Profile 7"
 ```
 
 ## 使用
 
 1. 安装完成后启动 / 重启 Siemens NX。
-2. 新开一个豆包对话。
+2. 新开一个Agent 对话。
 3. 上传二维机械工程图。
 4. 输入：
 

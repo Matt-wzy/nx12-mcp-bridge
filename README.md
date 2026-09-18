@@ -79,10 +79,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 如果存在多个 Agent Profile，可手动指定：
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -DoubaoProfile "Profile 7"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AgentProfile "Profile 7"
 ```
 
-> 注：`-DoubaoProfile` 是当前安装脚本中的兼容参数名，仅用于指定本机 Profile。
+> 注：`-AgentProfile` 是当前安装脚本中的兼容参数名，仅用于指定本机 Profile。
 
 如果安装前 Siemens NX 已经处于运行状态，安装完成后需要重启一次 NX，
 让新进程读取 `UGII_USER_DIR` 并自动加载新部署的 Loader。

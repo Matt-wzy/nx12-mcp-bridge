@@ -4,7 +4,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$DoubaoProfile = "",
+    [string]$AgentProfile = "",
     [string]$RepoRoot = "",
     [string]$PythonExe = "",
     [switch]$SkipTests
@@ -37,57 +37,77 @@ if (-not (Test-Path (Join-Path $runnerSource "runner.py"))) {
 Write-Host "[仓库] $RepoRoot"
 
 # ---------------------------------------------------------------
-# 1. 检测 Doubao Profile
+# 1. 自动发现 Agent Profile / Skill 工作区
 # ---------------------------------------------------------------
-$doubaoRoot = Join-Path $env:LOCALAPPDATA "Doubao\User Data"
-if (-not (Test-Path $doubaoRoot)) {
-    throw "未找到 Doubao User Data 目录: $doubaoRoot。请先安装并启动一次豆包电脑版。"
-}
+# 不绑定任何具体 Agent 客户端名称。
+# 通过通用目录结构定位：
+#   <App>\User Data\<Profile>\<runtime>\agent_mode\workspace\.user_skills
+function Find-AgentSkillTargets {
+    param([string]$RequestedProfile)
 
-function Get-UserSkillsPath {
-    param([string]$ProfileName)
-    $profileDir = Join-Path $doubaoRoot $ProfileName
-    if (-not (Test-Path $profileDir)) { return $null }
-    return (Join-Path $profileDir ".doubao\agent_mode\workspace\.user_skills")
-}
-
-$skillRoot = $null
-if (-not [string]::IsNullOrWhiteSpace($DoubaoProfile)) {
-    $skillRoot = Get-UserSkillsPath -ProfileName $DoubaoProfile
-    if (-not $skillRoot) {
-        throw "指定的 Doubao Profile 不存在: $DoubaoProfile"
-    }
-    Write-Host "[Profile] 手动指定: $DoubaoProfile"
-}
-else {
-    $dirs = Get-ChildItem -Path $doubaoRoot -Directory -Force -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -eq "Default" -or $_.Name -like "Profile*" }
-
-    if (-not $dirs -or $dirs.Count -eq 0) {
-        throw "未在 $doubaoRoot 中找到 Default / Profile *"
+    $scanRoots = @()
+    if (-not [string]::IsNullOrWhiteSpace($env:LOCALAPPDATA)) { $scanRoots += $env:LOCALAPPDATA }
+    if (-not [string]::IsNullOrWhiteSpace($env:APPDATA) -and $env:APPDATA -ne $env:LOCALAPPDATA) {
+        $scanRoots += $env:APPDATA
     }
 
-    # 优先使用已经存在 .user_skills 的 Profile；否则选择最近使用的 Profile 并创建目录。
-    $withSkills = @()
-    foreach ($d in $dirs) {
-        $candidate = Get-UserSkillsPath -ProfileName $d.Name
-        if ($candidate -and (Test-Path $candidate)) {
-            $withSkills += $d
+    $targets = @()
+    foreach ($scanRoot in ($scanRoots | Select-Object -Unique)) {
+        $appDirs = Get-ChildItem -Path $scanRoot -Directory -Force -ErrorAction SilentlyContinue
+        foreach ($appDir in $appDirs) {
+            $userData = Join-Path $appDir.FullName "User Data"
+            if (-not (Test-Path $userData)) { continue }
+
+            $profiles = Get-ChildItem -Path $userData -Directory -Force -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -eq "Default" -or $_.Name -like "Profile*" }
+
+            foreach ($profileDir in $profiles) {
+                if (-not [string]::IsNullOrWhiteSpace($RequestedProfile) -and
+                    $profileDir.Name -ne $RequestedProfile) {
+                    continue
+                }
+
+                # runtime 目录名由客户端自己决定；这里不写死产品名。
+                $runtimeDirs = Get-ChildItem -Path $profileDir.FullName -Directory -Force -ErrorAction SilentlyContinue
+                foreach ($runtimeDir in $runtimeDirs) {
+                    $workspace = Join-Path $runtimeDir.FullName "agent_mode\workspace"
+                    if (-not (Test-Path $workspace)) { continue }
+
+                    $targets += [PSCustomObject]@{
+                        ProfileName = $profileDir.Name
+                        ProfilePath = $profileDir.FullName
+                        Workspace   = $workspace
+                        SkillRoot   = Join-Path $workspace ".user_skills"
+                        LastWrite   = $profileDir.LastWriteTime
+                    }
+                }
+            }
         }
     }
-
-    if ($withSkills.Count -gt 0) {
-        $chosenDir = $withSkills | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        Write-Host "[Profile] 使用最近的有效 Skill Profile: $($chosenDir.Name)"
-    }
-    else {
-        $chosenDir = $dirs | Sort-Object LastWriteTime -Descending | Select-Object -First 1
-        Write-Host "[Profile] 尚无 .user_skills，选择最近使用的 Profile 并初始化: $($chosenDir.Name)"
-    }
-    $skillRoot = Get-UserSkillsPath -ProfileName $chosenDir.Name
+    return $targets
 }
 
+$candidates = @(Find-AgentSkillTargets -RequestedProfile $AgentProfile)
+if ($candidates.Count -eq 0) {
+    if (-not [string]::IsNullOrWhiteSpace($AgentProfile)) {
+        throw "未找到指定 Agent Profile 的 Skill 工作区: $AgentProfile"
+    }
+    throw "未找到 Agent Skill 工作区。请先安装并启动一次支持本地 Agent Skill 的客户端，并进入一次 Agent / 工作任务模式后重试。"
+}
+
+$chosen = $candidates | Sort-Object LastWrite -Descending | Select-Object -First 1
+$skillRoot = $chosen.SkillRoot
 New-Item -ItemType Directory -Force -Path $skillRoot | Out-Null
+
+if (-not [string]::IsNullOrWhiteSpace($AgentProfile)) {
+    Write-Host "[Profile] 手动指定: $AgentProfile"
+}
+elseif ($candidates.Count -gt 1) {
+    Write-Host "[Profile] 发现多个 Agent Profile，选择最近使用的: $($chosen.ProfileName)"
+}
+else {
+    Write-Host "[Profile] 自动识别: $($chosen.ProfileName)"
+}
 Write-Host "[Profile] Skill 安装目标: $skillRoot"
 
 # ---------------------------------------------------------------

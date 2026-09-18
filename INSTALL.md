@@ -23,7 +23,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
 If you use multiple Agent profiles, you can explicitly choose one:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -DoubaoProfile "Profile 7"
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AgentProfile "Profile 7"
 ```
 
 The single installer performs the complete setup:

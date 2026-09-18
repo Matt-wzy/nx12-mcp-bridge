@@ -114,7 +114,7 @@ preflight 只处理"Runner 尚未正式开始建模"的环境问题。一旦 `ru
    - 必须 FAST 模式（B 输出为 FAST plan）
    - `--mode normal|benchmark` 由本次任务决定（默认 normal）
    - Runner 一次性连续执行全部 operation，等待其完整报告
-3. 禁止：豆包人工逐步骤执行 NX_MCP、临时生成专用 Python 驱动、修改 `runner.py`、`step == N` 特判。
+3. 禁止：Agent 人工逐步骤执行 NX_MCP、临时生成专用 Python 驱动、修改 `runner.py`、`step == N` 特判。
 
 ### 6.2 Fail-fast（最高优先级，强制执行）
 - Runner 任意 operation 返回失败（`status=failed` / exit≠0 / `failed_step` 非空），即 Runner failed = Pipeline failed，整个 Pipeline **立即停止**。

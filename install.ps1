@@ -2,11 +2,11 @@
 # NX_MCP-Enhanced + Agent Pack 一体化安装器
 # 用法：
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
-#   powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -DoubaoProfile "Profile 7"
+#   powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AgentProfile "Profile 7"
 
 [CmdletBinding()]
 param(
-    [string]$DoubaoProfile = "",
+    [string]$AgentProfile = "",
     [string]$RepoRoot = "",
     [switch]$SkipAgentTests
 )
@@ -182,8 +182,8 @@ $agentParams = @{
     RepoRoot  = $RepoRoot
     PythonExe = $venvPython
 }
-if (-not [string]::IsNullOrWhiteSpace($DoubaoProfile)) {
-    $agentParams["DoubaoProfile"] = $DoubaoProfile
+if (-not [string]::IsNullOrWhiteSpace($AgentProfile)) {
+    $agentParams["AgentProfile"] = $AgentProfile
 }
 if ($SkipAgentTests) {
     $agentParams["SkipTests"] = $true
