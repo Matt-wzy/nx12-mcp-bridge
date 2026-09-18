@@ -121,10 +121,25 @@ def main() -> None:
         SKILL / "SKILL.md",
         *(SKILL / "references").glob("*.md"),
         RUNNER / "README.md",
+        RUNNER / "runner.py",
     ]
     for md in release_pin_files:
         if "v2.1.1" in md.read_text(encoding="utf-8"):
             fail(f"stale release pin remains in Agent Pack rules/docs: {md.name}")
+
+    centroid_rule_files = [
+        SKILL / "references" / "modeling-planner.md",
+        SKILL / "references" / "topology-safety.md",
+        SKILL / "references" / "runner-contract.md",
+    ]
+    for rule_file in centroid_rule_files:
+        text = rule_file.read_text(encoding="utf-8")
+        if "全局 XY 原点" not in text or "不是孔半径" not in text:
+            fail(f"centroid_radius global-origin semantics missing in {rule_file.name}")
+
+    output_rules = (SKILL / "references" / "chinese-output.md").read_text(encoding="utf-8")
+    if 'report.status == "success"' not in output_rules:
+        fail("user-visible success is not bound to Runner report status")
 
     installer = (ROOT / "install.ps1").read_text(encoding="utf-8")
     if 'pip install -e ".[dev]"' in installer:
