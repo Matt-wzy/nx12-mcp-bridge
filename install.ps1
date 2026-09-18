@@ -170,14 +170,14 @@ Write-Host "[Loader] 已部署: $deployedLoader"
 Write-Host "[OK] Loader SHA256 校验通过"
 
 # ---------------------------------------------------------------
-# 5. Agent Pack（NX Modeling + Drawing Reader + Planner + Pipeline + Runner）
+# 5. Agent Pack（统一 nx-agent Skill + Runner）
 # ---------------------------------------------------------------
 $agentInstaller = Join-Path $RepoRoot "install-agent.ps1"
 if (-not (Test-Path $agentInstaller)) {
     throw "缺少 Agent Pack 安装器: $agentInstaller"
 }
 
-Write-Host "[Agent Pack] 安装文字建模 + 工程图自动建模能力..."
+Write-Host "[Agent Pack] 安装统一 nx-agent Skill（文字建模 + 工程图自动建模）..."
 $agentParams = @{
     RepoRoot  = $RepoRoot
     PythonExe = $venvPython
@@ -201,10 +201,7 @@ Write-Host "NX_MCP-Enhanced 核心：已安装"
 Write-Host "Python sidecar：已安装"
 Write-Host "UGII_USER_DIR：已配置"
 Write-Host "C# Loader：已构建并部署"
-Write-Host "文字建模 Skill：已安装"
-Write-Host "工程图读取 Skill：已安装"
-Write-Host "建模规划 Skill：已安装"
-Write-Host "一键总控 Skill：已安装"
+Write-Host "NX Agent Skill：已安装（统一入口）"
 Write-Host "通用 Plan Runner：已安装"
 Write-Host "Workspace：$workspace"
 Write-Host "NX 用户目录：$nxUserDir"
