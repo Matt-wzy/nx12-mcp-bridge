@@ -687,14 +687,14 @@ def runtime_dirty(active_path: str, history: RunHistory | None) -> bool:
 
 def preflight_decision(active_path: str, planned_path: str, mode: str,
                        overwrite_allowed: bool, dirty: bool,
-                       runner_parts) -> tuple[str, dict]:
+                       runner_parts, repair_authorized: bool = False) -> tuple[str, dict]:
     """Pure preflight policy (unit-testable without NX).
 
     Runner may auto-close ONLY:
       A. the part whose path exactly matches the plan's target part, and
       B. parts the Runner itself created (recorded in its own history).
-    Anything else -> blocked. A dirty planned part is closed only in
-    benchmark mode with explicit overwrite permission.
+    Anything else -> blocked. A dirty planned part is closed only for an
+    explicitly authorized controlled-repair attempt in benchmark mode.
     """
     if not active_path:
         return ("allow", {"active_part": None, "state": "no_active_part"})
@@ -703,9 +703,9 @@ def preflight_decision(active_path: str, planned_path: str, mode: str,
     if planned_n and active_n == planned_n:
         if not dirty:
             return ("allow", {"active_part": active_path, "state": "planned_clean"})
-        if mode == "benchmark" and overwrite_allowed:
+        if mode == "benchmark" and overwrite_allowed and repair_authorized:
             return ("allow", {"active_part": active_path,
-                              "state": "planned_dirty_benchmark_overwrite"})
+                              "state": "planned_dirty_controlled_repair"})
         return ("blocked", {
             "reason": "planned_part_dirty",
             "active_part": active_path, "planned_part": planned_path,
@@ -769,7 +769,8 @@ def repair_request_errors(
 
 
 async def run_preflight(transport, plan: dict, mode: str, overwrite_allowed: bool,
-                        history: RunHistory) -> tuple[dict | None, dict | None]:
+                        history: RunHistory, repair_authorized: bool = False
+                        ) -> tuple[dict | None, dict | None]:
     """Query the active part and apply the safety policy.
 
     Returns (blocked_payload, info); exactly one is non-None.
@@ -780,7 +781,8 @@ async def run_preflight(transport, plan: dict, mode: str, overwrite_allowed: boo
     active_path = str(_item_id(active)) if active else ""
     dirty = runtime_dirty(active_path, history) if active_path else False
     decision, payload = preflight_decision(
-        active_path, planned or "", mode, overwrite_allowed, dirty, history.paths())
+        active_path, planned or "", mode, overwrite_allowed, dirty, history.paths(),
+        repair_authorized=repair_authorized)
     if decision == "blocked":
         payload["status"] = "precheck_blocked"
         return payload, None
@@ -1356,8 +1358,14 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     history_path = args.history or os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "run_history.json")
     history = RunHistory(history_path)
-    blocked, info = await run_preflight(transport, plan, args.mode,
-                                        args.allow_overwrite, history)
+    blocked, info = await run_preflight(
+        transport,
+        plan,
+        args.mode,
+        args.allow_overwrite,
+        history,
+        repair_authorized=(args.repair_attempt == 1),
+    )
     if blocked is not None:
         print(json.dumps(blocked, ensure_ascii=False, indent=2))
         return 1
