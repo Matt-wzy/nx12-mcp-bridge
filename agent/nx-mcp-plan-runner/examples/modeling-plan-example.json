@@ -1,5 +1,5 @@
 {
-  "skill": "nx-mcp-modeling-planner",
+  "skill": "nx-agent",
   "example": "V2-TEXT-CHALLENGE（锁定尺寸文字版零件，仅生成计划，不执行 NX）",
   "mode": "FAST",
   "part": "V2-TEXT-CHALLENGE.prt",
@@ -8,9 +8,9 @@
     "所有 body_id / sketch_id 为逻辑名，执行时替换为工具实际返回的 id。",
     "tool_args 只包含 certified tool 真实参数；selection_criteria / expectation 只用于筛选与判定，禁止传给 NX_MCP。",
     "nx_countersink_hole 的锥体大端位于 Z=start_offset=0（底面），小端=Ø8 → 与“从 Z=0 底面 Ø14×90° 沉头、理论深 3mm”一致（3=(14-8)/2/tan45°），勿改方向。",
-    "R6/R8/C2 每组操作前均重新 nx_list_edges 并按几何匹配选边，禁止跨组复用 index。",
     "最终验证为 FAST 轻量模式：不解析 STEP 文本、不搜 AXIS2_PLACEMENT_3D、不遍历 STEP 圆弧。",
-    "面积仅辅助：C2×45° 后法兰顶环面≈3782.48（非 4423.36）；Ø6.6 孔后凸台顶环面≈220.26（非 254.47）。面积不作为单点失败条件，不因细微差异进入 DIAGNOSTIC。"
+    "面积仅辅助：C2×45° 后法兰顶环面≈3782.48（非 4423.36）；Ø6.6 孔后凸台顶环面≈220.26（非 254.47）。面积不作为单点失败条件，不因细微差异进入 DIAGNOSTIC。",
+    "R6/R8/C2 每组操作前均重新 nx_list_edges；线性角棱使用 corners_xy，完整圆边兼容 Elliptical/Circular。"
   ],
   "operations": [
     {
@@ -18,7 +18,10 @@
       "goal": "创建零件（mm）",
       "tool": "nx_create_part",
       "target": "-",
-      "tool_args": { "path": "V2-TEXT-CHALLENGE.prt", "units": "mm" },
+      "tool_args": {
+        "path": "V2-TEXT-CHALLENGE.prt",
+        "units": "mm"
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -28,7 +31,9 @@
       "goal": "创建底座矩形草图（XY 平面）",
       "tool": "nx_create_sketch",
       "target": "-",
-      "tool_args": { "plane": "XY" },
+      "tool_args": {
+        "plane": "XY"
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -38,7 +43,17 @@
       "goal": "底座轮廓：180×120（X -90..90，Y -60..60）",
       "tool": "nx_sketch_rectangle",
       "target": "sketch_base",
-      "tool_args": { "sketch_id": "sketch_base", "corner1": { "x": -90, "y": -60 }, "corner2": { "x": 90, "y": 60 } },
+      "tool_args": {
+        "sketch_id": "sketch_base",
+        "corner1": {
+          "x": -90,
+          "y": -60
+        },
+        "corner2": {
+          "x": 90,
+          "y": 60
+        }
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -48,7 +63,9 @@
       "goal": "结束底座草图",
       "tool": "nx_finish_sketch",
       "target": "sketch_base",
-      "tool_args": { "sketch_id": "sketch_base" },
+      "tool_args": {
+        "sketch_id": "sketch_base"
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -58,7 +75,13 @@
       "goal": "挤出底座：Z 0..12，厚 12",
       "tool": "nx_extrude",
       "target": "sketch_base",
-      "tool_args": { "sketch_id": "sketch_base", "distance": 12, "start_offset": 0, "reverse": false, "operation": "create" },
+      "tool_args": {
+        "sketch_id": "sketch_base",
+        "distance": 12,
+        "start_offset": 0,
+        "reverse": false,
+        "operation": "create"
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -68,7 +91,9 @@
       "goal": "创建左耳草图（XY 平面）",
       "tool": "nx_create_sketch",
       "target": "-",
-      "tool_args": { "plane": "XY" },
+      "tool_args": {
+        "plane": "XY"
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -78,7 +103,17 @@
       "goal": "左耳轮廓：X -115..-90，Y -22..22",
       "tool": "nx_sketch_rectangle",
       "target": "sketch_earL",
-      "tool_args": { "sketch_id": "sketch_earL", "corner1": { "x": -115, "y": -22 }, "corner2": { "x": -90, "y": 22 } },
+      "tool_args": {
+        "sketch_id": "sketch_earL",
+        "corner1": {
+          "x": -115,
+          "y": -22
+        },
+        "corner2": {
+          "x": -90,
+          "y": 22
+        }
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -88,7 +123,9 @@
       "goal": "结束左耳草图",
       "tool": "nx_finish_sketch",
       "target": "sketch_earL",
-      "tool_args": { "sketch_id": "sketch_earL" },
+      "tool_args": {
+        "sketch_id": "sketch_earL"
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -98,7 +135,13 @@
       "goal": "挤出左耳：Z 0..12",
       "tool": "nx_extrude",
       "target": "sketch_earL",
-      "tool_args": { "sketch_id": "sketch_earL", "distance": 12, "start_offset": 0, "reverse": false, "operation": "create" },
+      "tool_args": {
+        "sketch_id": "sketch_earL",
+        "distance": 12,
+        "start_offset": 0,
+        "reverse": false,
+        "operation": "create"
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -108,7 +151,11 @@
       "goal": "左耳镜像得右耳（对称结构先建一侧再 Mirror）",
       "tool": "nx_mirror",
       "target": "body_earL",
-      "tool_args": { "body_id": "body_earL", "plane": "YZ", "offset": 0 },
+      "tool_args": {
+        "body_id": "body_earL",
+        "plane": "YZ",
+        "offset": 0
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -118,7 +165,13 @@
       "goal": "底座+双耳一次性 Unite（底部外形 230×120×12）",
       "tool": "nx_unite",
       "target": "body_base",
-      "tool_args": { "target_body_id": "body_base", "tool_body_ids": ["body_earL", "body_earR"] },
+      "tool_args": {
+        "target_body_id": "body_base",
+        "tool_body_ids": [
+          "body_earL",
+          "body_earR"
+        ]
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -128,7 +181,9 @@
       "goal": "创建中央壳体草图（XY 平面）",
       "tool": "nx_create_sketch",
       "target": "-",
-      "tool_args": { "plane": "XY" },
+      "tool_args": {
+        "plane": "XY"
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -138,7 +193,14 @@
       "goal": "中央圆柱外径 Ø84",
       "tool": "nx_sketch_circle",
       "target": "sketch_cyl",
-      "tool_args": { "sketch_id": "sketch_cyl", "center": { "x": 0, "y": 0 }, "diameter": 84 },
+      "tool_args": {
+        "sketch_id": "sketch_cyl",
+        "center": {
+          "x": 0,
+          "y": 0
+        },
+        "diameter": 84
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -148,7 +210,9 @@
       "goal": "结束壳体草图",
       "tool": "nx_finish_sketch",
       "target": "sketch_cyl",
-      "tool_args": { "sketch_id": "sketch_cyl" },
+      "tool_args": {
+        "sketch_id": "sketch_cyl"
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -158,7 +222,13 @@
       "goal": "挤出中央圆柱：Ø84，Z 12..48（高 36）",
       "tool": "nx_extrude",
       "target": "sketch_cyl",
-      "tool_args": { "sketch_id": "sketch_cyl", "distance": 36, "start_offset": 12, "reverse": false, "operation": "create" },
+      "tool_args": {
+        "sketch_id": "sketch_cyl",
+        "distance": 36,
+        "start_offset": 12,
+        "reverse": false,
+        "operation": "create"
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -168,9 +238,21 @@
       "goal": "Shell 前确认移除面：圆柱顶面（Z=48）",
       "tool": "nx_list_faces",
       "target": "body_cyl",
-      "tool_args": { "body_id": "body_cyl" },
-      "selection_criteria": { "face_type": "Planar", "centroid": [0, 0, 48], "normal": [0, 0, 1], "area_approx_auxiliary": 5541.77 },
-      "expectation": { "count": 1, "purpose": "shell remove_face_index" },
+      "tool_args": {
+        "body_id": "body_cyl"
+      },
+      "selection_criteria": {
+        "face_type": "Planar",
+        "centroid_z": {
+          "value": 48,
+          "tol": 0.5
+        },
+        "area_approx_auxiliary": 5541.77
+      },
+      "expectation": {
+        "count": 1,
+        "purpose": "shell remove_face_index"
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -180,7 +262,12 @@
       "goal": "抽壳：删除顶面，向内 6mm → 外径 Ø84、内径 Ø72、壁厚 6、底厚 6、内腔底面 Z=18、顶端开口",
       "tool": "nx_shell",
       "target": "body_cyl",
-      "tool_args": { "body_id": "body_cyl", "thickness": 6, "remove_face_index": "<step16 匹配的 index>", "inward": true },
+      "tool_args": {
+        "body_id": "body_cyl",
+        "thickness": 6,
+        "remove_face_index": "<step16 匹配的 index>",
+        "inward": true
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -190,7 +277,9 @@
       "goal": "创建环形法兰草图（XY 平面）",
       "tool": "nx_create_sketch",
       "target": "-",
-      "tool_args": { "plane": "XY" },
+      "tool_args": {
+        "plane": "XY"
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -200,7 +289,14 @@
       "goal": "法兰外圆 Ø104",
       "tool": "nx_sketch_circle",
       "target": "sketch_flange",
-      "tool_args": { "sketch_id": "sketch_flange", "center": { "x": 0, "y": 0 }, "diameter": 104 },
+      "tool_args": {
+        "sketch_id": "sketch_flange",
+        "center": {
+          "x": 0,
+          "y": 0
+        },
+        "diameter": 104
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -210,7 +306,14 @@
       "goal": "法兰内圆 Ø72（与壳体同圆同心双圆 → 环形区域）",
       "tool": "nx_sketch_circle",
       "target": "sketch_flange",
-      "tool_args": { "sketch_id": "sketch_flange", "center": { "x": 0, "y": 0 }, "diameter": 72 },
+      "tool_args": {
+        "sketch_id": "sketch_flange",
+        "center": {
+          "x": 0,
+          "y": 0
+        },
+        "diameter": 72
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -220,7 +323,9 @@
       "goal": "结束法兰草图",
       "tool": "nx_finish_sketch",
       "target": "sketch_flange",
-      "tool_args": { "sketch_id": "sketch_flange" },
+      "tool_args": {
+        "sketch_id": "sketch_flange"
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -230,7 +335,13 @@
       "goal": "挤出环形法兰：Ø104/Ø72，Z 48..56（厚 8）",
       "tool": "nx_extrude",
       "target": "sketch_flange",
-      "tool_args": { "sketch_id": "sketch_flange", "distance": 8, "start_offset": 48, "reverse": false, "operation": "create" },
+      "tool_args": {
+        "sketch_id": "sketch_flange",
+        "distance": 8,
+        "start_offset": 48,
+        "reverse": false,
+        "operation": "create"
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -240,7 +351,12 @@
       "goal": "法兰与壳体 Unite（环形底面与壳体顶环面重合接触，上次已验证成功）",
       "tool": "nx_unite",
       "target": "body_cyl",
-      "tool_args": { "target_body_id": "body_cyl", "tool_body_ids": ["body_flange"] },
+      "tool_args": {
+        "target_body_id": "body_cyl",
+        "tool_body_ids": [
+          "body_flange"
+        ]
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -250,7 +366,12 @@
       "goal": "壳体（含法兰）与主体 Unite",
       "tool": "nx_unite",
       "target": "body_main",
-      "tool_args": { "target_body_id": "body_main", "tool_body_ids": ["body_cyl"] },
+      "tool_args": {
+        "target_body_id": "body_main",
+        "tool_body_ids": [
+          "body_cyl"
+        ]
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -260,7 +381,9 @@
       "goal": "创建凸台草图（XY 平面）",
       "tool": "nx_create_sketch",
       "target": "-",
-      "tool_args": { "plane": "XY" },
+      "tool_args": {
+        "plane": "XY"
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -270,7 +393,14 @@
       "goal": "第一个凸台 Ø18，PCD Ø130，45° 方向（65×cos45≈45.962）",
       "tool": "nx_sketch_circle",
       "target": "sketch_boss",
-      "tool_args": { "sketch_id": "sketch_boss", "center": { "x": 45.962, "y": 45.962 }, "diameter": 18 },
+      "tool_args": {
+        "sketch_id": "sketch_boss",
+        "center": {
+          "x": 45.962,
+          "y": 45.962
+        },
+        "diameter": 18
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -280,7 +410,9 @@
       "goal": "结束凸台草图",
       "tool": "nx_finish_sketch",
       "target": "sketch_boss",
-      "tool_args": { "sketch_id": "sketch_boss" },
+      "tool_args": {
+        "sketch_id": "sketch_boss"
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -290,7 +422,13 @@
       "goal": "挤出凸台 1：Z 12..20（高 8）",
       "tool": "nx_extrude",
       "target": "sketch_boss",
-      "tool_args": { "sketch_id": "sketch_boss", "distance": 8, "start_offset": 12, "reverse": false, "operation": "create" },
+      "tool_args": {
+        "sketch_id": "sketch_boss",
+        "distance": 8,
+        "start_offset": 12,
+        "reverse": false,
+        "operation": "create"
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -300,7 +438,18 @@
       "goal": "Circular Pattern：count=4（含原始）、angle=360、绕 Z 轴过原点 → 45°/135°/225°/315°，不重复末位实例",
       "tool": "nx_circular_pattern",
       "target": "body_boss1",
-      "tool_args": { "body_id": "body_boss1", "axis": "Z", "center": { "x": 0, "y": 0, "z": 0 }, "count": 4, "angle": 360, "reverse": false },
+      "tool_args": {
+        "body_id": "body_boss1",
+        "axis": "Z",
+        "center": {
+          "x": 0,
+          "y": 0,
+          "z": 0
+        },
+        "count": 4,
+        "angle": 360,
+        "reverse": false
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -310,7 +459,15 @@
       "goal": "4 个凸台一次性 Unite 到主体",
       "tool": "nx_unite",
       "target": "body_main",
-      "tool_args": { "target_body_id": "body_main", "tool_body_ids": ["body_boss1", "body_boss2", "body_boss3", "body_boss4"] },
+      "tool_args": {
+        "target_body_id": "body_main",
+        "tool_body_ids": [
+          "body_boss1",
+          "body_boss2",
+          "body_boss3",
+          "body_boss4"
+        ]
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -320,7 +477,9 @@
       "goal": "创建加强筋草图（XY 平面）",
       "tool": "nx_create_sketch",
       "target": "-",
-      "tool_args": { "plane": "XY" },
+      "tool_args": {
+        "plane": "XY"
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -330,7 +489,17 @@
       "goal": "第一条筋：X -70..-40，Y -28..-20（30×8），Y 中心 -24",
       "tool": "nx_sketch_rectangle",
       "target": "sketch_rib",
-      "tool_args": { "sketch_id": "sketch_rib", "corner1": { "x": -70, "y": -28 }, "corner2": { "x": -40, "y": -20 } },
+      "tool_args": {
+        "sketch_id": "sketch_rib",
+        "corner1": {
+          "x": -70,
+          "y": -28
+        },
+        "corner2": {
+          "x": -40,
+          "y": -20
+        }
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -340,7 +509,9 @@
       "goal": "结束筋草图",
       "tool": "nx_finish_sketch",
       "target": "sketch_rib",
-      "tool_args": { "sketch_id": "sketch_rib" },
+      "tool_args": {
+        "sketch_id": "sketch_rib"
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -350,7 +521,13 @@
       "goal": "挤出筋 1：Z 12..26（高 14）",
       "tool": "nx_extrude",
       "target": "sketch_rib",
-      "tool_args": { "sketch_id": "sketch_rib", "distance": 14, "start_offset": 12, "reverse": false, "operation": "create" },
+      "tool_args": {
+        "sketch_id": "sketch_rib",
+        "distance": 14,
+        "start_offset": 12,
+        "reverse": false,
+        "operation": "create"
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -360,7 +537,13 @@
       "goal": "Linear Pattern 沿 Y：count=3（含原始）、spacing=24 → Y 中心 -24/0/+24（3 条左筋）",
       "tool": "nx_linear_pattern",
       "target": "body_ribL1",
-      "tool_args": { "body_id": "body_ribL1", "direction": "Y", "count": 3, "spacing": 24, "reverse": false },
+      "tool_args": {
+        "body_id": "body_ribL1",
+        "direction": "Y",
+        "count": 3,
+        "spacing": 24,
+        "reverse": false
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -370,7 +553,11 @@
       "goal": "左侧第一条筋关于 YZ 平面（X=0）镜像 → 右筋起点（X 40..70，Y 中心 -24）",
       "tool": "nx_mirror",
       "target": "body_ribL1",
-      "tool_args": { "body_id": "body_ribL1", "plane": "YZ", "offset": 0 },
+      "tool_args": {
+        "body_id": "body_ribL1",
+        "plane": "YZ",
+        "offset": 0
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -380,7 +567,13 @@
       "goal": "右筋 Linear Pattern 沿 Y：count=3、spacing=24 → 右侧 3 条筋（Y 中心 -24/0/+24）",
       "tool": "nx_linear_pattern",
       "target": "body_ribR1",
-      "tool_args": { "body_id": "body_ribR1", "direction": "Y", "count": 3, "spacing": 24, "reverse": false },
+      "tool_args": {
+        "body_id": "body_ribR1",
+        "direction": "Y",
+        "count": 3,
+        "spacing": 24,
+        "reverse": false
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -390,7 +583,17 @@
       "goal": "6 条筋一次性 Unite 到主体（中筋与壳体壁真实相交，Boolean 稳定）",
       "tool": "nx_unite",
       "target": "body_main",
-      "tool_args": { "target_body_id": "body_main", "tool_body_ids": ["body_ribL1", "body_ribL2", "body_ribL3", "body_ribR1", "body_ribR2", "body_ribR3"] },
+      "tool_args": {
+        "target_body_id": "body_main",
+        "tool_body_ids": [
+          "body_ribL1",
+          "body_ribL2",
+          "body_ribL3",
+          "body_ribR1",
+          "body_ribR2",
+          "body_ribR3"
+        ]
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -400,7 +603,18 @@
       "goal": "左耳沉头孔：Ø8 通孔（深 12）+ Ø14×90° 沉头（大端在 Z=0 底面，锥深 3）",
       "tool": "nx_countersink_hole",
       "target": "body_main",
-      "tool_args": { "body_id": "body_main", "center": { "x": -102.5, "y": 0 }, "hole_diameter": 8, "hole_depth": 12, "countersink_diameter": 14, "countersink_angle": 90, "start_offset": 0 },
+      "tool_args": {
+        "body_id": "body_main",
+        "center": {
+          "x": -102.5,
+          "y": 0
+        },
+        "hole_diameter": 8,
+        "hole_depth": 12,
+        "countersink_diameter": 14,
+        "countersink_angle": 90,
+        "start_offset": 0
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -410,7 +624,18 @@
       "goal": "右耳沉头孔（同上，对称）",
       "tool": "nx_countersink_hole",
       "target": "body_main",
-      "tool_args": { "body_id": "body_main", "center": { "x": 102.5, "y": 0 }, "hole_diameter": 8, "hole_depth": 12, "countersink_diameter": 14, "countersink_angle": 90, "start_offset": 0 },
+      "tool_args": {
+        "body_id": "body_main",
+        "center": {
+          "x": 102.5,
+          "y": 0
+        },
+        "hole_diameter": 8,
+        "hole_depth": 12,
+        "countersink_diameter": 14,
+        "countersink_angle": 90,
+        "start_offset": 0
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -420,7 +645,16 @@
       "goal": "凸台 1 孔：Ø6.6 通孔，Z 0..20（贯穿底板 12 + 凸台 8）",
       "tool": "nx_hole",
       "target": "body_main",
-      "tool_args": { "body_id": "body_main", "center": { "x": 45.962, "y": 45.962 }, "diameter": 6.6, "depth": 20, "start_offset": 0 },
+      "tool_args": {
+        "body_id": "body_main",
+        "center": {
+          "x": 45.962,
+          "y": 45.962
+        },
+        "diameter": 6.6,
+        "depth": 20,
+        "start_offset": 0
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -430,7 +664,16 @@
       "goal": "凸台 2 孔：Ø6.6（135°）",
       "tool": "nx_hole",
       "target": "body_main",
-      "tool_args": { "body_id": "body_main", "center": { "x": -45.962, "y": 45.962 }, "diameter": 6.6, "depth": 20, "start_offset": 0 },
+      "tool_args": {
+        "body_id": "body_main",
+        "center": {
+          "x": -45.962,
+          "y": 45.962
+        },
+        "diameter": 6.6,
+        "depth": 20,
+        "start_offset": 0
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -440,7 +683,16 @@
       "goal": "凸台 3 孔：Ø6.6（225°）",
       "tool": "nx_hole",
       "target": "body_main",
-      "tool_args": { "body_id": "body_main", "center": { "x": -45.962, "y": -45.962 }, "diameter": 6.6, "depth": 20, "start_offset": 0 },
+      "tool_args": {
+        "body_id": "body_main",
+        "center": {
+          "x": -45.962,
+          "y": -45.962
+        },
+        "diameter": 6.6,
+        "depth": 20,
+        "start_offset": 0
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -450,7 +702,16 @@
       "goal": "凸台 4 孔：Ø6.6（315°）",
       "tool": "nx_hole",
       "target": "body_main",
-      "tool_args": { "body_id": "body_main", "center": { "x": 45.962, "y": -45.962 }, "diameter": 6.6, "depth": 20, "start_offset": 0 },
+      "tool_args": {
+        "body_id": "body_main",
+        "center": {
+          "x": 45.962,
+          "y": -45.962
+        },
+        "diameter": 6.6,
+        "depth": 20,
+        "start_offset": 0
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -460,7 +721,18 @@
       "goal": "底板沉孔 1：Ø9 通孔（深 12）+ Ø16 沉孔（深 5，从 Z=0）",
       "tool": "nx_counterbore_hole",
       "target": "body_main",
-      "tool_args": { "body_id": "body_main", "center": { "x": -72, "y": -42 }, "hole_diameter": 9, "hole_depth": 12, "counterbore_diameter": 16, "counterbore_depth": 5, "start_offset": 0 },
+      "tool_args": {
+        "body_id": "body_main",
+        "center": {
+          "x": -72,
+          "y": -42
+        },
+        "hole_diameter": 9,
+        "hole_depth": 12,
+        "counterbore_diameter": 16,
+        "counterbore_depth": 5,
+        "start_offset": 0
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -470,7 +742,18 @@
       "goal": "底板沉孔 2：(-72,+42)",
       "tool": "nx_counterbore_hole",
       "target": "body_main",
-      "tool_args": { "body_id": "body_main", "center": { "x": -72, "y": 42 }, "hole_diameter": 9, "hole_depth": 12, "counterbore_diameter": 16, "counterbore_depth": 5, "start_offset": 0 },
+      "tool_args": {
+        "body_id": "body_main",
+        "center": {
+          "x": -72,
+          "y": 42
+        },
+        "hole_diameter": 9,
+        "hole_depth": 12,
+        "counterbore_diameter": 16,
+        "counterbore_depth": 5,
+        "start_offset": 0
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -480,7 +763,18 @@
       "goal": "底板沉孔 3：(+72,-42)",
       "tool": "nx_counterbore_hole",
       "target": "body_main",
-      "tool_args": { "body_id": "body_main", "center": { "x": 72, "y": -42 }, "hole_diameter": 9, "hole_depth": 12, "counterbore_diameter": 16, "counterbore_depth": 5, "start_offset": 0 },
+      "tool_args": {
+        "body_id": "body_main",
+        "center": {
+          "x": 72,
+          "y": -42
+        },
+        "hole_diameter": 9,
+        "hole_depth": 12,
+        "counterbore_diameter": 16,
+        "counterbore_depth": 5,
+        "start_offset": 0
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -490,7 +784,18 @@
       "goal": "底板沉孔 4：(+72,+42)",
       "tool": "nx_counterbore_hole",
       "target": "body_main",
-      "tool_args": { "body_id": "body_main", "center": { "x": 72, "y": 42 }, "hole_diameter": 9, "hole_depth": 12, "counterbore_diameter": 16, "counterbore_depth": 5, "start_offset": 0 },
+      "tool_args": {
+        "body_id": "body_main",
+        "center": {
+          "x": 72,
+          "y": 42
+        },
+        "hole_diameter": 9,
+        "hole_depth": 12,
+        "counterbore_diameter": 16,
+        "counterbore_depth": 5,
+        "start_offset": 0
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -500,9 +805,39 @@
       "goal": "重新识别 R6 目标边：底座 4 个竖直外角（R6 与 R8 不得复用 index）",
       "tool": "nx_list_edges",
       "target": "body_main",
-      "tool_args": { "body_id": "body_main" },
-      "selection_criteria": { "curve_type": "Linear", "direction": "Z", "length": 12.0, "bbox_x": [-90.0, 90.0], "bbox_y": [-60.0, 60.0] },
-      "expectation": { "count": 4, "purpose": "edge_blend R6" },
+      "tool_args": {
+        "body_id": "body_main"
+      },
+      "selection_criteria": {
+        "curve_type": "Linear",
+        "direction": "Z",
+        "corners_xy": [
+          [
+            -90,
+            -60
+          ],
+          [
+            -90,
+            60
+          ],
+          [
+            90,
+            -60
+          ],
+          [
+            90,
+            60
+          ]
+        ],
+        "bbox_z": {
+          "min": 0,
+          "max": 12
+        }
+      },
+      "expectation": {
+        "count": 4,
+        "purpose": "edge_blend R6"
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -512,7 +847,11 @@
       "goal": "R6 圆角：4 条底座外角棱",
       "tool": "nx_edge_blend",
       "target": "body_main",
-      "tool_args": { "body_id": "body_main", "radius": 6, "edge_indices": "<step49 匹配的 4 个 index>" },
+      "tool_args": {
+        "body_id": "body_main",
+        "radius": 6,
+        "edge_indices": "<step49 匹配的 4 个 index>"
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -522,9 +861,39 @@
       "goal": "重新识别 R8 目标边：两耳板最外侧 4 个竖直角（仅 x=±115、y=±22）",
       "tool": "nx_list_edges",
       "target": "body_main",
-      "tool_args": { "body_id": "body_main" },
-      "selection_criteria": { "curve_type": "Linear", "direction": "Z", "length": 12.0, "bbox_x": [-115.0, 115.0], "bbox_y": [-22.0, 22.0] },
-      "expectation": { "count": 4, "purpose": "edge_blend R8" },
+      "tool_args": {
+        "body_id": "body_main"
+      },
+      "selection_criteria": {
+        "curve_type": "Linear",
+        "direction": "Z",
+        "corners_xy": [
+          [
+            -115,
+            -22
+          ],
+          [
+            -115,
+            22
+          ],
+          [
+            115,
+            -22
+          ],
+          [
+            115,
+            22
+          ]
+        ],
+        "bbox_z": {
+          "min": 0,
+          "max": 12
+        }
+      },
+      "expectation": {
+        "count": 4,
+        "purpose": "edge_blend R8"
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -534,7 +903,11 @@
       "goal": "R8 圆角：4 条耳板外角棱（bbox 限定 x=±115、y=±22，不会落到筋上）",
       "tool": "nx_edge_blend",
       "target": "body_main",
-      "tool_args": { "body_id": "body_main", "radius": 8, "edge_indices": "<step51 匹配的 4 个 index>" },
+      "tool_args": {
+        "body_id": "body_main",
+        "radius": 8,
+        "edge_indices": "<step51 匹配的 4 个 index>"
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -544,9 +917,28 @@
       "goal": "重新识别 C2 目标边：法兰外圆最上侧圆边（Ø104，Z=56）",
       "tool": "nx_list_edges",
       "target": "body_main",
-      "tool_args": { "body_id": "body_main" },
-      "selection_criteria": { "curve_type": "Circular", "length": 326.73, "midpoint_z": 56.0, "note": "2π×52≈326.73，与 Ø72 内圆(226.19)及 Z=48 底圆区分" },
-      "expectation": { "count": 1, "purpose": "chamfer C2" },
+      "tool_args": {
+        "body_id": "body_main"
+      },
+      "selection_criteria": {
+        "curve_type": [
+          "Elliptical",
+          "Circular"
+        ],
+        "length": {
+          "value": 326.73,
+          "tol": 1.5
+        },
+        "midpoint_z": {
+          "value": 56,
+          "tol": 0.5
+        },
+        "note": "2π×52≈326.73，与 Ø72 内圆(226.19)及 Z=48 底圆区分"
+      },
+      "expectation": {
+        "count": 1,
+        "purpose": "chamfer C2"
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -556,7 +948,11 @@
       "goal": "C2×45° 倒角（对称 offset=2）",
       "tool": "nx_chamfer",
       "target": "body_main",
-      "tool_args": { "body_id": "body_main", "offset": 2, "edge_indices": "<step53 匹配的 1 个 index>" },
+      "tool_args": {
+        "body_id": "body_main",
+        "offset": 2,
+        "edge_indices": "<step53 匹配的 1 个 index>"
+      },
       "topology_changes": true,
       "refresh_edges_after": true,
       "refresh_faces_after": true
@@ -567,7 +963,9 @@
       "tool": "nx_list_bodies",
       "target": "-",
       "tool_args": {},
-      "expectation": { "body_count": 1 },
+      "expectation": {
+        "body_count": 1
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -577,19 +975,44 @@
       "goal": "FAST 验证 B+C：关键结构（法兰顶部 Z=56、4 凸台、2 沉头锥面、关键孔数量合理）；面积仅辅助",
       "tool": "nx_list_faces",
       "target": "body_main",
-      "tool_args": { "body_id": "body_main" },
+      "tool_args": {
+        "body_id": "body_main"
+      },
       "selection_criteria": {
-        "flange_top": { "face_type": "Planar", "centroid": [0, 0, 56] },
-        "boss_tops": { "face_type": "Planar", "centroid_z": 20.0, "centroid_radius_approx": 65.0 },
-        "countersink_cones": { "face_type": "Conical" },
-        "holes_reasonable": { "face_type": "Cylindrical", "note": "只做数量合理性，不逐面核对" }
+        "flange_top": {
+          "face_type": "Planar",
+          "centroid": [
+            0,
+            0,
+            56
+          ]
+        },
+        "boss_tops": {
+          "face_type": "Planar",
+          "centroid_z": 20,
+          "centroid_radius_approx": 65
+        },
+        "countersink_cones": {
+          "face_type": "Conical"
+        },
+        "holes_reasonable": {
+          "face_type": "Cylindrical",
+          "note": "只做数量合理性，不逐面核对"
+        }
       },
       "expectation": {
         "flange_top_count": 1,
         "boss_top_count": 4,
         "conical_count": 2,
-        "cylindrical_count_range": [15, 28],
-        "area_auxiliary": { "flange_top_approx": 3782.48, "boss_top_approx": 220.26, "note": "仅辅助人工核对，不作为单点失败条件" }
+        "cylindrical_count_range": [
+          15,
+          28
+        ],
+        "area_auxiliary": {
+          "flange_top_approx": 3782.48,
+          "boss_top_approx": 220.26,
+          "note": "仅辅助人工核对，不作为单点失败条件"
+        }
       },
       "topology_changes": false,
       "refresh_edges_after": false,
@@ -600,9 +1023,20 @@
       "goal": "FAST 验证 B：X/Y 外包络（线性边 bbox 极值：X∈[-115,115]、Y∈[-60,60]）",
       "tool": "nx_list_edges",
       "target": "body_main",
-      "tool_args": { "body_id": "body_main" },
-      "selection_criteria": { "linear_only": true, "use": "bbox_min / bbox_max 极值" },
-      "expectation": { "x_min": -115, "x_max": 115, "y_min": -60, "y_max": 60, "tolerance_mm": 0.5 },
+      "tool_args": {
+        "body_id": "body_main"
+      },
+      "selection_criteria": {
+        "linear_only": true,
+        "use": "bbox_min / bbox_max 极值"
+      },
+      "expectation": {
+        "x_min": -115,
+        "x_max": 115,
+        "y_min": -60,
+        "y_max": 60,
+        "tolerance_mm": 0.5
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
@@ -622,25 +1056,70 @@
       "goal": "FAST 验证 E：导出 STEP 并确认文件非空",
       "tool": "nx_export_step",
       "target": "-",
-      "tool_args": { "path": "V2-TEXT-CHALLENGE.step" },
+      "tool_args": {
+        "path": "V2-TEXT-CHALLENGE.step"
+      },
       "topology_changes": false,
       "refresh_edges_after": false,
       "refresh_faces_after": false
     }
   ],
   "final_validation": [
-    { "check": "A. Body 数量 = 1", "how": "nx_list_bodies", "expect": "body_count == 1", "fail_action": "进入 DIAGNOSTIC" },
-    { "check": "B. Bounding Box：X=-115..115 / Y=-60..60 / Z=0..56（总 230×120×56）", "how": "nx_list_faces 底面 centroid z≈0 + 法兰顶面 centroid z≈56 定 Z；nx_list_edges 线性边 bbox 极值定 X/Y", "expect": "X∈[-115,115]、Y∈[-60,60]、Z∈[0,56]（容差 ±0.5）", "fail_action": "明显错误才进入 DIAGNOSTIC" },
-    { "check": "C. 关键结构：法兰顶部 Z=56、4 个凸台存在、2 个沉头锥面存在、关键孔数量合理", "how": "nx_list_faces：Planar centroid(0,0,56) 计 1；Planar centroid z≈20 计 4；Conical 计 2；Cylindrical 数量 15..28 合理性", "expect": "计数达标；面积仅辅助（法兰顶环面≈3782.48、凸台顶环面≈220.26，±5%，不作为单点失败条件）", "fail_action": "关键特征缺失才进入 DIAGNOSTIC" },
-    { "check": "D. Save 成功", "how": "nx_save_part", "expect": "ok", "fail_action": "进入 DIAGNOSTIC" },
-    { "check": "E. STEP 导出成功且文件非空", "how": "nx_export_step + 文件存在检查", "expect": "V2-TEXT-CHALLENGE.step 存在且 > 0 字节", "fail_action": "进入 DIAGNOSTIC" }
+    {
+      "check": "A. Body 数量 = 1",
+      "how": "nx_list_bodies",
+      "expect": "body_count == 1",
+      "fail_action": "进入 DIAGNOSTIC"
+    },
+    {
+      "check": "B. Bounding Box：X=-115..115 / Y=-60..60 / Z=0..56（总 230×120×56）",
+      "how": "nx_list_faces 底面 centroid z≈0 + 法兰顶面 centroid z≈56 定 Z；nx_list_edges 线性边 bbox 极值定 X/Y",
+      "expect": "X∈[-115,115]、Y∈[-60,60]、Z∈[0,56]（容差 ±0.5）",
+      "fail_action": "明显错误才进入 DIAGNOSTIC"
+    },
+    {
+      "check": "C. 关键结构：法兰顶部 Z=56、4 个凸台存在、2 个沉头锥面存在、关键孔数量合理",
+      "how": "nx_list_faces：Planar centroid(0,0,56) 计 1；Planar centroid z≈20 计 4；Conical 计 2；Cylindrical 数量 15..28 合理性",
+      "expect": "计数达标；面积仅辅助（法兰顶环面≈3782.48、凸台顶环面≈220.26，±5%，不作为单点失败条件）",
+      "fail_action": "关键特征缺失才进入 DIAGNOSTIC"
+    },
+    {
+      "check": "D. Save 成功",
+      "how": "nx_save_part",
+      "expect": "ok",
+      "fail_action": "进入 DIAGNOSTIC"
+    },
+    {
+      "check": "E. STEP 导出成功且文件非空",
+      "how": "nx_export_step + 文件存在检查",
+      "expect": "V2-TEXT-CHALLENGE.step 存在且 > 0 字节",
+      "fail_action": "进入 DIAGNOSTIC"
+    }
   ],
   "fallbacks": [
-    { "trigger": "nx_unite（壳体+法兰）报 Boolean 不相交", "fix": "先 nx_list_bodies 确认两 body 均存在且 id 未失效；确认后以相同参数重试一次（该组合上次已验证成功）。仍失败则进入 DIAGNOSTIC，禁止反复重试。" },
-    { "trigger": "nx_linear_pattern 方向与预期相反", "fix": "reverse=true 重试一次。" },
-    { "trigger": "nx_mirror / nx_circular_pattern 返回实例数不符", "fix": "核对 count 语义（count 含原始）；用 nx_list_bodies 核对实例数后再 Unite。" },
-    { "trigger": "孔类操作报 body 选择错误", "fix": "nx_list_bodies 取当前 body_main 实际 id 后重试一次。" },
-    { "trigger": "边匹配数量不足（如 R6 只找到 3 条）", "fix": "用 bbox/方向/长度复核，选取几何完全匹配的边；禁止按 index 猜测补齐。" },
-    { "trigger": "FAST 验证失败", "fix": "仅当 Body 数量错误 / Bounding Box 明显错误 / 关键特征缺失 / Save 或 STEP 失败时才进入 DIAGNOSTIC；单个 face area 与理论值细微差异（如法兰顶环面 3782.48±5%）不进入 DIAGNOSTIC。进入 DIAGNOSTIC 后：nx_list_faces / nx_list_edges 复核关键面与边，定位失败步骤后用 nx_undo 回退最近一次操作并最小修正，禁止无脑重跑全流程。" }
+    {
+      "trigger": "nx_unite（壳体+法兰）报 Boolean 不相交",
+      "fix": "先 nx_list_bodies 确认两 body 均存在且 id 未失效；确认后以相同参数重试一次（该组合上次已验证成功）。仍失败则进入 DIAGNOSTIC，禁止反复重试。"
+    },
+    {
+      "trigger": "nx_linear_pattern 方向与预期相反",
+      "fix": "reverse=true 重试一次。"
+    },
+    {
+      "trigger": "nx_mirror / nx_circular_pattern 返回实例数不符",
+      "fix": "核对 count 语义（count 含原始）；用 nx_list_bodies 核对实例数后再 Unite。"
+    },
+    {
+      "trigger": "孔类操作报 body 选择错误",
+      "fix": "nx_list_bodies 取当前 body_main 实际 id 后重试一次。"
+    },
+    {
+      "trigger": "边匹配数量不足（如 R6 只找到 3 条）",
+      "fix": "用 bbox/方向/长度复核，选取几何完全匹配的边；禁止按 index 猜测补齐。"
+    },
+    {
+      "trigger": "FAST 验证失败",
+      "fix": "仅当 Body 数量错误 / Bounding Box 明显错误 / 关键特征缺失 / Save 或 STEP 失败时才进入 DIAGNOSTIC；单个 face area 与理论值细微差异（如法兰顶环面 3782.48±5%）不进入 DIAGNOSTIC。进入 DIAGNOSTIC 后：nx_list_faces / nx_list_edges 复核关键面与边，定位失败步骤后用 nx_undo 回退最近一次操作并最小修正，禁止无脑重跑全流程。"
+    }
   ]
 }
