@@ -497,6 +497,7 @@ def test_run_history_and_runtime_dirty(tmp_path=None):
     assert R.runtime_dirty(r"C:\work\test.prt", h) is True
     # Runner started a run, did not save -> dirty
     h.record_start(r"C:\work\test.prt", "benchmark", "plan.json")
+    assert h.most_recent(r"C:\work\test.prt")["repair_attempt"] == 0
     assert R.runtime_dirty(r"C:\work\test.prt", h) is True
     # saved -> clean
     h.record_saved(r"C:\work\test.prt")
@@ -608,6 +609,22 @@ def test_repair_request_rejects_different_part():
         1, "benchmark", True, r"C:\\ws\\part-b.prt", prev
     )
     assert any("different part" in e for e in errs)
+
+
+def test_run_history_persists_consumed_repair(tmp_path=None):
+    import tempfile
+    d = tmp_path or tempfile.mkdtemp()
+    hp = os.path.join(str(d), "repair-history.json")
+    h = R.RunHistory(hp)
+    h.record_start(
+        r"C:\work\repair.prt",
+        "benchmark",
+        "repair.json",
+        repair_attempt=1,
+    )
+    assert h.most_recent(r"C:\work\repair.prt")["repair_attempt"] == 1
+    h2 = R.RunHistory(hp)
+    assert h2.most_recent(r"C:\work\repair.prt")["repair_attempt"] == 1
 
 # --------------------------------------------------------------------------
 # main
