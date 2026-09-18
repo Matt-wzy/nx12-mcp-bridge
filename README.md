@@ -68,12 +68,13 @@ The installer automatically completes:
 
 1. Python virtual environment + NX_MCP-Enhanced sidecar
 2. Workspace creation
-3. C# Loader build
-4. Loader deployment to the NX startup directory
-5. Drawing Reader Skill installation
-6. Modeling Planner Skill installation
-7. Pipeline Skill installation
-8. Plan Runner installation and lightweight tests
+3. `UGII_USER_DIR` configuration for the current Windows user
+4. C# Loader build
+5. Loader deployment to `%UGII_USER_DIR%\startup`
+6. Drawing Reader Skill installation
+7. Modeling Planner Skill installation
+8. Pipeline Skill installation
+9. Plan Runner installation and lightweight tests
 
 For multiple Doubao profiles:
 
@@ -81,8 +82,11 @@ For multiple Doubao profiles:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -DoubaoProfile "Profile 7"
 ```
 
-Then start/restart Siemens NX, open a new Doubao conversation, upload a 2D
-mechanical drawing, and send:
+If Siemens NX was already running before installation, restart it once so the
+new process can read `UGII_USER_DIR` and auto-load the newly deployed Loader.
+If NX was not running, simply start it after installation.
+
+Then open a new Doubao conversation, upload a 2D mechanical drawing, and send:
 
 ```
 开始建模
@@ -98,7 +102,8 @@ See [INSTALL.md](INSTALL.md) for details and manual/advanced installation.
 | --- | --- |
 | NX install (`UGII_BASE_DIR`) | `UGII_BASE_DIR` env → registry → `PATH` → `%ProgramFiles%\Siemens\NX*` |
 | Workspace (`NX_MCP_WORKSPACE`) | environment variable → `%USERPROFILE%\NX_MCP_WORKSPACE` |
-| Loader startup | `%UGII_USER_DIR%\startup` → `%USERPROFILE%\.nx_mcp_user\startup` |
+| NX user dir (`UGII_USER_DIR`) | existing environment → otherwise installer sets `%USERPROFILE%\.nx_mcp_user` |
+| Loader startup | `%UGII_USER_DIR%\startup` |
 
 ---
 
