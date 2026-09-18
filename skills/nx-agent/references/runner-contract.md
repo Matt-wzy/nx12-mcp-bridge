@@ -116,8 +116,13 @@ check（executable）检查项：
 （nx_hole / nx_counterbore_hole / nx_countersink_hole 生成）在
 `nx_list_faces` 中通常报告为 **`Swept`**（不是 `Cylindrical`）；
 `Cylindrical` 也可能出现在 Edge Blend 等曲面，不能作为"孔侧面"固定类型。
-验证孔时 `face_type` 用候选 `["Swept", "Cylindrical"]`，判据以
-`centroid_radius` + `centroid_z` + `count` 为主；centroid_z 必须按该位置
+验证孔时 `face_type` 用候选 `["Swept", "Cylindrical"]`。其中
+`centroid_radius` 的 Runner 固定语义是
+`sqrt(centroid_x² + centroid_y²)`，即 face 质心到**全局 XY 原点**的径向距离，
+**不是圆柱/孔半径，禁止把 diameter/2 写入该字段**。已知孔中心时优先使用
+named group：每个 group 用 `face_type + centroid:[hole_x,hole_y,sidewall_mid_z]`
+并以 `<group>_count=1` 验证；只有 PCD/同心于全局原点的布局才使用
+`centroid_radius + centroid_z + count`。centroid_z 必须按该位置
 **最终实际材料 Z 区间**中点推算（counterbore 截断、hole depth 超出材料
 高度时以实际区间为准）。完整契约见 topology-safety.md §4；Runner 代码禁止
 硬编码，Planner 从每个零件的最终几何关系推导。
