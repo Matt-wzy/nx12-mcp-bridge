@@ -2010,6 +2010,49 @@ def _drawing_check_profile_bbox(
             _drawing_check_profile_bbox(errors, child, bbox, f"{prefix}.{idx}")
 
 
+def _drawing_feature_coord(feature: dict, axis: str) -> Any:
+    centerline = feature.get("centerline")
+    if isinstance(centerline, dict) and axis in centerline:
+        return centerline.get(axis)
+    key = f"centerline_{axis}"
+    if key in feature:
+        return feature.get(key)
+    position = feature.get("position")
+    if isinstance(position, dict):
+        center = position.get("center")
+        if isinstance(center, dict):
+            return center.get(axis)
+        if isinstance(center, list):
+            idx = {"x": 0, "y": 1, "z": 2}[axis]
+            if idx < len(center):
+                return center[idx]
+    return None
+
+
+def _drawing_check_feature_structure(errors: list[str], feature: dict) -> None:
+    fid = str(feature.get("id") or "?")
+    feature_type = str(feature.get("type") or "").lower()
+    hole_like = "hole" in feature_type or feature_type == "coaxial_hole_group"
+    if not hole_like:
+        return
+
+    axis = str(feature.get("axis") or "").upper()
+    if axis not in {"X", "Y", "Z"}:
+        errors.append(f"feature {fid!r} hole-like geometry requires axis X/Y/Z")
+        return
+
+    needed = {
+        "X": ("y", "z"),
+        "Y": ("x", "z"),
+        "Z": ("x", "y"),
+    }[axis]
+    for coord in needed:
+        if _drawing_feature_coord(feature, coord) is None:
+            errors.append(
+                f"feature {fid!r} axis {axis} requires center coordinate {coord}"
+            )
+
+
 def _drawing_check_count(errors: list[str], item: dict, label: str) -> None:
     count = item.get("count")
     if count is None:
@@ -2359,6 +2402,9 @@ def check_drawing_json(data: dict) -> list[str]:
             target = f"profile.{path}"
             if target not in direct_targets and target not in derived_targets:
                 errors.append(f"profile geometry lacks evidence: {target}")
+
+    for feature in features.values():
+        _drawing_check_feature_structure(errors, feature)
 
     # Machine-computed coordinate sanity.
     coord = data.get("coordinate_system")
