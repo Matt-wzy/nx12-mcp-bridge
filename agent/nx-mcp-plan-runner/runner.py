@@ -9,6 +9,7 @@ This Runner is PART-AGNOSTIC and PLAN-AGNOSTIC:
 - it never invents repairs: a failed step stops the run (declared retries only).
 
 Modes:
+  python runner.py validate-drawing <drawing.json>  # Gate A structural/evidence check, no NX
   python runner.py run   <plan.json> [--workspace DIR] [--report OUT.json]
   python runner.py check <plan.json> [--frozen]     # static, no NX
   python runner.py build <plan.json> <out.json>     # frozen -> executable, no NX
@@ -1386,6 +1387,323 @@ def check_plan(plan: dict, executable: bool = True) -> list[str]:
 
 
 # --------------------------------------------------------------------------
+# Gate A drawing JSON validator — deterministic, part-agnostic, no NX
+# --------------------------------------------------------------------------
+_DRAWING_HARD_KEYS = {
+    "length", "length_x", "width", "width_y", "height", "height_z", "thickness",
+    "diameter", "radius", "depth", "axis", "width_axis", "through_axis",
+    "center", "centerline", "centerline_x", "centerline_y", "centerline_z",
+    "x", "y", "z", "top_z", "bottom_z", "start_z", "end_z", "side",
+    "start_side", "through_z", "count", "count_x", "count_y", "spacing",
+    "spacing_x", "spacing_y", "pitch", "pcd", "start_angle_deg",
+    "centers", "centers_x", "centers_y", "hole_x", "hole_y", "hole_z",
+    "spec", "kind", "pattern_type",
+}
+_DRAWING_META_KEYS = {
+    "id", "name", "type", "source_views", "confidence", "required_for_modeling",
+    "notes", "warning", "warnings", "description", "evidence", "hard_fields",
+}
+
+
+def _drawing_path_get(data: dict, target: str) -> Any:
+    """Resolve feature:<id>.<path> or overall_dimensions.<path>."""
+    if target.startswith("feature:"):
+        rest = target[len("feature:"):]
+        feature_id, dot, tail = rest.partition(".")
+        if not feature_id:
+            raise KeyError(target)
+        feature = next(
+            (x for x in data.get("features", []) if isinstance(x, dict) and x.get("id") == feature_id),
+            None,
+        )
+        if feature is None:
+            raise KeyError(target)
+        cur: Any = feature
+        parts = tail.split(".") if dot and tail else []
+    else:
+        cur = data
+        parts = target.split(".")
+    for part in parts:
+        if isinstance(cur, dict):
+            if part not in cur:
+                raise KeyError(target)
+            cur = cur[part]
+        elif isinstance(cur, list) and part.isdigit():
+            idx = int(part)
+            if idx < 0 or idx >= len(cur):
+                raise KeyError(target)
+            cur = cur[idx]
+        else:
+            raise KeyError(target)
+    return cur
+
+
+def _drawing_hard_paths(value: Any, prefix: str = "") -> set[str]:
+    """Collect geometry-bearing leaf paths from one required feature."""
+    out: set[str] = set()
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if key in _DRAWING_META_KEYS:
+                continue
+            path = f"{prefix}.{key}" if prefix else key
+            if isinstance(child, dict):
+                out.update(_drawing_hard_paths(child, path))
+            elif isinstance(child, list):
+                if child and all(isinstance(x, dict) for x in child):
+                    for idx, item in enumerate(child):
+                        out.update(_drawing_hard_paths(item, f"{path}.{idx}"))
+                elif key in _DRAWING_HARD_KEYS:
+                    out.add(path)
+            elif key in _DRAWING_HARD_KEYS:
+                out.add(path)
+    return out
+
+
+def _drawing_equal(a: Any, b: Any) -> bool:
+    na, nb = _num(a), _num(b)
+    if na is not None and nb is not None:
+        return abs(na - nb) <= 1e-9
+    return a == b
+
+
+def check_drawing_json(data: dict) -> list[str]:
+    """Machine-check Gate A evidence ownership, derivations and source counts."""
+    errors: list[str] = []
+    if not isinstance(data, dict):
+        return ["drawing JSON root must be an object"]
+
+    for key in ("overall_dimensions", "coordinate_system", "features",
+                "source_ledger", "source_ownership", "derived",
+                "unresolved", "dimension_conflicts", "coordinate_sanity",
+                "dimension_closure"):
+        if key not in data:
+            errors.append(f"drawing JSON missing {key}")
+
+    features = data.get("features")
+    if not isinstance(features, list) or not features:
+        errors.append("features must be a non-empty list")
+        features = []
+
+    feature_ids: set[str] = set()
+    for i, feature in enumerate(features):
+        if not isinstance(feature, dict):
+            errors.append(f"features[{i}] must be an object")
+            continue
+        fid = feature.get("id")
+        if not isinstance(fid, str) or not fid.strip():
+            errors.append(f"features[{i}] missing stable id")
+        elif fid in feature_ids:
+            errors.append(f"duplicate feature id {fid!r}")
+        else:
+            feature_ids.add(fid)
+
+    ledger = data.get("source_ledger")
+    sources: dict[str, dict] = {}
+    if not isinstance(ledger, list) or not ledger:
+        errors.append("source_ledger must be a non-empty list")
+        ledger = []
+    for i, source in enumerate(ledger):
+        if not isinstance(source, dict):
+            errors.append(f"source_ledger[{i}] must be an object")
+            continue
+        sid = source.get("id")
+        if not isinstance(sid, str) or not sid.strip():
+            errors.append(f"source_ledger[{i}] missing id")
+            continue
+        if sid in sources:
+            errors.append(f"duplicate source id {sid!r}")
+            continue
+        targets = source.get("targets")
+        if not isinstance(targets, list) or not targets or not all(isinstance(x, str) and x for x in targets):
+            errors.append(f"source {sid!r} must declare non-empty targets")
+            targets = []
+        if len(set(targets)) != len(targets):
+            errors.append(f"source {sid!r} has duplicate targets")
+        if len(targets) > 1 and source.get("shareable") is not True:
+            errors.append(f"source {sid!r} targets multiple fields but shareable=true is not declared")
+        for target in targets:
+            try:
+                _drawing_path_get(data, target)
+            except KeyError:
+                errors.append(f"source {sid!r} targets missing field {target!r}")
+        sources[sid] = source
+
+    ownership = data.get("source_ownership")
+    if not isinstance(ownership, dict) or ownership.get("schema_version") != 1:
+        errors.append("source_ownership.schema_version must be 1")
+
+    derived_items = data.get("derived")
+    if not isinstance(derived_items, list):
+        errors.append("derived must be a list")
+        derived_items = []
+    derived_targets: set[str] = set()
+    derived_ids: set[str] = set()
+    for i, item in enumerate(derived_items):
+        if not isinstance(item, dict):
+            errors.append(f"derived[{i}] must be an object")
+            continue
+        did = item.get("id")
+        target = item.get("target")
+        deps = item.get("dependencies")
+        if not isinstance(did, str) or not did:
+            errors.append(f"derived[{i}] missing id")
+        elif did in derived_ids:
+            errors.append(f"duplicate derived id {did!r}")
+        else:
+            derived_ids.add(did)
+        if not isinstance(target, str) or not target:
+            errors.append(f"derived[{i}] missing target")
+            continue
+        if target in derived_targets:
+            errors.append(f"multiple derived entries target {target!r}")
+        derived_targets.add(target)
+        try:
+            actual = _drawing_path_get(data, target)
+        except KeyError:
+            errors.append(f"derived {did or i!r} targets missing field {target!r}")
+            actual = None
+        if "value" not in item:
+            errors.append(f"derived {did or i!r} missing value")
+        elif actual is not None and not _drawing_equal(actual, item.get("value")):
+            errors.append(f"derived {did or i!r} value does not match target {target!r}")
+        if not isinstance(item.get("derivation"), str) or not item.get("derivation", "").strip():
+            errors.append(f"derived {did or i!r} missing derivation")
+        if not isinstance(deps, list) or not deps:
+            errors.append(f"derived {did or i!r} must declare dependencies")
+            deps = []
+        for dep in deps:
+            if not isinstance(dep, str):
+                errors.append(f"derived {did or i!r} has non-string dependency")
+                continue
+            if dep.startswith("source:"):
+                sid = dep[len("source:"):]
+                source = sources.get(sid)
+                if source is None:
+                    errors.append(f"derived {did or i!r} references unknown source {sid!r}")
+                elif target not in (source.get("targets") or []):
+                    errors.append(
+                        f"source {sid!r} is used for derived target {target!r} "
+                        "without declaring that target"
+                    )
+            elif dep.startswith("target:"):
+                ref_target = dep[len("target:"):]
+                try:
+                    _drawing_path_get(data, ref_target)
+                except KeyError:
+                    errors.append(f"derived {did or i!r} references missing target {ref_target!r}")
+            else:
+                errors.append(
+                    f"derived {did or i!r} dependency must start with source: or target:"
+                )
+
+    direct_targets = {
+        target
+        for source in sources.values()
+        for target in (source.get("targets") or [])
+        if isinstance(target, str)
+    }
+    covered_targets = direct_targets | derived_targets
+
+    # Every geometry-bearing field on a required feature must have direct or derived evidence.
+    for feature in features:
+        if not isinstance(feature, dict) or feature.get("required_for_modeling") is False:
+            continue
+        fid = feature.get("id")
+        if not isinstance(fid, str) or not fid:
+            continue
+        hard_paths = _drawing_hard_paths(feature)
+        declared = feature.get("hard_fields")
+        if isinstance(declared, list):
+            hard_paths.update(str(x) for x in declared if isinstance(x, str) and x)
+        for path in sorted(hard_paths):
+            target = f"feature:{fid}.{path}"
+            if target not in covered_targets:
+                errors.append(f"required geometry field lacks evidence: {target}")
+
+    # Count conservation.
+    for feature in features:
+        if not isinstance(feature, dict):
+            continue
+        count = feature.get("count")
+        if count is None:
+            continue
+        n = _num(count)
+        if n is None or int(n) != n or n <= 0:
+            errors.append(f"feature {feature.get('id')!r} count must be a positive integer")
+            continue
+        n_int = int(n)
+        centers = feature.get("explicit_centers")
+        if isinstance(centers, list) and len(centers) != n_int:
+            errors.append(
+                f"feature {feature.get('id')!r} explicit_centers count "
+                f"{len(centers)} != source count {n_int}"
+            )
+        if feature.get("pattern_type") == "rectangular":
+            cx, cy = _num(feature.get("count_x")), _num(feature.get("count_y"))
+            if cx is not None and cy is not None and int(cx) * int(cy) != n_int:
+                errors.append(
+                    f"feature {feature.get('id')!r} rectangular count_x*count_y "
+                    f"{int(cx) * int(cy)} != count {n_int}"
+                )
+
+    # Source count values must equal the bound count field.
+    for sid, source in sources.items():
+        if source.get("semantic") != "feature_count" or "value" not in source:
+            continue
+        for target in source.get("targets") or []:
+            if not target.endswith(".count"):
+                continue
+            try:
+                actual = _drawing_path_get(data, target)
+            except KeyError:
+                continue
+            if not _drawing_equal(actual, source.get("value")):
+                errors.append(
+                    f"feature-count source {sid!r} value {source.get('value')!r} "
+                    f"does not match {target}={actual!r}"
+                )
+
+    unresolved = data.get("unresolved")
+    if isinstance(unresolved, list):
+        blockers = [
+            x for x in unresolved
+            if isinstance(x, dict) and x.get("required_for_modeling") is True
+        ]
+        if blockers:
+            errors.append(f"blocking_unresolved={len(blockers)}")
+    conflicts = data.get("dimension_conflicts")
+    if isinstance(conflicts, list) and conflicts:
+        errors.append(f"dimension_conflicts={len(conflicts)}")
+    if (data.get("coordinate_sanity") or {}).get("status") != "pass":
+        errors.append("coordinate_sanity.status must be pass")
+    if (data.get("dimension_closure") or {}).get("status") != "closed":
+        errors.append("dimension_closure.status must be closed")
+
+    return errors
+
+
+def _load_drawing(path: str) -> dict:
+    with open(path, encoding="utf-8-sig") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise PlanError(f"{path}: drawing JSON root must be an object")
+    return data
+
+
+def _cmd_validate_drawing(args: argparse.Namespace) -> int:
+    drawing = _load_drawing(args.drawing)
+    errors = check_drawing_json(drawing)
+    result = {
+        "drawing": args.drawing,
+        "source_ownership": {"status": "pass" if not errors else "fail"},
+        "errors": errors,
+        "ok": not errors,
+    }
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0 if not errors else 1
+
+
+# --------------------------------------------------------------------------
 # CLI
 # --------------------------------------------------------------------------
 def _load_plan(path: str) -> dict:
@@ -1563,6 +1881,10 @@ def main(argv: list[str] | None = None) -> int:
     pb.add_argument("plan")
     pb.add_argument("out")
     pb.set_defaults(func=_cmd_build)
+
+    pd = sub.add_parser("validate-drawing", help="Gate A evidence/source validator (no NX)")
+    pd.add_argument("drawing")
+    pd.set_defaults(func=_cmd_validate_drawing)
 
     args = p.parse_args(argv)
     if inspect.iscoroutinefunction(args.func):
