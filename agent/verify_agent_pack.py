@@ -221,6 +221,10 @@ def main() -> None:
     if "test_timing_bucket_separates_postprocess_from_validation" not in timing_tests:
         fail("Runner timing phase regression test missing")
 
+    for ps1 in (ROOT / "install.ps1", ROOT / "install-agent.ps1"):
+        if not ps1.read_bytes().startswith(b"\xef\xbb\xbf"):
+            fail(f"{ps1.name} must keep UTF-8 BOM for Windows PowerShell 5.1")
+
     installer = (ROOT / "install.ps1").read_text(encoding="utf-8")
     if 'pip install -e ".[dev]"' in installer:
         fail("normal install.ps1 must not install development extras")
