@@ -86,6 +86,7 @@
 - 普通位置尺寸（如某轴线间距、中心高、参数 `E`）不得自动改解释为槽深/槽底；已经绑定到孔轴 centerline 的尺寸不得再跨 feature 复用成 slot 终止尺寸。
 - derived 必须绑定明确 `target`；没有额外图纸证据时禁止一个 derived 结果跨 feature 复用。
 - directional feature 输出要求：hole/counterbore/countersink → `axis`；slot/cut → `width_axis` + `through_axis`，非贯穿时才另给有证据的 `depth`。
+- source semantic 使用固定类别：槽宽=`slot_width`，两轴中心距=`center_distance/center_spacing`，数量=`feature_count`，孔径=`diameter`，中心坐标=`center_position`；关系尺寸禁止降级成泛化 `feature_dimension`。
 
 ### 7.1 同轴复合孔归组
 
@@ -133,15 +134,9 @@
 ## 11. 固定输出坐标系
 
 - XY 原点 = **零件整体外形中心**；Z=0 = **零件底面**；+X 向右、+Y 向上（俯视图）、+Z 向上。
-- 若 overall 为 `Lx×Ly×H`，最终全局 bbox 必须是 X=`[-Lx/2,+Lx/2]`、Y=`[-Ly/2,+Ly/2]`、Z=`[0,H]`。
-- 所有 Reader 最终输出的 profile 范围、孔/槽非轴向中心、pattern centers 必须按该坐标系归一化；边缘基准尺寸不能原样冒充中心原点坐标。
-- Gate A 前必须做 bbox sanity：用于实体内部加工的孔/沉孔/螺纹孔非轴向中心若超出 overall bbox 且没有图纸明确依据，必须 BLOCK，不得 closed。
-- Gate A 前必须做**中心距反算**：图纸明确中心距/节距为 P 时，最终坐标差必须反算为 P。
-- Gate A 前必须做**对称反算**：图纸明确关于中心线对称时，成对坐标中点必须回到对称线；若同时已知中心距 P，则关于 0 对称的坐标必须为 `±P/2`，不得产生无依据整体偏移。
-- pattern / explicit centers 必须同时通过 count、pitch/span、symmetry 的反算校验；失败即 blocking conflict。
-- 所有孔位、凸台位置、特征坐标一律转换到该坐标系后再输出；**不得让下游建模端自行猜测原点**。
-- 示例：160×100 底板、孔中心距四周边缘 20 mm → 四孔中心输出 `[-60,-30]`、`[-60,30]`、`[60,-30]`、`[60,30]`。
-- JSON 必须包含：
+- 所有 profile 范围、孔/槽非轴向中心、pattern centers 必须先换算到该坐标系；不得把边缘基准尺寸原样当全局坐标。
+- Reader 不再自己输出 bbox/中心距/对称“PASS”；这些由 `validate-drawing` 机器反算。
+- JSON 只需声明：
 ```json
 "coordinate_system": {
   "origin": "part_center_xy_bottom_z0",
