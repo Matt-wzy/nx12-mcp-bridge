@@ -103,6 +103,8 @@ Runner 正式开始建模后，任一 operation 失败：
 以下任一情况必须最终失败：
 - A 阶段 blocking_unresolved > 0 / dimension conflict / 关键几何尺寸缺失；
 - 需要猜尺寸、改尺寸、改孔位、改特征数量；
+- **禁止数值 nudge / epsilon 修复**：任何来自工程图、derived、frozen plan 的几何数值（坐标、起止面、slot 底、孔中心、直径、深度、厚度、圆角/倒角等）都不得为了让 Boolean/切除成功而改成邻近值，例如 `Z=50 → Z=49`。即使 Agent 认为“最终实体等价”，也不能把这种数值改写当成 Controlled Self-Healing；
+- 若失败根因是精确相切/共面导致的 CAD kernel Boolean 问题，只能使用**不改变任何设计数值与最终几何语义**、且已由 frozen contract 明确允许的计划级/选择级修复；没有这样的确定性修复路径就最终失败，不得靠扩大/缩短工具体来穿过门禁；
 - Boolean 不相交且根因属于几何设计/规划错误；
 - 超出 certified tools 能力边界；
 - 需要新增或修改 NX_MCP / Runner / Loader；
