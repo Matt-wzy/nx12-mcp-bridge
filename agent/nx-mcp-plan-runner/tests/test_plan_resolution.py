@@ -777,6 +777,578 @@ def test_run_history_persists_consumed_repair(tmp_path=None):
     assert h2.most_recent(r"C:\work\repair.prt")["repair_attempt"] == 1
 
 
+# --------------------------------------------------------------------------
+# schema-only normalization / capability / repair lineage regressions
+# --------------------------------------------------------------------------
+def test_schema_normalizer_preserves_unresolved_slot_null():
+    drawing = {
+        "features": [{
+            "id": "SLOT",
+            "type": "slot",
+            "bottom_z": None,
+            "width": "2.0",
+            "required_for_modeling": True,
+        }],
+        "source_ledger": [{
+            "id": "SW",
+            "semantic": "slot_width",
+            "value": "2.0",
+            "target": "feature:SLOT.width",
+        }],
+        "derived": [],
+        "unresolved": [{
+            "target": "feature:SLOT.bottom_z",
+            "required_for_modeling": True,
+        }],
+        "dimension_conflicts": [],
+    }
+    before = R.drawing_semantic_projection(drawing)
+    normalized, errors, _ = R.normalize_drawing_schema(drawing)
+    assert errors == []
+    assert normalized["features"][0]["bottom_z"] is None
+    assert normalized["unresolved"] == drawing["unresolved"]
+    assert not any(
+        source.get("semantic") == "depth"
+        for source in normalized["source_ledger"]
+    )
+    assert R.drawing_semantic_projection(normalized) == before
+
+
+def test_schema_normalizer_does_not_wash_derived_relation_to_direct():
+    drawing = {
+        "features": [{"id": "H", "type": "through_hole", "count": "2"}],
+        "source_ledger": [{
+            "id": "SP",
+            "semantic": "center_spacing",
+            "value": "24",
+            "between": ["feature:H.explicit_centers.0", "feature:H.explicit_centers.1"],
+        }],
+        "derived": [{
+            "id": "D1",
+            "target": "feature:H.explicit_centers.1",
+            "value": "-10.3",
+            "expr": {"op": "sub", "args": ["13.7", "24"]},
+            "relation_refs": ["SP"],
+        }],
+        "unresolved": [],
+        "dimension_conflicts": [],
+    }
+    normalized, errors, _ = R.normalize_drawing_schema(drawing)
+    assert errors == []
+    assert normalized["source_ledger"][0]["semantic"] == "center_spacing"
+    assert normalized["source_ledger"][0].get("target") is None
+    assert len(normalized["derived"]) == 1
+    assert normalized["derived"][0]["target"] == "feature:H.explicit_centers.1"
+
+
+def test_uncertain_warning_cannot_coexist_with_closed_geometry():
+    drawing_path = os.path.abspath(
+        os.path.join(PROJECT, "..", "..", "skills", "nx-agent", "examples", "example-output.json")
+    )
+    with open(drawing_path, encoding="utf-8") as handle:
+        drawing = json.load(handle)
+    drawing["warnings"] = ["slot depth 为推定值，需确认"]
+    drawing["dimension_closure"] = {"status": "closed"}
+    errors = R.check_drawing_json(drawing)
+    assert any("warnings contain inferred/uncertain geometry" in error for error in errors)
+
+
+def _thread_drawing(surrogate=None):
+    feature = {
+        "id": "T1",
+        "type": "tapped_hole",
+        "dimensions": {"thread_size": "M6", "depth": 12},
+        "axis": "X",
+        "position": {"center": [0, 0, 58]},
+        "axis_range": [-20, -8],
+        "count": 1,
+        "required_for_modeling": True,
+    }
+    if surrogate is not None:
+        feature["surrogate_geometry"] = surrogate
+    return {"features": [feature]}
+
+
+def test_bare_m6_uses_standard_pitch_then_parameterized_formula():
+    recipes, errors = R.resolve_thread_surrogates(_thread_drawing())
+    assert errors == []
+    assert recipes == [{
+        "feature_id": "T1",
+        "kind": "thread_surrogate",
+        "thread_spec": "M6",
+        "nominal_diameter": 6.0,
+        "pitch": 1.0,
+        "pitch_source": "standard_default_coarse",
+        "representation": "tap_drill",
+        "surrogate_method": "nominal_minus_pitch",
+        "surrogate_diameter": 5.0,
+        "approximation": True,
+        "reason": "real thread capability unavailable",
+        "provenance": "parameterized_metric_resolver",
+        "supplemented_fields": ["representation", "surrogate_diameter"],
+    }]
+    forbidden = {"axis", "center", "position", "depth", "range", "side", "count"}
+    assert forbidden.isdisjoint(recipes[0])
+
+
+def test_explicit_m6_pitch_is_parsed_and_calculated():
+    pitched = _thread_drawing()
+    pitched["features"][0]["dimensions"]["thread_size"] = "M6×1.0"
+    recipe = R.resolve_thread_surrogates(pitched)[0][0]
+    assert recipe["thread_spec"] == "M6x1"
+    assert recipe["nominal_diameter"] == 6.0
+    assert recipe["pitch"] == 1.0
+    assert recipe["pitch_source"] == "drawing_explicit"
+    assert recipe["surrogate_diameter"] == 5.0
+
+
+def test_different_metric_thread_uses_same_parameterized_path():
+    drawing = _thread_drawing()
+    drawing["features"][0]["dimensions"]["thread_size"] = "M8x1.25"
+    recipe = R.resolve_thread_surrogates(drawing)[0][0]
+    assert recipe["nominal_diameter"] == 8.0
+    assert recipe["pitch"] == 1.25
+    assert recipe["surrogate_method"] == "nominal_minus_pitch"
+    assert recipe["surrogate_diameter"] == 6.75
+    drawing["features"][0]["dimensions"]["thread_size"] = "M8"
+    bare_recipe = R.resolve_thread_surrogates(drawing)[0][0]
+    assert bare_recipe["pitch_source"] == "standard_default_coarse"
+    assert bare_recipe["pitch"] == 1.25
+    assert bare_recipe["surrogate_diameter"] == 6.75
+
+
+def test_runner_has_no_thread_size_to_final_diameter_mapping():
+    import inspect
+    source = inspect.getsource(R)
+    assert "_THREAD_SURROGATE_RECIPES" not in source
+    assert '"M6":' not in source
+    assert R._PROJECT_SUPPORTED_METRIC_COARSE_PITCH_MM[6.0] == 1.0
+
+
+def test_project_supported_coarse_pitch_subset_table_driven():
+    expected = {
+        1.0: 0.25, 1.2: 0.25, 1.4: 0.30, 1.6: 0.35, 1.8: 0.35,
+        2.0: 0.40, 2.2: 0.45, 2.5: 0.45, 3.0: 0.50, 3.5: 0.60,
+        4.0: 0.70, 4.5: 0.75, 5.0: 0.80, 6.0: 1.00, 7.0: 1.00,
+        8.0: 1.25, 10.0: 1.50, 12.0: 1.75, 14.0: 2.00,
+        16.0: 2.00, 18.0: 2.50, 20.0: 2.50, 22.0: 2.50,
+        24.0: 3.00, 27.0: 3.00, 30.0: 3.50, 33.0: 3.50,
+        36.0: 4.00, 39.0: 4.00, 42.0: 4.50, 45.0: 4.50,
+        48.0: 5.00, 52.0: 5.00, 56.0: 5.50, 60.0: 5.50,
+        64.0: 6.00,
+    }
+    assert R._PROJECT_SUPPORTED_METRIC_COARSE_PITCH_MM == expected
+    assert len(expected) == 36
+    for nominal, pitch in expected.items():
+        parameters, error = R.resolve_metric_thread_parameters(f"M{nominal:g}")
+        assert error is None
+        assert parameters["nominal_diameter"] == nominal
+        assert parameters["pitch"] == pitch
+        assert parameters["pitch_source"] == "standard_default_coarse"
+        assert parameters["nominal_diameter"] - parameters["pitch"] > 0
+    assert R._METRIC_COARSE_PITCH_METADATA["scope"] == (
+        "project_supported_metric_coarse_pitch_subset"
+    )
+    assert R._METRIC_COARSE_PITCH_METADATA["release_audit_required"] is True
+
+
+def test_unsupported_bare_nominal_blocks_but_explicit_pitch_bypasses_subset():
+    parameters, error = R.resolve_metric_thread_parameters("M6.3")
+    assert parameters is None
+    assert "no standard coarse-pitch metadata" in error
+    explicit, explicit_error = R.resolve_metric_thread_parameters("M6.3x0.7")
+    assert explicit_error is None
+    assert explicit["nominal_diameter"] == 6.3
+    assert explicit["pitch"] == 0.7
+    assert explicit["pitch_source"] == "drawing_explicit"
+
+
+def test_explicit_approved_thread_surrogate_is_allowed():
+    drawing = _thread_drawing({
+        "representation": "input_cylindrical_surrogate",
+        "diameter": 5.0,
+        "depth": 12,
+        "axis_range": [-20, -8],
+        "approved_for_delivery": True,
+    })
+    recipes, errors = R.resolve_thread_surrogates(drawing)
+    assert errors == []
+    assert recipes[0]["provenance"] == "drawing_input"
+    assert "depth" not in recipes[0]
+    assert "axis_range" not in recipes[0]
+
+
+def test_explicit_surrogate_cannot_change_confirmed_thread_geometry():
+    drawing = _thread_drawing({
+        "representation": "input_cylindrical_surrogate",
+        "diameter": 5.0,
+        "depth": 11,
+        "axis_range": [-20, -9],
+        "approved_for_delivery": True,
+    })
+    recipes, errors = R.resolve_thread_surrogates(drawing)
+    assert recipes == []
+    assert any("changes depth" in error for error in errors)
+
+
+def _thread_frozen_plan(
+    recipes,
+    geometries,
+    include_provenance=True,
+    diameter=5.0,
+    plane="YZ",
+    center=None,
+    depth=12,
+    start_offset=-20,
+    omit_start_offset=False,
+):
+    center = center or {"x": 0, "y": 58}
+    subtract_args = {
+        "sketch_id": "sketch_thread",
+        "distance": depth,
+        "start_offset": start_offset,
+        "reverse": False,
+        "operation": "subtract",
+        "target_body_id": "body_main",
+    }
+    if omit_start_offset:
+        subtract_args.pop("start_offset")
+    subtract = {
+        "step": 9,
+        "tool": "nx_extrude",
+        "target": "body_main",
+        "tool_args": subtract_args,
+        "topology_changes": True,
+    }
+    if include_provenance:
+        subtract["thread_surrogate_use"] = {
+            "feature_id": "T1",
+            "recipe_sha256": R._json_sha256(recipes[0]),
+            "drawing_geometry_sha256": geometries[0]["drawing_geometry_sha256"],
+            "owner_feature_id": geometries[0]["owner_feature_id"],
+        }
+        if "side" in geometries[0]:
+            subtract["thread_surrogate_use"]["side"] = geometries[0]["side"]
+    return {
+        "mode": "FAST",
+        "thread_surrogates": recipes,
+        "operations": [
+            {
+                "step": 1, "tool": "nx_create_part",
+                "tool_args": {"path": "part.prt", "units": "mm"},
+                "topology_changes": False,
+            },
+            {
+                "step": 2, "tool": "nx_create_sketch", "target": "-",
+                "tool_args": {"plane": "YZ"}, "topology_changes": False,
+            },
+            {
+                "step": 3, "tool": "nx_sketch_rectangle", "target": "sketch_base",
+                "tool_args": {
+                    "sketch_id": "sketch_base",
+                    "corner1": {"x": -10, "y": -10},
+                    "corner2": {"x": 10, "y": 10},
+                },
+                "topology_changes": False,
+            },
+            {
+                "step": 4, "tool": "nx_finish_sketch", "target": "sketch_base",
+                "tool_args": {"sketch_id": "sketch_base"},
+                "topology_changes": False,
+            },
+            {
+                "step": 5, "tool": "nx_extrude", "target": "sketch_base",
+                "tool_args": {
+                    "sketch_id": "sketch_base", "distance": 40,
+                    "start_offset": -20, "reverse": False, "operation": "create",
+                },
+                "topology_changes": True,
+            },
+            {
+                "step": 6, "tool": "nx_create_sketch", "target": "-",
+                "tool_args": {"plane": plane}, "topology_changes": False,
+            },
+            {
+                "step": 7, "tool": "nx_sketch_circle", "target": "sketch_thread",
+                "tool_args": {
+                    "sketch_id": "sketch_thread", "center": center,
+                    "diameter": diameter,
+                },
+                "topology_changes": False,
+            },
+            {
+                "step": 8, "tool": "nx_finish_sketch", "target": "sketch_thread",
+                "tool_args": {"sketch_id": "sketch_thread"},
+                "topology_changes": False,
+            },
+            subtract,
+        ],
+    }
+
+
+def _thread_gate_errors(drawing, **plan_overrides):
+    recipes, recipe_errors = R.resolve_thread_surrogates(drawing)
+    geometries, geometry_errors = R.resolve_thread_drawing_geometries(drawing)
+    if geometry_errors:
+        return recipe_errors + geometry_errors
+    plan = _thread_frozen_plan(recipes, geometries, **plan_overrides)
+    return recipe_errors + R.thread_surrogate_plan_errors(plan, recipes, geometries)
+
+
+def test_thread_gate_b_accepts_equivalent_axis_x_geometry():
+    assert _thread_gate_errors(_thread_drawing()) == []
+
+
+def test_thread_gate_b_rejects_axis_change():
+    errors = _thread_gate_errors(_thread_drawing(), plane="XZ")
+    assert any("changes axis" in error for error in errors)
+
+
+def test_thread_gate_b_rejects_center_change():
+    errors = _thread_gate_errors(
+        _thread_drawing(), center={"x": 1, "y": 58}
+    )
+    assert any("changes center/position" in error for error in errors)
+
+
+def test_thread_gate_b_rejects_depth_change():
+    errors = _thread_gate_errors(_thread_drawing(), depth=11)
+    assert any("changes depth" in error for error in errors)
+
+
+def test_thread_gate_b_rejects_range_change_and_loader_default():
+    changed = _thread_gate_errors(_thread_drawing(), start_offset=-19)
+    assert any("changes axial range" in error for error in changed)
+    omitted = _thread_gate_errors(_thread_drawing(), omit_start_offset=True)
+    assert any("defaults are forbidden" in error for error in omitted)
+
+
+def test_thread_gate_b_rejects_count_change():
+    drawing = _thread_drawing()
+    feature = drawing["features"][0]
+    feature["count"] = 2
+    feature["explicit_centers"] = [[0, 0, 58], [0, 4, 58]]
+    errors = _thread_gate_errors(drawing)
+    assert any("operation count differs" in error for error in errors)
+
+
+def test_thread_gate_b_rejects_identity_ownership_and_side_change():
+    drawing = _thread_drawing()
+    drawing["features"][0]["side"] = "+X"
+    recipes, _ = R.resolve_thread_surrogates(drawing)
+    geometries, _ = R.resolve_thread_drawing_geometries(drawing)
+    plan = _thread_frozen_plan(recipes, geometries)
+    use = plan["operations"][-1]["thread_surrogate_use"]
+    use["owner_feature_id"] = "OTHER"
+    errors = R.thread_surrogate_plan_errors(plan, recipes, geometries)
+    assert any("changes feature ownership" in error for error in errors)
+    use["owner_feature_id"] = geometries[0]["owner_feature_id"]
+    use["side"] = "-X"
+    errors = R.thread_surrogate_plan_errors(plan, recipes, geometries)
+    assert any("changes side semantics" in error for error in errors)
+    use["feature_id"] = "NOT_IN_DRAWING"
+    errors = R.thread_surrogate_plan_errors(plan, recipes, geometries)
+    assert any("feature identity is absent" in error for error in errors)
+
+
+def test_thread_gate_b_blocks_unresolved_or_missing_geometry():
+    unresolved = _thread_drawing()
+    unresolved["unresolved"] = [{
+        "target": "feature:T1.axis_range",
+        "required_for_modeling": True,
+    }]
+    assert any("blocking unresolved" in error
+               for error in _thread_gate_errors(unresolved))
+    for field in ("axis", "position", "axis_range", "count"):
+        drawing = _thread_drawing()
+        del drawing["features"][0][field]
+        assert _thread_gate_errors(drawing), field
+    drawing = _thread_drawing()
+    del drawing["features"][0]["dimensions"]["depth"]
+    assert _thread_gate_errors(drawing)
+
+
+def test_gate_b_blocks_planner_generated_m6_tap_drill(tmp_path=None):
+    import tempfile
+    from types import SimpleNamespace
+
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing_path = os.path.join(directory, "drawing.json")
+    frozen_path = os.path.join(directory, "frozen.json")
+    executable_path = os.path.join(directory, "executable.json")
+    with open(drawing_path, "w", encoding="utf-8") as handle:
+        json.dump(_thread_drawing(), handle)
+    recipes, _ = R.resolve_thread_surrogates(_thread_drawing())
+    geometries, _ = R.resolve_thread_drawing_geometries(_thread_drawing())
+    frozen = _thread_frozen_plan(recipes, geometries, include_provenance=False)
+    with open(frozen_path, "w", encoding="utf-8") as handle:
+        json.dump(frozen, handle)
+    code, result = _capture_json_command(
+        R._cmd_build,
+        SimpleNamespace(plan=frozen_path, out=executable_path, drawing=drawing_path),
+    )
+    assert code == 1
+    assert not os.path.exists(executable_path)
+    assert any("exact machine recipe provenance" in error
+               for error in result["capability_errors"])
+
+
+def test_gate_b_builds_m6_parameterized_surrogate_with_machine_provenance(tmp_path=None):
+    import tempfile
+    from types import SimpleNamespace
+
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing_path = os.path.join(directory, "drawing.json")
+    frozen_path = os.path.join(directory, "frozen.json")
+    executable_path = os.path.join(directory, "executable.json")
+    drawing = _thread_drawing()
+    recipes, errors = R.resolve_thread_surrogates(drawing)
+    geometries, geometry_errors = R.resolve_thread_drawing_geometries(drawing)
+    assert errors == []
+    assert geometry_errors == []
+    with open(drawing_path, "w", encoding="utf-8") as handle:
+        json.dump(drawing, handle)
+    with open(frozen_path, "w", encoding="utf-8") as handle:
+        json.dump(_thread_frozen_plan(recipes, geometries), handle)
+    code, result = _capture_json_command(
+        R._cmd_build,
+        SimpleNamespace(plan=frozen_path, out=executable_path, drawing=drawing_path),
+    )
+    assert code == 0, result
+    with open(executable_path, encoding="utf-8") as handle:
+        executable = json.load(handle)
+    assert executable["design_guard"]["thread_surrogates"] == recipes
+    approximations = R.thread_approximations_from_guard(executable["design_guard"])
+    assert approximations == [{
+        "feature_id": "T1",
+        "kind": "thread_surrogate",
+        "thread_spec": "M6",
+        "nominal_diameter": 6.0,
+        "pitch": 1.0,
+        "pitch_source": "standard_default_coarse",
+        "representation": "tap_drill",
+        "surrogate_method": "nominal_minus_pitch",
+        "surrogate_diameter": 5.0,
+        "approximation": True,
+        "reason": "real thread capability unavailable",
+        "provenance": "parameterized_metric_resolver",
+    }]
+
+
+def test_unknown_thread_without_recipe_is_blocked():
+    drawing = _thread_drawing()
+    drawing["features"][0]["dimensions"]["thread_size"] = "UNC 1/4-20"
+    recipes, errors = R.resolve_thread_surrogates(drawing)
+    assert recipes == []
+    assert any("cannot use deterministic surrogate" in error for error in errors)
+
+
+def test_gate_b_rejects_planner_diameter_different_from_resolver(tmp_path=None):
+    import tempfile
+    from types import SimpleNamespace
+
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing_path = os.path.join(directory, "drawing.json")
+    frozen_path = os.path.join(directory, "frozen.json")
+    executable_path = os.path.join(directory, "executable.json")
+    drawing = _thread_drawing()
+    recipes, _ = R.resolve_thread_surrogates(drawing)
+    geometries, _ = R.resolve_thread_drawing_geometries(drawing)
+    with open(drawing_path, "w", encoding="utf-8") as handle:
+        json.dump(drawing, handle)
+    with open(frozen_path, "w", encoding="utf-8") as handle:
+        json.dump(_thread_frozen_plan(recipes, geometries, diameter=4.9), handle)
+    code, result = _capture_json_command(
+        R._cmd_build,
+        SimpleNamespace(plan=frozen_path, out=executable_path, drawing=drawing_path),
+    )
+    assert code == 1
+    assert any("diameter differs from resolver" in error
+               for error in result["capability_errors"])
+
+
+def test_thread_recipe_cannot_supply_missing_geometry():
+    drawing = _thread_drawing()
+    feature = drawing["features"][0]
+    del feature["axis"]
+    del feature["position"]
+    del feature["dimensions"]["depth"]
+    recipes, errors = R.resolve_thread_surrogates(drawing)
+    assert errors == []
+    assert set(recipes[0]["supplemented_fields"]) == {
+        "representation", "surrogate_diameter"
+    }
+    assert all(key not in recipes[0] for key in ("axis", "center", "depth", "range"))
+
+
+def test_gate_b_normal_drawing_path_still_builds_with_lineage(tmp_path=None):
+    import tempfile
+    from types import SimpleNamespace
+
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing_path = os.path.abspath(
+        os.path.join(PROJECT, "..", "..", "skills", "nx-agent", "examples", "example-output.json")
+    )
+    executable_path = os.path.join(directory, "executable.json")
+    code, result = _capture_json_command(
+        R._cmd_build,
+        SimpleNamespace(plan=FROZEN_PLAN, out=executable_path, drawing=drawing_path),
+    )
+    assert code == 0, result
+    with open(executable_path, encoding="utf-8") as handle:
+        executable = json.load(handle)
+    assert executable["design_guard"]["source_drawing"] == drawing_path
+    assert executable["design_guard"]["drawing_semantics_sha256"]
+    assert executable["design_guard"]["plan_geometry_sha256"]
+
+
+def test_failed_design_lineage_cannot_escape_by_output_rename(tmp_path=None):
+    import tempfile
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    history = R.RunHistory(os.path.join(directory, "history.json"))
+    plan = {"operations": [{
+        "step": 1,
+        "tool": "nx_extrude",
+        "tool_args": {"distance": 40, "start_offset": -20},
+        "topology_changes": True,
+    }]}
+    guard = R.make_design_guard({"features": []}, os.path.join(directory, "drawing.json"), plan)
+    history.record_start(
+        os.path.join(directory, "part.prt"), "normal", "plan.json", design_guard=guard
+    )
+    history.record_failed(os.path.join(directory, "part.prt"))
+    errors = R.normal_run_lineage_errors(0, guard, history)
+    assert any("requires --repair-attempt 1" in error for error in errors)
+    assert history.most_recent(os.path.join(directory, "part_v2.prt")) is None
+
+
+def test_repair_rejects_geometry_bearing_range_change():
+    drawing = {"features": []}
+    plan1 = {"operations": [{
+        "step": 1, "tool": "nx_extrude",
+        "tool_args": {"distance": 40, "start_offset": -20},
+        "topology_changes": True,
+    }]}
+    plan2 = {"operations": [{
+        "step": 1, "tool": "nx_extrude",
+        "tool_args": {"distance": 19, "start_offset": 1},
+        "topology_changes": True,
+    }]}
+    guard1 = R.make_design_guard(drawing, r"C:\ws\drawing.json", plan1)
+    guard2 = R.make_design_guard(drawing, r"C:\ws\drawing.json", plan2)
+    previous = {
+        "status": "failed",
+        "failed_step": 1,
+        "repair_attempt": 0,
+        "planned_part": r"C:\ws\part.prt",
+        "design_guard": guard1,
+    }
+    errors = R.repair_request_errors(
+        1, "benchmark", True, r"C:\ws\part.prt", previous, guard2
+    )
+    assert any("geometry-bearing plan fields" in error for error in errors)
+
+
 def _capture_json_command(command, args):
     import contextlib
     import io
