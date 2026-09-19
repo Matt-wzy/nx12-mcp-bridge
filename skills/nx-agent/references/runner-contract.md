@@ -76,7 +76,11 @@
 - 触发条件：operation 含 `selection_criteria` 且 `tool` 是 `nx_list_edges` / `nx_list_faces`。
 - 命名：`sel_<step>`（如第 28 步 → `sel_28`）。
 - kind：criteria 为 group 形式时 kind=`groups`（引用 `$selection.sel_N.group`）；否则 kind=`indices`。
-- 消费步骤（如 edge_blend / chamfer）的 `edge_indices` 用占位符 `<stepN ...>` 引用对应 list 步骤。
+- 消费步骤（如 edge_blend / chamfer）的 `edge_indices`、以及 shell 的
+  `remove_face_index`，若依赖前序 selection，frozen 中**必须**使用
+  `<stepN ...>` 占位符引用对应 list 步骤；禁止写裸语义名（例如
+  `base_plate_vertical_edges`）。build 只把合法占位符转换为
+  `$selection.sel_N`，裸字符串会被 frozen/executable 静态检查直接拒绝。
 
 ## 7. rectangle adapter
 
