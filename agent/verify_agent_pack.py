@@ -322,6 +322,18 @@ def main() -> None:
     if fixture_errors:
         fail(f"drawing geometry fixture fails Gate A validator: {fixture_errors[:5]}")
 
+    bad_center_missing = json.loads(json.dumps(geometry_fixture))
+    for feature in bad_center_missing["features"]:
+        if feature.get("id") == "F_MAIN":
+            feature["centerline"].pop("x", None)
+    bad_center_missing["source_ledger"] = [
+        source
+        for source in bad_center_missing["source_ledger"]
+        if source.get("id") != "S_MAIN_X"
+    ]
+    if not runner.check_drawing_json(bad_center_missing):
+        fail("drawing validator does not reject incomplete hole center coordinates")
+
     bad_slot_source = json.loads(json.dumps(geometry_fixture))
     for item in bad_slot_source["derived"]:
         if item.get("id") == "D_SLOT_BOTTOM":
