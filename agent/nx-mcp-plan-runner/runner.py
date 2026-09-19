@@ -2130,7 +2130,9 @@ def _drawing_check_symmetry(
         if isinstance(axis_values, list):
             values = [number for item in axis_values if (number := _num(item)) is not None]
     if not values:
-        errors.append(f"symmetry source has no machine-checkable centers for feature {feature_id!r}")
+        errors.append(
+            f"symmetry source has no machine-checkable centers for feature {feature_id!r}"
+        )
         return
 
     for value in values:
