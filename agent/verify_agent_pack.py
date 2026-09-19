@@ -676,7 +676,7 @@ def main() -> None:
         "正视图 / Front：位于 **XZ** 平面，视图法向轴为 **Y**",
         "width_axis",
         "through_axis",
-        "槽宽就是 2",
+        "端点分别落在两侧边界",
         "普通线性位置尺寸不得因为数值合适就被改解释成 slot/cut depth",
     ):
         if token not in drawing_reader:
@@ -684,8 +684,8 @@ def main() -> None:
     for token in (
         "Front/正视图 = XZ 平面，法向轴 Y",
         "两边间距只确定 `width_axis`",
-        "不得把附近没有绑定到槽宽的 `1.6` 当成槽宽",
-        "普通位置尺寸",
+        "附近未绑定到槽边的数值不得作为槽宽",
+        "中心线到中心线的位置尺寸不得解释为槽深/槽底",
     ):
         if token not in drawing_rules:
             fail(f"quick drawing rules regression: missing {token}")
@@ -705,7 +705,7 @@ def main() -> None:
             fail(f"drawing minimum-closure regression: missing {token}")
     for token in (
         "每个 unresolved 必须标",
-        "40+18=58",
+        "必须保存确定性算式与来源",
         "不要求 warning/soft unresolved=0",
         "只询问 blocking unresolved",
     ):
@@ -772,15 +772,15 @@ def main() -> None:
             fail(f"top-level Gate B semantic/capability regression: missing {token}")
 
     for token in (
-        '"type": "coaxial_hole_group"',
+        "同轴复合孔必须先做 association",
         "不能拥有不同的非轴向中心坐标",
-        "同组所有 member 继承这一中心线",
+        "所有 member 继承同一非轴向中心坐标",
         "参数表中的字段名 `C` 与数值 `2`",
     ):
         if token not in drawing_reader:
             fail(f"drawing coaxial/chamfer semantics regression: missing {token}")
     for token in (
-        "先做 **feature association**",
+        "**Feature association**",
         "禁止先给每个候选 member 分别赋全局 Z/Y/X",
         "固定坐标归一化",
         "validate-drawing",
@@ -790,8 +790,8 @@ def main() -> None:
             fail(f"drawing association/coordinate sanity regression: missing {token}")
     for token in (
         "HARD 几何字段一旦由明确证据绑定，其语义归属锁定",
-        "一旦 `slot.width` 已由明确槽边尺寸绑定",
-        "不得把该中心距拿去生成 `slot.depth` / `slot.bottom_z`",
+        "已绑定的 `slot.width` 不得被其它标注覆盖",
+        "不得生成 `slot.depth` / `slot.bottom`",
         "`derived` 必须写明 `target`",
         "source_ledger",
         "center_distance / center_spacing",
@@ -811,7 +811,7 @@ def main() -> None:
         if token not in drawing_rules:
             fail(f"quick drawing coaxial/chamfer regression: missing {token}")
     for token in (
-        "先关联 feature，再求 group centerline，最后转全局坐标",
+        "view-local evidence → feature association → dimension ownership → relation/derived → global coordinates",
         "固定输出坐标系",
         "不得把边缘基准尺寸原样当全局坐标",
         "validate-drawing",
@@ -820,8 +820,8 @@ def main() -> None:
             fail(f"quick drawing coordinate sanity regression: missing {token}")
     for token in (
         "字段归属锁定",
-        "已绑定的 `slot.width` 不得在后续阶段改写",
-        "不得再跨 feature 复用成 slot 终止尺寸",
+        "已绑定的 `slot.width` 不得改写",
+        "不得跨 feature 复用语义",
         "derived 必须绑定明确 `target`",
         "`N×` 是该 feature 的**总实例数**",
         "`len(explicit_centers) == count`",
@@ -830,6 +830,22 @@ def main() -> None:
     ):
         if token not in drawing_rules:
             fail(f"quick drawing ownership/count regression: missing {token}")
+
+    for token in (
+        "association 和 ownership 完成前只保存 view-local 证据",
+        "隐藏矩形/隐藏平行线是轴向投影候选",
+        "相同数值在不同位置重复出现时",
+        "center coordinate 与沿轴方向的 start/end/range 必须分开",
+        "不得因整体 bbox 对称而默认把局部 profile 居中",
+    ):
+        if token not in drawing_reader:
+            fail(f"drawing association/ownership ordering regression: missing {token}")
+    for token in (
+        "本轮当前解释",
+        "禁止发现旧 `drawing.json` 后直接 validate",
+    ):
+        if token not in top:
+            fail(f"Mode B current-request drawing isolation regression: missing {token}")
     for token in (
         "禁止数值 nudge / epsilon 修复",
         "`Z=50 → Z=49`",

@@ -15,7 +15,7 @@
 | 剖视图 Section | 带剖切符号与标注（如 `A-A`、`SECTION A-A`、剖面线 hatched）；给出内部结构：孔径、深度、壁厚、台阶 |
 | 局部放大图 Detail | 标注如 `DETAIL B`、`I` 放大圈；用于读小尺寸与倒角/圆角细节 |
 
-**规则**：先整体识别视图布局，再按视图归属登记标注。剖视图中的内部尺寸（孔深、沉孔深、壁厚）优先级最高，主/俯视图中的外部尺寸优先级最高。
+**规则**：先确定各视图 plane / normal 和 view-local 轴，再登记标注；feature association、dimension ownership 完成后才转换全局坐标。剖视图中的内部尺寸优先，主/俯视图中的外部尺寸优先。
 
 ### 1.1 正投影视图 → 全局轴（硬契约）
 
@@ -28,17 +28,18 @@
 
 由此：
 - 某孔在一个已确定方向的正投影视图中显示为圆 → 该孔 `axis` = 该视图法向轴；
+- 同一孔在另一正交视图中的隐藏矩形/隐藏平行线只表示轴向投影，不能据此把孔轴设为该视图法向；
 - 槽/开缝在某视图显示成两条平行边 → 两边间距只确定 `width_axis`，不能直接当作 `through_axis`；
 - 局部放大图必须继承明确母视图的方向；母视图不明则方向保持 unresolved。
 
 ## 2. 跨视图尺寸对应关系
 
-**处理顺序：先关联 feature，再求 group centerline，最后转全局坐标。**
-禁止先给每个视图里的孔/沉孔/螺纹孔各自写一个全局中心坐标，再根据这些已猜坐标决定是否属于同一特征。
+**处理顺序：view-local evidence → feature association → dimension ownership → relation/derived → global coordinates。**
 
-- 同一特征的不同尺寸分布在多个视图：俯视图给 长×宽，主/剖视图给 高与厚度，Ø 直径常同时出现在投影图与剖视图。
-- 同一标注在不同视图重复出现 = 交叉确认：**合并为同一特征，confidence 提升**，不得作为多个独立尺寸。
-- 示例：俯视图 Ø60 凸台 + 剖视图 Ø60 凸台 → 一个 boss 特征，source_views: ["俯视图","剖视图"]。
+- 圆形投影与其它视图的隐藏矩形/平行线，须按投影对齐、中心线、直径/规格、引线和 feature identity 关联后再合并；
+- M6、沉孔、通孔、安装孔等邻近特征先确定所属中心轴/复合组，再绑定位置尺寸；仅文本距离、数字邻近或相同数值都不足以归组；
+- 同一 feature 在多个视图重复表达时合并为一个 feature，记录各来源视图；不得先给每个投影写全局 center，再用猜出的坐标反向归组；
+- 视图明确显示轮廓左/右对齐或偏置时保留该关系，不得因整体 bbox 对称而自动居中。
 
 ## 3. 标注符号速查
 
@@ -79,11 +80,11 @@
 
 ## 7. 尺寸归属与深度语义
 
-- 明确尺寸线/箭头/引线绑定到哪个特征，就优先归属于哪个特征；禁止用附近孤立数字或其它参数覆盖。
+- 只沿 witness/extension line、leader、arrow endpoint、centerline endpoint 和 feature boundary endpoint 确定尺寸归属；禁止用附近孤立数字或其它参数覆盖。
 - **字段归属锁定**：HARD 几何字段一旦被明确标注/确定性 derived 绑定，后续不得被其它 feature 的尺寸覆盖；一个 source 默认只服务一个 geometry field，除非图纸明确表达共享约束。
-- 槽两侧边界之间的明确线性尺寸 = 槽宽。若图中槽边之间明确标 `2`，不得把附近没有绑定到槽宽的 `1.6` 当成槽宽；已绑定的 `slot.width` 不得在后续阶段改写。
+- 槽两侧边界之间的明确线性尺寸才是槽宽；附近未绑定到槽边的数值不得作为槽宽，已绑定的 `slot.width` 不得改写。
 - `深N` / `DEPTH N`、剖视图明确起止面、明确相切/共线终止关系或等价唯一几何约束，才可生成 feature `depth` / `bottom` / `termination`。
-- 普通位置尺寸（如某轴线间距、中心高、参数 `E`）不得自动改解释为槽深/槽底；已经绑定到孔轴 centerline 的尺寸不得再跨 feature 复用成 slot 终止尺寸。
+- 中心线到中心线的位置尺寸不得解释为槽深/槽底；相同数值多次出现时按各自端点独立绑定，不得跨 feature 复用语义。
 - derived 必须绑定明确 `target`；没有额外图纸证据时禁止一个 derived 结果跨 feature 复用。
 - directional feature 输出要求：hole/counterbore/countersink → `axis`；slot/cut → `width_axis` + `through_axis`，非贯穿时才另给有证据的 `depth`。
 - source semantic 使用固定类别：槽宽=`slot_width`，两轴中心距=`center_distance/center_spacing`，外形边到中心=`edge_offset`，数量=`feature_count`，孔径=`diameter`，中心坐标=`center_position`；关系尺寸禁止降级成泛化 `feature_dimension`。
@@ -93,7 +94,7 @@
 
 - 通孔 / 沉孔 / 盲孔 / 螺纹孔若有明确证据共享同一轴线，先输出一个 `coaxial_hole_group`，再把不同加工段放入 `members`。
 - 归组必须同时满足：同一 `axis`、同一横向 `centerline`、图纸存在共中心线/同心圆/跨视图投影/明确尺寸链等确定性证据。
-- 同组 member 必须继承同一个 centerline；禁止一个 member 用 `Z=58`，另一个因为“看起来与主孔齐平”被另行放到 `Z=40`。
+- 同组 member 必须继承同一个 centerline；禁止为各 member 根据视觉邻近另设不同中心。
 - 只有 axis 相同但中心线证据不足时不得强行合并；若会影响实体则 blocking unresolved。
 - 位置尺寸绑定同轴组 centerline，而不是分别绑定各 member。
 
@@ -108,7 +109,7 @@
 - 每个 unresolved 必须标 `required_for_modeling: true|false`：
   - `true`：尺寸/位置/数量/轴向/轮廓/贯穿或真实 depth 等关键几何；
   - `false`：粗糙度、普通制造说明、非建模字段、与实体无关的 OCR 模糊项。
-- 能由明确尺寸和明确拓扑关系唯一算出的值进入 `derived`，必须保存确定性算式与来源，例如 `40+18=58`；derived 视为已闭合。
+- 能由明确尺寸和明确拓扑关系唯一算出的值进入 `derived`，必须保存确定性算式与来源；derived 视为已闭合。
 - 禁止使用像素比例、经验猜测或多解关系做 derived。
 - `dimension_closure=closed` 的条件：blocking unresolved=0 且 dimension conflict=0；**不要求 warning/soft unresolved=0**。
 - 规格表不要求逐字段完全解释；只核对最终建模真正使用的字段。
@@ -135,7 +136,7 @@
 ## 11. 固定输出坐标系
 
 - XY 原点 = **零件整体外形中心**；Z=0 = **零件底面**；+X 向右、+Y 向上（俯视图）、+Z 向上。
-- 所有 profile 范围、孔/槽非轴向中心、pattern centers 必须先换算到该坐标系；不得把边缘基准尺寸原样当全局坐标。
+- association、ownership、relation 必须先在 view-local 证据上完成；之后才换算 profile 范围、孔/槽非轴向中心和 pattern centers。不得把边缘基准尺寸原样当全局坐标，也不得把沿孔轴的贯穿范围写成非轴向 center coordinate。
 - Reader 不再自己输出 bbox/中心距/对称“PASS”；这些由 `validate-drawing` 机器反算。
 - JSON 只需声明：
 ```json

@@ -37,7 +37,7 @@ description: 作者：抖音 无趣。Siemens NX 自动建模统一入口。支�
 2. 读取 `references/drawing-reader.md`。
 3. 读取 `references/nx-drawing-rules.md`。正常路径**不读取 examples**；只有 validator 报 schema 错误时才查看 `examples/example-output.json`。
 4. 立即按“运行时与路径”的固定规则只定位并读取一次 `runtime-config.json`，禁止扫描目录。runtime-config 与具体图纸几何无关；这一步不得等待全部视图解析、全部尺寸绑定、feature ownership、relation closure、global coordinate conversion、source ledger 或 drawing JSON 完成。
-5. 然后进行完整 drawing interpretation，生成并落盘结构化 drawing JSON。
+5. 然后进行完整 drawing interpretation，并在首次 `validate-drawing --new-task` 前把**本轮当前解释**写入 drawing JSON。目标文件已存在时必须覆盖为本轮解释或改用本轮新工作目录；禁止发现旧 `drawing.json` 后直接 validate，或把上一轮 interpretation 当成本轮初版。
 6. 用 runtime-config 中的 `python_exe` 执行同目录 `runner.py validate-drawing <drawing.json> --new-task`。`mode_b_task_id` 必须由 Runner 创建；保存返回的 `mode_b_task.task_root`，同一任务的 schema retry 改用 `--task-root <path>`，禁止重新使用 `--new-task` 逃离失败 lineage。该命令会在同一次调用内执行严格 schema-only normalization；normalizer 失败或 Gate A 失败时，禁止 Agent 手工补尺寸、方向、位置、数量、证据或删除 blocking unresolved 后重试。
 7. 只有 validate-drawing exit code=0，且返回 `source_ownership.status="pass"` 与 `coordinate_sanity.status="pass"`，才通过门禁 A。
 8. 读取建模规划与拓扑规则，生成 frozen plan，并使用 `runner.py build <frozen> <executable> --drawing <drawing.json> --task-root <validate 返回路径>` 通过门禁 B；Mode B 禁止省略 `--drawing` 或 `--task-root`。Gate A PASS 后不得替换 task root 或重新冻结修改后的 drawing。随后调用 Plan Runner 执行。总控规则见 `references/pipeline-contract.md`；用户输出规范见 `references/chinese-output.md`。
