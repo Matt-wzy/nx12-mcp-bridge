@@ -75,6 +75,24 @@ XY 原点为零件整体外形中心，Z=0 为零件底面，+X 向右、+Y 为�
 - `depth` 只能来自明确的深度语义（如 `深12` / `DEPTH 12`）、剖视图中明确的起止面，或其它能够唯一限定切除深度的标注。**普通线性位置尺寸不得因为数值合适就被改解释成 slot/cut depth。**
 - 因此像 `E=18` 这类线性/位置参数，除非图纸明确把它绑定为槽深，否则只能保留其原始位置尺寸语义，不能自动写成 `slot.depth=18`。
 - 孔类 feature 必须输出 `axis`；slot/cut 必须输出 `width_axis`、`through_axis`（若非贯穿则再输出有明确证据的 `depth`）。任何会改变三维结果的方向字段不能唯一确定时，Gate A 不得 closed。
+- **同轴复合孔必须先归组，再输出特征**：当通孔、沉孔、盲孔、螺纹孔等标注满足“同一 `axis` + 同一横向中心线坐标 + 图纸有明确共中心线/同心/同一轴线证据”时，输出一个 `type:"coaxial_hole_group"` 的 feature，成员放入 `members`，不得把成员拆成不同中心位置的独立孔。成员可以有不同直径、深度、轴向起止侧或加工语义，但必须共享同一个 `centerline`。
+- 同轴归组的证据必须来自中心线、同心圆、跨视图投影对应、明确中心距链或等价确定性关系；**仅仅 axis 相同、数值接近或位于同一区域不足以归组**。证据不足且归组与否会改变实体时，进入 blocking unresolved。
+- 对同轴组，位置尺寸（例如两条轴线之间的 `E`）绑定到**组 centerline**，不能只绑定到其中一个 member 后再给其它 member 另猜中心高度。若主孔中心高为 40、夹紧轴与主孔中心明确相距 18，则该夹紧组 centerline 为 58；同组所有 member 继承这一中心线。
+- 推荐结构：
+  ```json
+  {
+    "type": "coaxial_hole_group",
+    "axis": "X",
+    "centerline": {"y": -8, "z": 58},
+    "members": [
+      {"kind": "threaded_hole", "spec": "M6", "depth": 12, "side": "one_side"},
+      {"kind": "through_hole", "diameter": 6.6, "side": "opposite_side"},
+      {"kind": "counterbore", "diameter": 11, "depth": 6.5, "side": "opposite_side"}
+    ]
+  }
+  ```
+  `side` / 轴向起止范围若会改变实体且无法由图纸唯一确定，仍属于 HARD unresolved；不得用示例中的 side 文本代替真实方向。
+- **倒角必须有明确边绑定**：只有图中实际出现并通过尺寸线/引线/局部细节绑定到某条边的 `C2`、`C2×45°` 等，才可输出 chamfer feature。参数表中的字段名 `C` 与数值 `2`（即 `C=2`）不能仅因拼起来像 “C2” 就自动解释为 2 mm 倒角。
 
 ## 7. 最低充分建模闭合：HARD / DERIVED / SOFT
 
