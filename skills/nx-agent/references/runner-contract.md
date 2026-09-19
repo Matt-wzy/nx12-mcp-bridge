@@ -11,6 +11,9 @@
   - **frozen**（Planner 输出）：顶层含 `skill / mode / part / coordinate_system / notes / operations / final_validation / fallbacks`；`mode` 必填且只允许 `FAST | DIAGNOSTIC`；`operations` 必填。
   - **executable**（Runner 执行格式）= frozen + 扩展字段（`result_bindings`、`selection_binding`、`retry`、`$references`）。
 - Runner 可读/校验两种格式；只有 executable 可被 `run` 执行。
+- **frozen 严禁手写 executable 扩展**：`result_bindings` / `selection_binding` /
+  `retry` / `$references` 均只能由 build 生成。Runner 的 frozen check 与 build
+  会 fail-closed；发现这些字段时直接拒绝，不生成 executable。
 
 ## 2. Operation 允许字段
 
@@ -109,6 +112,11 @@ SpecifyPoint** 创建非 XY 草图；仅设置 `PlaneReference` 会发生 XZ/YZ 
 - 连续多个边操作必须：list → 定位 → 执行 → 再 list → 定位 → 执行，禁止一次 list 保存多组 index 连续使用。
 
 ## 9. build / check 输入输出约定
+
+- `runner.py check <frozen> --frozen` 必须先通过；frozen 中若出现任何 executable-only
+  字段或 `$reference`，视为 Planner/格式错误。
+- `runner.py build <frozen> <executable>` 内部会再次执行 frozen check；失败时
+  **不写出 executable 文件**，防止错误绑定延迟到 NX 运行期才爆炸。
 
 ```
 python runner.py build <frozen_plan.json> <out_executable.json>
