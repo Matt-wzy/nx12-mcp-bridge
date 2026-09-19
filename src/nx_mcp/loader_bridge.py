@@ -366,12 +366,18 @@ class LoaderBridge:
 
     def __init__(self, pipe: str = PIPE_NAME) -> None:
         self.pipe = pipe
+        self.last_ping_error: str | None = None
 
     def ping(self, timeout: float = 15.0) -> bool:
+        self.last_ping_error = None
         try:
             resp = _pipe_call("nx_status", timeout=timeout, pipe=self.pipe)
-            return bool(resp.get("ok"))
-        except Exception:
+            if resp.get("ok"):
+                return True
+            self.last_ping_error = str(resp.get("error") or "loader status returned ok=false")
+            return False
+        except Exception as exc:
+            self.last_ping_error = str(exc)
             return False
 
     async def call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
