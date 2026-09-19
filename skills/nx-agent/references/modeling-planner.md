@@ -137,6 +137,10 @@
   - `through_axis=Y` → XZ sketch → 沿 Y subtract；
   - `through_axis=Z` → XY sketch → 沿 Z subtract。
   禁止把孔中心或槽宽坐标换算后仍沿错误轴执行。
+- **同轴复合孔 centerline 是不可变输入**：Drawing Reader 输出 `type:"coaxial_hole_group"` 时，Planner 可以为了当前工具能力把 members 展开成多个建模 operation，但所有 operation 必须继承组的同一 `axis` 与横向 `centerline`；只允许成员自己的直径、深度、轴向起止侧/范围不同。禁止 Planner 把某个 member 重新绑定到主孔中心、高度或其它邻近几何。
+- 同轴组成员若需要分别从轴线两侧加工，Planner 必须从 Reader 给出的 side / axial range 生成；这些字段缺失且会改变实体时停止规划，禁止“一个放中心高、一个放 E 派生高”式二次猜测。
+- frozen plan 发布前必须检查：同一 `coaxial_hole_group` 展开的所有 member operation 的非轴向中心坐标完全一致；若不一致，B 阶段前直接判为规划错误。
+- **Chamfer 不得由参数名拼接生成**：只有 Reader 已输出具有明确 target edge/edge semantics 的 chamfer feature，Planner 才能创建 Chamfer operation。孤立参数 `C=2`、表格字段 C 或没有边绑定的数值不得被 Planner 转写成“C2 倒角”。
 - **圆角 / 倒角一律放最后**：完成主体几何 → 完成孔 → 完成 Boolean →
   重新 `nx_list_edges` 选边 → 操作 → 再次 `nx_list_edges` → 下一组。
 
