@@ -182,6 +182,9 @@ def main() -> None:
     if 'SetEnvironmentVariable("NX_MCP_WORKSPACE", $Workspace, "User")' not in install_agent:
         fail("install-agent.ps1 does not persist NX_MCP_WORKSPACE for Loader")
 
+    if 'Get-Content -Raw -LiteralPath $_ -Encoding UTF8 | ConvertFrom-Json' not in install_agent:
+        fail("install-agent.ps1 JSON validation is not PowerShell 5.1 UTF-8 safe")
+
     plane_rules = (SKILL / "references" / "nx-mcp-rules.md").read_text(encoding="utf-8")
     for token in ("XY→+Z", "XZ→+Y", "YZ→+X", 'nx_extrude(operation="subtract")'):
         if token not in plane_rules:
