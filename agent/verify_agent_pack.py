@@ -258,8 +258,8 @@ def main() -> None:
         fail("top-level Gate A coordinate sanity rule missing")
 
     for token in (
-        'type:"coaxial_hole_group"',
-        "同一横向中心线坐标",
+        '"type": "coaxial_hole_group"',
+        "不能拥有不同的非轴向中心坐标",
         "同组所有 member 继承这一中心线",
         "参数表中的字段名 `C` 与数值 `2`",
     ):
