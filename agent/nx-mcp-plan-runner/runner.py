@@ -1627,7 +1627,8 @@ def _drawing_direct_semantic_ok(data: dict, source: dict) -> bool:
         }
     if semantic == "feature_dimension":
         # Generic direct dimensions are intentionally forbidden from fields whose
-        # meaning needs a more specific semantic class.
+        # meaning needs a more specific semantic class. A normal body's width is
+        # fine; a slot/cut width must use slot_width.
         forbidden = {
             "count",
             "diameter",
@@ -1635,7 +1636,6 @@ def _drawing_direct_semantic_ok(data: dict, source: dict) -> bool:
             "counterbore_diameter",
             "countersink_diameter",
             "radius",
-            "width",
             "depth",
             "hole_depth",
             "counterbore_depth",
@@ -1654,6 +1654,8 @@ def _drawing_direct_semantic_ok(data: dict, source: dict) -> bool:
             "spec",
             "pattern_type",
         }
+        if feature_type in {"slot", "cut", "slit"} and leaf == "width":
+            return False
         return target.startswith("feature:") and leaf not in forbidden
     return False
 
