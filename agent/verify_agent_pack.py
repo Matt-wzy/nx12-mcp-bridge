@@ -73,6 +73,56 @@ def main() -> None:
     if drawing_errors:
         fail(f"drawing example fails Gate A validator: {drawing_errors[:5]}")
 
+    profile_fixture = json.loads(json.dumps(drawing_example))
+    profile_fixture["profile"] = {"body": {"y": [-30, 30]}}
+    profile_fixture["source_ledger"].append(
+        {
+            "id": "S_PROFILE_Y",
+            "semantic": "profile_dimension",
+            "value": [-30, 30],
+            "target": "profile.body.y",
+        }
+    )
+    if runner.check_drawing_json(profile_fixture):
+        fail("drawing validator rejects a valid profile range")
+
+    bad_profile = json.loads(json.dumps(profile_fixture))
+    bad_profile["profile"]["body"]["y"] = [-30, 31]
+    for source in bad_profile["source_ledger"]:
+        if source.get("id") == "S_PROFILE_Y":
+            source["value"] = [-30, 31]
+    if not runner.check_drawing_json(bad_profile):
+        fail("drawing validator does not reject profile range outside bbox")
+
+    pattern_fixture = json.loads(json.dumps(drawing_example))
+    pattern_fixture["patterns"] = [
+        {"count": 2, "pattern_type": "linear", "spacing": 20}
+    ]
+    pattern_fixture["source_ledger"].extend(
+        [
+            {
+                "id": "S_PATTERN_N",
+                "semantic": "feature_count",
+                "value": 2,
+                "target": "patterns.0.count",
+            },
+            {
+                "id": "S_PATTERN_TYPE",
+                "semantic": "pattern_dimension",
+                "value": "linear",
+                "target": "patterns.0.pattern_type",
+            },
+            {
+                "id": "S_PATTERN_SPACING",
+                "semantic": "pattern_dimension",
+                "value": 20,
+                "target": "patterns.0.spacing",
+            },
+        ]
+    )
+    if runner.check_drawing_json(pattern_fixture):
+        fail("drawing validator rejects a valid top-level pattern")
+
     bad_missing = json.loads(json.dumps(drawing_example))
     bad_missing["source_ledger"] = [
         source
