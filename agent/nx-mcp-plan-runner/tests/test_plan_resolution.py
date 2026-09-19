@@ -776,6 +776,149 @@ def test_run_history_persists_consumed_repair(tmp_path=None):
     h2 = R.RunHistory(hp)
     assert h2.most_recent(r"C:\work\repair.prt")["repair_attempt"] == 1
 
+
+def _capture_json_command(command, args):
+    import contextlib
+    import io
+
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        exit_code = command(args)
+    return exit_code, json.loads(output.getvalue())
+
+
+def test_validate_build_check_return_independent_timing(tmp_path=None):
+    import tempfile
+    from types import SimpleNamespace
+
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing = os.path.abspath(
+        os.path.join(PROJECT, "..", "..", "skills", "nx-agent", "examples", "example-output.json")
+    )
+    validate_results = []
+    for _ in range(2):
+        exit_code, result = _capture_json_command(
+            R._cmd_validate_drawing, SimpleNamespace(drawing=drawing)
+        )
+        assert exit_code == 0
+        validate_results.append(result["timing"])
+    for timing in validate_results:
+        assert timing["stage"] == "A4_VALIDATE"
+        assert timing["elapsed_ms"] is None or timing["elapsed_ms"] >= 0
+        assert timing["input_file"]["file_mtime_utc"] is not None
+        assert timing["input_file"]["first_write_reliable"] is False
+
+    executable = os.path.join(directory, "timing-executable.json")
+    build_code, build_result = _capture_json_command(
+        R._cmd_build, SimpleNamespace(plan=FROZEN_PLAN, out=executable)
+    )
+    assert build_code == 0
+    assert build_result["timing"]["stage"] == "B3_BUILD"
+    assert build_result["timing"]["input_file"]["first_write_reliable"] is False
+
+    check_code, check_result = _capture_json_command(
+        R._cmd_check, SimpleNamespace(plan=executable, frozen=False)
+    )
+    assert check_code == 0
+    assert check_result["timing"]["stage"] == "B3_CHECK"
+    assert check_result["timing"]["input_file"]["first_write_reliable"] is False
+
+
+def test_timing_failure_does_not_change_validate_result():
+    from types import SimpleNamespace
+
+    drawing = os.path.abspath(
+        os.path.join(PROJECT, "..", "..", "skills", "nx-agent", "examples", "example-output.json")
+    )
+    original = R.time.perf_counter_ns
+    try:
+        R.time.perf_counter_ns = lambda: (_ for _ in ()).throw(RuntimeError("clock failed"))
+        exit_code, result = _capture_json_command(
+            R._cmd_validate_drawing, SimpleNamespace(drawing=drawing)
+        )
+    finally:
+        R.time.perf_counter_ns = original
+    assert exit_code == 0
+    assert result["ok"] is True
+    assert result["timing"]["elapsed_ms"] is None
+
+
+def test_runner_timing_boundaries_are_natural_operation_events(tmp_path=None):
+    import asyncio
+    import tempfile
+
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    step_path = os.path.join(directory, "timing.step")
+
+    class Transport:
+        def resolve_path(self, path):
+            return path
+
+        async def call(self, tool, args):
+            if tool == "nx_export_step":
+                with open(args["path"], "wb") as handle:
+                    handle.write(b"STEP")
+                return {"status": "success", "path": args["path"]}
+            return {"status": "success"}
+
+    plan = {
+        "mode": "FAST",
+        "operations": [
+            {
+                "step": 1,
+                "tool": "nx_extrude",
+                "tool_args": {"sketch_id": "S1", "distance": 1},
+                "topology_changes": True,
+            },
+            {
+                "step": 2,
+                "tool": "nx_export_step",
+                "tool_args": {"path": step_path},
+                "topology_changes": False,
+            },
+        ],
+    }
+    timing_state = R._begin_command_timing("C_RUNNER")
+    timing_state["c2_modeling_complete_utc"] = None
+    timing_state["c3_export_complete_utc"] = None
+    report = asyncio.run(R.run_plan(plan, Transport(), timing_state=timing_state))
+    assert report["status"] == "success"
+    assert timing_state["c2_modeling_complete_utc"] is not None
+    assert timing_state["c3_export_complete_utc"] is not None
+
+    no_topology_state = R._begin_command_timing("C_RUNNER")
+    no_topology_state["c2_modeling_complete_utc"] = None
+    no_topology_state["c3_export_complete_utc"] = None
+    no_topology_plan = {
+        "mode": "FAST",
+        "operations": [
+            {
+                "step": 1,
+                "tool": "nx_status",
+                "tool_args": {},
+                "topology_changes": False,
+            }
+        ],
+    }
+    report = asyncio.run(
+        R.run_plan(no_topology_plan, Transport(), timing_state=no_topology_state)
+    )
+    assert report["status"] == "success"
+    assert no_topology_state["c2_modeling_complete_utc"] is None
+    assert no_topology_state["c3_export_complete_utc"] is None
+
+    class FailingTransport(Transport):
+        async def call(self, tool, args):
+            raise R.PlanError("synthetic modeling failure")
+
+    failed_state = R._begin_command_timing("C_RUNNER")
+    failed_state["c2_modeling_complete_utc"] = None
+    failed_state["c3_export_complete_utc"] = None
+    report = asyncio.run(R.run_plan(plan, FailingTransport(), timing_state=failed_state))
+    assert report["status"] == "failed"
+    assert failed_state["c2_modeling_complete_utc"] is None
+    assert failed_state["c3_export_complete_utc"] is None
+
 # --------------------------------------------------------------------------
 # main
 # --------------------------------------------------------------------------

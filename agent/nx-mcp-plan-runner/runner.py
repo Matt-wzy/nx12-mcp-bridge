@@ -149,6 +149,101 @@ def _now_iso() -> str:
     return _dt.datetime.now().astimezone().isoformat(timespec="seconds")
 
 
+def _utc_now_iso_best_effort() -> str | None:
+    """Return a display timestamp without allowing telemetry to affect work."""
+    try:
+        return (
+            _dt.datetime.now(_dt.timezone.utc)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
+    except Exception:
+        return None
+
+
+def _perf_counter_ns_best_effort() -> int | None:
+    try:
+        return time.perf_counter_ns()
+    except Exception:
+        return None
+
+
+def _file_metadata_observation(path: str) -> dict[str, Any]:
+    """Observe input metadata; it is never proof of the file's first write."""
+    observation = {
+        "path": path,
+        "file_mtime_utc": None,
+        "observed_at_utc": _utc_now_iso_best_effort(),
+        "first_write_reliable": False,
+    }
+    try:
+        modified = os.stat(path).st_mtime
+        observation["file_mtime_utc"] = (
+            _dt.datetime.fromtimestamp(modified, _dt.timezone.utc)
+            .isoformat(timespec="milliseconds")
+            .replace("+00:00", "Z")
+        )
+    except Exception:
+        pass
+    return observation
+
+
+def _begin_command_timing(stage: str, input_path: str | None = None) -> dict[str, Any]:
+    """Capture command-local timing state; every field is best-effort."""
+    state: dict[str, Any] = {
+        "stage": stage,
+        "started_at_utc": _utc_now_iso_best_effort(),
+        "started_perf_ns": _perf_counter_ns_best_effort(),
+    }
+    if input_path is not None:
+        state["input_file"] = _file_metadata_observation(input_path)
+    return state
+
+
+def _finish_command_timing(
+    state: dict[str, Any],
+    boundaries: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a JSON-safe public timing object without raising."""
+    try:
+        ended_perf_ns = _perf_counter_ns_best_effort()
+        started_perf_ns = state.get("started_perf_ns")
+        elapsed_ms = None
+        if isinstance(started_perf_ns, int) and isinstance(ended_perf_ns, int):
+            elapsed_ms = round((ended_perf_ns - started_perf_ns) / 1_000_000.0, 3)
+        result = {
+            "stage": state.get("stage"),
+            "started_at_utc": state.get("started_at_utc"),
+            "ended_at_utc": _utc_now_iso_best_effort(),
+            "elapsed_ms": elapsed_ms,
+        }
+        if "input_file" in state:
+            result["input_file"] = state.get("input_file")
+        if boundaries:
+            result.update(boundaries)
+        return result
+    except Exception:
+        return {
+            "stage": state.get("stage"),
+            "started_at_utc": state.get("started_at_utc"),
+            "ended_at_utc": None,
+            "elapsed_ms": None,
+        }
+
+
+def _attach_command_timing(
+    result: dict[str, Any],
+    state: dict[str, Any],
+    boundaries: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Attach optional telemetry while preserving the command result on failure."""
+    try:
+        result["timing"] = _finish_command_timing(state, boundaries)
+    except Exception:
+        return result
+    return result
+
+
 # --------------------------------------------------------------------------
 # symbol table and reference resolution
 # --------------------------------------------------------------------------
@@ -842,7 +937,8 @@ def _timing_bucket(tool: str, op_index: int, validation_start_idx: int) -> str:
 
 async def run_plan(plan: dict, transport: NXTransport, plan_path: str = "",
                    wall_start: float | None = None, history: RunHistory | None = None,
-                   mode: str = "normal", planned_part: str | None = None) -> dict:
+                   mode: str = "normal", planned_part: str | None = None,
+                   timing_state: dict[str, Any] | None = None) -> dict:
     ops = plan.get("operations") or []
     symbols = Symbols()
     topo = TopologyState()
@@ -868,8 +964,10 @@ async def run_plan(plan: dict, transport: NXTransport, plan_path: str = "",
 
     # validation phase = first step after the last topology-changing operation
     validation_start_idx = len(ops)
+    last_topology_idx: int | None = None
     for i in range(len(ops) - 1, -1, -1):
         if ops[i].get("topology_changes"):
+            last_topology_idx = i
             validation_start_idx = i + 1
             break
 
@@ -1001,6 +1099,11 @@ async def run_plan(plan: dict, transport: NXTransport, plan_path: str = "",
                 export_settle_elapsed += settle
                 if not file_ok:
                     raise PlanError(f"STEP export returned but file not present/non-empty: {target}")
+                if timing_state is not None:
+                    timing_state["c3_export_complete_utc"] = _utc_now_iso_best_effort()
+
+            if idx == last_topology_idx and timing_state is not None:
+                timing_state["c2_modeling_complete_utc"] = _utc_now_iso_best_effort()
 
             dur = time.monotonic() - t0
             bucket = _timing_bucket(tool, idx, validation_start_idx)
@@ -2612,6 +2715,7 @@ def _load_drawing(path: str) -> dict:
 
 
 def _cmd_validate_drawing(args: argparse.Namespace) -> int:
+    timing_state = _begin_command_timing("A4_VALIDATE", args.drawing)
     drawing = _load_drawing(args.drawing)
     errors = check_drawing_json(drawing)
     result = {
@@ -2621,6 +2725,7 @@ def _cmd_validate_drawing(args: argparse.Namespace) -> int:
         "errors": errors,
         "ok": not errors,
     }
+    _attach_command_timing(result, timing_state)
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if not errors else 1
 
@@ -2641,18 +2746,47 @@ def _is_executable(plan: dict) -> bool:
 
 
 async def _cmd_run(args: argparse.Namespace) -> int:
+    timing_state = _begin_command_timing("C_RUNNER")
+    timing_state["c2_modeling_complete_utc"] = None
+    timing_state["c3_export_complete_utc"] = None
+
+    def timed(result: dict[str, Any]) -> dict[str, Any]:
+        return _attach_command_timing(
+            result,
+            timing_state,
+            {
+                "c1_runner_start_utc": timing_state.get("started_at_utc"),
+                "c2_modeling_complete_utc": timing_state.get(
+                    "c2_modeling_complete_utc"
+                ),
+                "c3_export_complete_utc": timing_state.get(
+                    "c3_export_complete_utc"
+                ),
+            },
+        )
+
     t_start = time.monotonic()
     plan = _load_plan(args.plan)
     if not _is_executable(plan):
-        print(json.dumps({"status": "failed", "failed_step": None,
-                          "errors": ["plan is not in executable format "
-                                     "(no result_bindings / selection_binding); run `build` first"]},
-                         ensure_ascii=False, indent=2))
+        result = {
+            "status": "failed",
+            "failed_step": None,
+            "errors": [
+                "plan is not in executable format "
+                "(no result_bindings / selection_binding); run `build` first"
+            ],
+        }
+        print(json.dumps(timed(result), ensure_ascii=False, indent=2))
         return 1
     errs = check_plan(plan, executable=True)
     if errs:
-        print(json.dumps({"status": "failed", "failed_step": None,
-                          "errors": errs[:20], "error_count": len(errs)}, ensure_ascii=False, indent=2))
+        result = {
+            "status": "failed",
+            "failed_step": None,
+            "errors": errs[:20],
+            "error_count": len(errs),
+        }
+        print(json.dumps(timed(result), ensure_ascii=False, indent=2))
         return 1
     transport = NXTransport(workspace_root=args.workspace)
     if not transport.ping():
@@ -2660,8 +2794,8 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         error = "loader health check failed"
         if detail:
             error += ": " + detail
-        print(json.dumps({"status": "failed", "failed_step": None,
-                          "errors": [error]}, ensure_ascii=False))
+        result = {"status": "failed", "failed_step": None, "errors": [error]}
+        print(json.dumps(timed(result), ensure_ascii=False))
         return 1
 
     planned_for_repair = derive_planned_part(plan, transport)
@@ -2671,11 +2805,12 @@ async def _cmd_run(args: argparse.Namespace) -> int:
             with open(args.repair_report, encoding="utf-8-sig") as f:
                 previous_report = json.load(f)
         except (OSError, json.JSONDecodeError) as exc:
-            print(json.dumps({
+            result = {
                 "status": "repair_precheck_blocked",
                 "failed_step": None,
                 "errors": [f"cannot read repair report: {exc}"],
-            }, ensure_ascii=False, indent=2))
+            }
+            print(json.dumps(timed(result), ensure_ascii=False, indent=2))
             return 1
 
     repair_errors = repair_request_errors(
@@ -2686,11 +2821,12 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         previous_report,
     )
     if repair_errors:
-        print(json.dumps({
+        result = {
             "status": "repair_precheck_blocked",
             "failed_step": None,
             "errors": repair_errors,
-        }, ensure_ascii=False, indent=2))
+        }
+        print(json.dumps(timed(result), ensure_ascii=False, indent=2))
         return 1
 
     history_path = args.history or os.path.join(
@@ -2700,11 +2836,12 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     if args.repair_attempt == 1 and planned_for_repair:
         prior_history = history.most_recent(planned_for_repair) or {}
         if int(prior_history.get("repair_attempt", 0) or 0) >= 1:
-            print(json.dumps({
+            result = {
                 "status": "repair_precheck_blocked",
                 "failed_step": None,
                 "errors": ["controlled self-healing already consumed for this planned part"],
-            }, ensure_ascii=False, indent=2))
+            }
+            print(json.dumps(timed(result), ensure_ascii=False, indent=2))
             return 1
 
     t_preflight = time.monotonic()
@@ -2718,7 +2855,7 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     )
     preflight_elapsed = time.monotonic() - t_preflight
     if blocked is not None:
-        print(json.dumps(blocked, ensure_ascii=False, indent=2))
+        print(json.dumps(timed(blocked), ensure_ascii=False, indent=2))
         return 1
     planned_part = info["planned_part"] if info else None
     if planned_part:
@@ -2727,10 +2864,12 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         )
     report = await run_plan(plan, transport, plan_path=args.plan,
                             wall_start=t_start, history=history,
-                            mode=args.mode, planned_part=planned_part)
+                            mode=args.mode, planned_part=planned_part,
+                            timing_state=timing_state)
     report["preflight_elapsed"] = round(preflight_elapsed, 3)
     report["repair_attempt"] = int(args.repair_attempt)
     report["repair_source_report"] = args.repair_report
+    timed(report)
     print("===REPORT===")
     print(json.dumps(report, ensure_ascii=False, indent=2))
     if args.report:
@@ -2740,24 +2879,34 @@ async def _cmd_run(args: argparse.Namespace) -> int:
 
 
 def _cmd_check(args: argparse.Namespace) -> int:
+    timing_state = _begin_command_timing("B3_CHECK", args.plan)
     plan = _load_plan(args.plan)
     errs = check_plan(plan, executable=not args.frozen)
-    print(json.dumps({"plan": args.plan, "frozen": bool(args.frozen),
-                      "operations": len(plan.get("operations") or []),
-                      "errors": errs, "ok": not errs}, ensure_ascii=False, indent=2))
+    result = {
+        "plan": args.plan,
+        "frozen": bool(args.frozen),
+        "operations": len(plan.get("operations") or []),
+        "errors": errs,
+        "ok": not errs,
+    }
+    _attach_command_timing(result, timing_state)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if not errs else 1
 
 
 def _cmd_build(args: argparse.Namespace) -> int:
+    timing_state = _begin_command_timing("B3_BUILD", args.plan)
     plan = _load_plan(args.plan)
     frozen_errs = check_plan(plan, executable=False)
     if frozen_errs:
-        print(json.dumps({
+        result = {
             "built": None,
             "operations": len(plan.get("operations") or []),
             "frozen_check_errors": frozen_errs,
             "ok": False,
-        }, ensure_ascii=False, indent=2))
+        }
+        _attach_command_timing(result, timing_state)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
         return 1
 
     exe = build_executable_plan(plan)
@@ -2765,9 +2914,14 @@ def _cmd_build(args: argparse.Namespace) -> int:
     if not errs:
         with open(args.out, "w", encoding="utf-8") as f:
             json.dump(exe, f, ensure_ascii=False, indent=2)
-    print(json.dumps({"built": args.out if not errs else None,
-                      "operations": len(exe.get("operations") or []),
-                      "check_errors": errs, "ok": not errs}, ensure_ascii=False, indent=2))
+    result = {
+        "built": args.out if not errs else None,
+        "operations": len(exe.get("operations") or []),
+        "check_errors": errs,
+        "ok": not errs,
+    }
+    _attach_command_timing(result, timing_state)
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0 if not errs else 1
 
 
