@@ -1440,6 +1440,18 @@ _DRAWING_HARD_KEYS = {
     "hole_x",
     "hole_y",
     "hole_z",
+    "x1",
+    "y1",
+    "z1",
+    "x2",
+    "y2",
+    "z2",
+    "start",
+    "end",
+    "angle",
+    "angle_deg",
+    "start_angle",
+    "end_angle",
     "spec",
     "kind",
     "pattern_type",
@@ -1985,6 +1997,13 @@ def _drawing_check_profile_bbox(
                     for item in child:
                         _drawing_check_coord(errors, path, axis, item, bbox)
                     continue
+            if key in {"x1", "x2", "y1", "y2", "z1", "z2"}:
+                _drawing_check_coord(errors, path, key[0], child, bbox)
+                continue
+            if key in {"start", "end", "center"} and isinstance(child, list):
+                for axis, item in zip(("x", "y", "z"), child):
+                    _drawing_check_coord(errors, path, axis, item, bbox)
+                continue
             _drawing_check_profile_bbox(errors, child, bbox, path)
     elif isinstance(value, list):
         for idx, child in enumerate(value):
@@ -2360,8 +2379,13 @@ def check_drawing_json(data: dict) -> list[str]:
     patterns = data.get("patterns")
     if isinstance(patterns, list):
         for idx, pattern in enumerate(patterns):
-            if isinstance(pattern, dict):
-                _drawing_check_count(errors, pattern, f"patterns[{idx}]")
+            if not isinstance(pattern, dict):
+                continue
+            _drawing_check_count(errors, pattern, f"patterns[{idx}]")
+            for path in sorted(_drawing_hard_paths(pattern)):
+                target = f"patterns.{idx}.{path}"
+                if target not in direct_targets and target not in derived_targets:
+                    errors.append(f"pattern geometry lacks evidence: {target}")
 
     unresolved = data.get("unresolved")
     if isinstance(unresolved, list):
