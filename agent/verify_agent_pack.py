@@ -74,12 +74,13 @@ def main() -> None:
         fail(f"drawing example fails Gate A validator: {drawing_errors[:5]}")
 
     bad_missing = json.loads(json.dumps(drawing_example))
-    bad_missing["source_ownership"]["assignments"] = [
-        x for x in bad_missing["source_ownership"]["assignments"]
-        if x.get("target") != "feature:F_HOLE.dimensions.diameter"
+    bad_missing["source_ledger"] = [
+        source
+        for source in bad_missing["source_ledger"]
+        if source.get("target") != "feature:F_HOLE.dimensions.diameter"
     ]
     if not runner.check_drawing_json(bad_missing):
-        fail("drawing validator does not reject missing HARD-field ownership")
+        fail("drawing validator does not reject missing HARD-field provenance")
 
     bad_count = json.loads(json.dumps(drawing_example))
     for source in bad_count["source_ledger"]:
@@ -88,15 +89,261 @@ def main() -> None:
     if not runner.check_drawing_json(bad_count):
         fail("drawing validator does not reject feature-count source drift")
 
-    bad_share = json.loads(json.dumps(drawing_example))
-    for source in bad_share["source_ledger"]:
-        if source.get("id") == "S_BASE_L":
-            source["allowed_targets"].append("feature:F_BOSS.dimensions.diameter")
-    for assignment in bad_share["source_ownership"]["assignments"]:
-        if assignment.get("target") == "feature:F_BOSS.dimensions.diameter":
-            assignment["source_refs"].append("S_BASE_L")
-    if not runner.check_drawing_json(bad_share):
-        fail("drawing validator does not reject unapproved/shared source ownership")
+    bad_semantic = json.loads(json.dumps(drawing_example))
+    for source in bad_semantic["source_ledger"]:
+        if source.get("id") == "S_BASE_W":
+            source["semantic"] = "slot_width"
+    if not runner.check_drawing_json(bad_semantic):
+        fail("drawing validator does not reject incompatible source semantic")
+
+    geometry_fixture = {
+        "overall_dimensions": {"length_x": 40, "width_y": 32, "height_z": 66},
+        "coordinate_system": {"origin": "part_center_xy_bottom_z0"},
+        "features": [
+            {
+                "id": "F_MAIN",
+                "type": "through_hole",
+                "diameter": 20,
+                "axis": "Y",
+                "centerline": {"z": 40},
+                "count": 1,
+                "required_for_modeling": True,
+            },
+            {
+                "id": "F_SLOT",
+                "type": "slot",
+                "width": 2,
+                "width_axis": "X",
+                "through_axis": "Y",
+                "top_z": 66,
+                "bottom_z": 50,
+                "count": 1,
+                "required_for_modeling": True,
+            },
+            {
+                "id": "F_CLAMP",
+                "type": "hole_group",
+                "axis": "X",
+                "centerline": {"z": 58},
+                "count": 1,
+                "required_for_modeling": True,
+            },
+            {
+                "id": "F_BASE_HOLES",
+                "type": "pattern",
+                "diameter": 6.6,
+                "axis": "Z",
+                "count": 2,
+                "explicit_centers": [[-12, 8], [12, 8]],
+                "required_for_modeling": True,
+            },
+        ],
+        "source_ledger": [
+            {
+                "id": "S_OX",
+                "semantic": "overall_dimension",
+                "value": 40,
+                "target": "overall_dimensions.length_x",
+            },
+            {
+                "id": "S_OY",
+                "semantic": "overall_dimension",
+                "value": 32,
+                "target": "overall_dimensions.width_y",
+            },
+            {
+                "id": "S_OZ",
+                "semantic": "overall_dimension",
+                "value": 66,
+                "target": "overall_dimensions.height_z",
+            },
+            {
+                "id": "S_MAIN_D",
+                "semantic": "diameter",
+                "value": 20,
+                "target": "feature:F_MAIN.diameter",
+            },
+            {
+                "id": "S_MAIN_AXIS",
+                "semantic": "axis",
+                "value": "Y",
+                "target": "feature:F_MAIN.axis",
+            },
+            {
+                "id": "S_MAIN_Z",
+                "semantic": "center_position",
+                "value": 40,
+                "target": "feature:F_MAIN.centerline.z",
+            },
+            {
+                "id": "S_MAIN_N",
+                "semantic": "feature_count",
+                "value": 1,
+                "target": "feature:F_MAIN.count",
+            },
+            {
+                "id": "S_SLOT_W",
+                "semantic": "slot_width",
+                "value": 2,
+                "target": "feature:F_SLOT.width",
+            },
+            {
+                "id": "S_SLOT_WAX",
+                "semantic": "axis",
+                "value": "X",
+                "target": "feature:F_SLOT.width_axis",
+            },
+            {
+                "id": "S_SLOT_TAX",
+                "semantic": "axis",
+                "value": "Y",
+                "target": "feature:F_SLOT.through_axis",
+            },
+            {
+                "id": "S_SLOT_N",
+                "semantic": "feature_count",
+                "value": 1,
+                "target": "feature:F_SLOT.count",
+            },
+            {
+                "id": "S_E18",
+                "semantic": "center_distance",
+                "value": 18,
+                "between": [
+                    "feature:F_MAIN.centerline.z",
+                    "feature:F_CLAMP.centerline.z",
+                ],
+            },
+            {
+                "id": "S_CLAMP_AXIS",
+                "semantic": "axis",
+                "value": "X",
+                "target": "feature:F_CLAMP.axis",
+            },
+            {
+                "id": "S_CLAMP_N",
+                "semantic": "feature_count",
+                "value": 1,
+                "target": "feature:F_CLAMP.count",
+            },
+            {
+                "id": "S_TANGENT",
+                "semantic": "upper_tangent",
+                "center": "feature:F_MAIN.centerline.z",
+                "diameter": "feature:F_MAIN.diameter",
+                "tangent": "feature:F_SLOT.bottom_z",
+                "links": [
+                    "feature:F_MAIN.centerline.z",
+                    "feature:F_MAIN.diameter",
+                    "feature:F_SLOT.bottom_z",
+                ],
+            },
+            {
+                "id": "S_BASE_D",
+                "semantic": "diameter",
+                "value": 6.6,
+                "target": "feature:F_BASE_HOLES.diameter",
+            },
+            {
+                "id": "S_BASE_AXIS",
+                "semantic": "axis",
+                "value": "Z",
+                "target": "feature:F_BASE_HOLES.axis",
+            },
+            {
+                "id": "S_BASE_N",
+                "semantic": "feature_count",
+                "value": 2,
+                "target": "feature:F_BASE_HOLES.count",
+            },
+            {
+                "id": "S_BASE_C",
+                "semantic": "pattern_dimension",
+                "value": [[-12, 8], [12, 8]],
+                "target": "feature:F_BASE_HOLES.explicit_centers",
+            },
+        ],
+        "derived": [
+            {
+                "id": "D_SLOT_TOP",
+                "target": "feature:F_SLOT.top_z",
+                "value": 66,
+                "expr": {"target": "overall_dimensions.height_z"},
+            },
+            {
+                "id": "D_SLOT_BOTTOM",
+                "target": "feature:F_SLOT.bottom_z",
+                "value": 50,
+                "expr": {
+                    "op": "add",
+                    "args": [
+                        {"target": "feature:F_MAIN.centerline.z"},
+                        {
+                            "op": "div",
+                            "args": [
+                                {"target": "feature:F_MAIN.diameter"},
+                                {"const": 2},
+                            ],
+                        },
+                    ],
+                },
+                "relation_refs": ["S_TANGENT"],
+            },
+            {
+                "id": "D_CLAMP_Z",
+                "target": "feature:F_CLAMP.centerline.z",
+                "value": 58,
+                "expr": {
+                    "op": "add",
+                    "args": [
+                        {"target": "feature:F_MAIN.centerline.z"},
+                        {"source": "S_E18"},
+                    ],
+                },
+            },
+        ],
+        "unresolved": [],
+        "dimension_conflicts": [],
+        "dimension_closure": {"status": "closed"},
+    }
+    fixture_errors = runner.check_drawing_json(geometry_fixture)
+    if fixture_errors:
+        fail(f"drawing geometry fixture fails Gate A validator: {fixture_errors[:5]}")
+
+    bad_slot_source = json.loads(json.dumps(geometry_fixture))
+    for item in bad_slot_source["derived"]:
+        if item.get("id") == "D_SLOT_BOTTOM":
+            item["value"] = 58
+            item["expr"] = {
+                "op": "add",
+                "args": [
+                    {"target": "feature:F_MAIN.centerline.z"},
+                    {"source": "S_E18"},
+                ],
+            }
+            item["relation_refs"] = []
+    for feature in bad_slot_source["features"]:
+        if feature.get("id") == "F_SLOT":
+            feature["bottom_z"] = 58
+    if not runner.check_drawing_json(bad_slot_source):
+        fail("drawing validator does not reject center-distance reuse as slot bottom")
+
+    bad_bbox = json.loads(json.dumps(geometry_fixture))
+    for feature in bad_bbox["features"]:
+        if feature.get("id") == "F_BASE_HOLES":
+            feature["explicit_centers"] = [[-12, 24], [12, 24]]
+    for source in bad_bbox["source_ledger"]:
+        if source.get("id") == "S_BASE_C":
+            source["value"] = [[-12, 24], [12, 24]]
+    if not runner.check_drawing_json(bad_bbox):
+        fail("drawing validator does not reject feature centers outside centered bbox")
+
+    bad_pattern = json.loads(json.dumps(geometry_fixture))
+    for feature in bad_pattern["features"]:
+        if feature.get("id") == "F_BASE_HOLES":
+            feature["count"] = 4
+    if not runner.check_drawing_json(bad_pattern):
+        fail("drawing validator does not reject 2x source expanding to 4x")
 
     contract = json.loads((SKILL / "references" / "certified-tool-contract.json").read_text(encoding="utf-8"))
     tools = set(contract["tools"])
