@@ -15,12 +15,16 @@
 
 ## 2. 读取流程
 
+必须按以下顺序执行，禁止把“成员先定全局坐标、之后再归组”作为正常流程：
+
 1. 先观察整张图，识别主视图、俯视图、侧视图、剖视图、局部放大图。
-2. 第一轮尽可能读取所有会影响三维建模的尺寸与符号。
-3. 记录每条标注来自哪个视图。
-4. 跨视图合并同一特征。
-5. 只用图中明确数值进行尺寸闭合。
-6. 输出结构化 JSON。
+2. 第一轮尽可能读取所有会影响三维建模的尺寸、中心线、投影对应与符号；此时只记录**视图内原始证据**和来源，不给可能属于复合特征的成员各自猜全局 centerline。
+3. 先做 **feature association**：用中心线、同心圆、投影对应、引线归属、尺寸链等证据，把跨视图重复表达或同一加工轴上的候选成员关联成同一个 feature / composite group。
+4. association 完成后，才在**组级别**求 axis、centerline、数量、位置尺寸及 derived 值；同组成员继承组级位置，不得各自重新求一个不同 centerline。
+5. 把组级几何一次性转换到固定全局坐标系 `part_center_xy_bottom_z0`。
+6. 执行强制坐标 sanity/back-check：总体 bbox、特征中心、对称关系、中心距/节距必须能从输出坐标反算回图纸明确尺寸。
+7. 只用图中明确数值与确定性关系进行尺寸闭合。
+8. 通过上述检查后再输出结构化 JSON 并执行 Gate A。
 
 ## 3. 必须提取
 
@@ -75,9 +79,10 @@ XY 原点为零件整体外形中心，Z=0 为零件底面，+X 向右、+Y 为�
 - `depth` 只能来自明确的深度语义（如 `深12` / `DEPTH 12`）、剖视图中明确的起止面，或其它能够唯一限定切除深度的标注。**普通线性位置尺寸不得因为数值合适就被改解释成 slot/cut depth。**
 - 因此像 `E=18` 这类线性/位置参数，除非图纸明确把它绑定为槽深，否则只能保留其原始位置尺寸语义，不能自动写成 `slot.depth=18`。
 - 孔类 feature 必须输出 `axis`；slot/cut 必须输出 `width_axis`、`through_axis`（若非贯穿则再输出有明确证据的 `depth`）。任何会改变三维结果的方向字段不能唯一确定时，Gate A 不得 closed。
-- **同轴复合孔必须先归组，再输出特征**：当通孔、沉孔、盲孔、螺纹孔等标注满足“同一 `axis` + 同一横向中心线坐标 + 图纸有明确共中心线/同心/同一轴线证据”时，输出一个 `type:"coaxial_hole_group"` 的 feature，成员放入 `members`，不得把成员拆成不同中心位置的独立孔。成员可以有不同直径、深度、轴向起止侧或加工语义，但必须共享同一个 `centerline`。
+- **同轴复合孔必须先做 association，再求全局 centerline**：通孔、沉孔、盲孔、螺纹孔等若在不同视图中由共中心线、同心圆、正投影对应、共同引线/尺寸链等明确证据指向同一加工轴，先建立一个候选 `coaxial_hole_group`；**禁止先给每个候选 member 分别赋全局 Z/Y/X，再根据已经猜出的坐标决定是否归组**。
+- association 阶段只比较图纸证据，不要求成员已经拥有最终全局坐标。归组完成后才统一求组级 `axis` 与 `centerline`，再让所有 member 继承。成员可以有不同直径、深度、轴向起止侧或加工语义，但不能拥有不同的非轴向中心坐标。
 - 同轴归组的证据必须来自中心线、同心圆、跨视图投影对应、明确中心距链或等价确定性关系；**仅仅 axis 相同、数值接近或位于同一区域不足以归组**。证据不足且归组与否会改变实体时，进入 blocking unresolved。
-- 对同轴组，位置尺寸（例如两条轴线之间的 `E`）绑定到**组 centerline**，不能只绑定到其中一个 member 后再给其它 member 另猜中心高度。若主孔中心高为 40、夹紧轴与主孔中心明确相距 18，则该夹紧组 centerline 为 58；同组所有 member 继承这一中心线。
+- 对同轴组，位置尺寸（例如两条轴线之间的 `E`）绑定到**组 centerline**，不能只绑定到其中一个 member 后再给其它 member 另猜中心高度。若某参考轴中心高为 40、目标组与其明确中心距为 18，则目标组中心高通过确定性关系得到 58；同组所有 member 继承这一中心线。
 - 推荐结构：
   ```json
   {
@@ -143,6 +148,23 @@ SOFT 项允许保留未知，**不得让 Gate A BLOCKED，也不得向用户强�
 
 禁止为了闭合而补尺寸。Gate A 只关心 blocking unresolved，不要求 warnings 为空。
 
+## 7.5 固定坐标归一化与反算校验（Gate A 前强制）
+
+当 `coordinate_system.origin = "part_center_xy_bottom_z0"` 且总体尺寸为 `Lx / Ly / H` 时，最终 JSON 的全局范围固定为：
+
+- X：`[-Lx/2, +Lx/2]`
+- Y：`[-Ly/2, +Ly/2]`
+- Z：`[0, H]`
+
+强制规则：
+1. final JSON 中的 `profile` / body range / feature centerline / pattern center 必须使用这一全局坐标系。不得把“从左边/从前边量的局部尺寸”直接写成全局坐标，也不得把视图局部坐标与全局坐标混用。
+2. 对孔、沉孔、螺纹孔等位于实体材料上的特征，其**非轴向中心坐标**必须落在对应 overall bbox 内；若输出值超出 bbox，而图纸没有明确表达外置/切边特征，则这是坐标转换错误，必须进入 blocking unresolved / conflict，不能 Gate A closed。
+3. profile/body 的最终全局范围不得超出 overall bbox；若局部草图确实需要自己的局部坐标，只能作为内部规划信息，不能冒充 Reader 的最终全局坐标。
+4. **中心距/节距反算**：若图纸明确给两中心距离 `P`，输出坐标必须满足对应坐标差的绝对值 = `P`（允许图纸公差范围内误差）；不能只因为“差值差不多”就接受。
+5. **对称反算**：若图纸明确关于全局中心线/对称线对称，成对中心 `a,b` 必须满足其中点落在该对称线。例如关于 X=0 对称时，`(x1+x2)/2 = 0`；若同时中心距为 `P`，则可唯一得到 `x1=-P/2, x2=+P/2`。这只是通用确定性算式，不得替换成型号专用常量。
+6. pattern / explicit centers 输出前必须用最终坐标反算 count、pitch/span、对称中心；任一结果与图纸明确尺寸不一致，都不能写 `dimension_closure.status="closed"`。
+7. 坐标 sanity 只校验**已经由图纸支持的关系**，禁止借此创造新尺寸。
+
 ## 8. DETAIL / SECTION 与跨视图一致性
 
 DETAIL / SECTION 是局部几何高优先级证据。出现矛盾必须进入 `unresolved`，不得自行选择一个“看起来更合理”的解释。
@@ -188,12 +210,17 @@ DETAIL / SECTION 是局部几何高优先级证据。出现矛盾必须进入 `u
   ],
   "warnings": [],
   "dimension_conflicts": [],
+  "coordinate_sanity": {
+    "status": "pass",
+    "checks": []
+  },
   "dimension_closure": {"status": "closed"}
 }
 ```
 
 约定：
 - `blocking_unresolved` = `unresolved` 中 `required_for_modeling=true` 的数量；
+- Gate A closed 前必须有 `coordinate_sanity.status="pass"`；至少覆盖 overall bbox、非轴向特征中心、图纸明确的中心距/节距与对称反算关系。
 - `warnings` 与 `required_for_modeling=false` 的 soft unresolved 不计入 blocking；
 - 规格表字段不要求“逐字段解释完成”才能建模；只要最终三维实体所需的尺寸/位置/数量/方向/轮廓已经 explicit 或 derived 唯一确定即可。
 
