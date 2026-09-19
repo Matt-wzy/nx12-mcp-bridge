@@ -28,10 +28,12 @@
 输出结构化 JSON 并落盘。
 
 门禁：
-- unresolved=0
+- blocking_unresolved=0（只统计 `required_for_modeling=true`）
+- dimension_conflicts=0
 - dimension_closure.status="closed"
 - overall_dimensions / coordinate_system / features 均存在
 
+`derived` 视为已解析几何；`warnings` 与 `required_for_modeling=false` 的 soft unresolved 不阻塞 A。
 A 失败立即停止，**不允许自动修复**。
 
 ## 4. 阶段 B：建模规划
@@ -99,7 +101,7 @@ Runner 正式开始建模后，任一 operation 失败：
 
 ### 6.3 禁止自动修复
 以下任一情况必须最终失败：
-- A 阶段 unresolved > 0 / dimension conflict / 尺寸缺失；
+- A 阶段 blocking_unresolved > 0 / dimension conflict / 关键几何尺寸缺失；
 - 需要猜尺寸、改尺寸、改孔位、改特征数量；
 - Boolean 不相交且根因属于几何设计/规划错误；
 - 超出 certified tools 能力边界；
