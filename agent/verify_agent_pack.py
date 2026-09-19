@@ -506,7 +506,7 @@ def main() -> None:
         "required_for_modeling=false",
         "source_ledger",
         "blocking_unresolved",
-        "规格表字段不要求“逐字段解释完成”才能建模",
+        "机器门禁",
     ):
         if token not in drawing_reader:
             fail(f"drawing minimum-closure regression: missing {token}")
@@ -521,12 +521,12 @@ def main() -> None:
     for token in (
         "blocking_unresolved=0",
         "dimension_conflicts=0",
-        "required_for_modeling=false",
+        "soft unresolved",
+        'coordinate_sanity.status="pass"',
+        "validator 自己计算",
     ):
         if token not in pipeline_contract:
             fail(f"pipeline Gate A minimum-closure regression: missing {token}")
-    if 'coordinate_sanity.status="pass"' not in pipeline_contract:
-        fail("pipeline Gate A coordinate sanity rule missing")
     for token in (
         "语义/数量/能力预检",
         "`capability_violations=0`",
@@ -558,13 +558,13 @@ def main() -> None:
     ):
         if token not in top:
             fail(f"top-level Gate A minimum-closure regression: missing {token}")
-    if 'coordinate_sanity.status = "pass"' not in top:
+    if 'coordinate_sanity.status="pass"' not in top:
         fail("top-level Gate A coordinate sanity rule missing")
     for token in (
         "validate-drawing",
         'source_ownership.status="pass"',
         "正常路径**不读取 examples**",
-        "禁止扫描目录",
+        "禁止递归搜索 Runner",
     ):
         if token not in top:
             fail(f"top-level Gate A validator/fast-path regression: missing {token}")
@@ -600,8 +600,8 @@ def main() -> None:
         "一旦 `slot.width` 已由明确槽边尺寸绑定",
         "不得把该中心距拿去生成 `slot.depth` / `slot.bottom_z`",
         "`derived` 必须写明 `target`",
-        "source_ownership.assignments",
-        "allowed_targets",
+        "source_ledger",
+        "center_distance / center_spacing",
         "validate-drawing",
         "总实例数硬约束",
         "`count_x * count_y == count`",
@@ -681,13 +681,13 @@ def main() -> None:
             fail(f"Planner coaxial/chamfer regression: missing {token}")
     for token in (
         "coordinate_sanity.status",
-        "禁止 Planner 自己平移、居中、取绝对值、改正负号",
-        "A 阶段输入不一致",
+        "禁止平移、居中、取绝对值、改正负号",
+        "validate-drawing",
     ):
         if token not in planner_rules:
             fail(f"Planner drawing-coordinate regression: missing {token}")
     for token in (
-        "Reader 字段语义与 source ownership 不可重解释",
+        "Reader 字段语义与 provenance 不可重解释",
         "`derived.target` 只允许写入它声明的目标字段",
         "Pattern count 是不可变输入",
         "禁止自动把 2 个扩成 4 个",
@@ -723,9 +723,10 @@ def main() -> None:
     runner_source = (RUNNER / "runner.py").read_text(encoding="utf-8")
     for token in (
         "def check_drawing_json",
-        "source_ownership.assignments",
-        "allowed_targets",
-        "required geometry field lacks ownership evidence",
+        "_drawing_direct_semantic_ok",
+        "_drawing_check_feature_bbox",
+        "crosses feature boundaries without relation evidence",
+        "required geometry field lacks evidence",
         "validate-drawing",
     ):
         if token not in runner_source:
