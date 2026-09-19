@@ -100,6 +100,7 @@ frozen plan 首次落盘前必须完成静态自检。B 阶段 build/check 失�
 - 只允许修复根因明确、且不改变尺寸/位置/特征数量/几何语义的计划级问题。
 - 典型允许：edge/face `selection_criteria` 过严、Loader 已冻结的类型语义差异。
 - 禁止：猜尺寸、改图纸、改变主体结构、绕过能力边界、修改 Runner/NX_MCP/Loader。
+- 禁止把任何图纸/derived/frozen 几何数值做 nudge/epsilon 改写来“救”执行，例如 `Z=50 → Z=49`；Boolean 相切失败不能通过改坐标、深度、孔位、直径等设计数值自动修复。
 - 修复后必须重新 build/check，并由 Runner 安全 preflight 丢弃本任务自己的失败零件，然后从第 1 步完整重跑。
 - 禁止从失败步骤续跑。
 - 第二次失败必须结束。
