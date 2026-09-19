@@ -69,11 +69,20 @@ description: 作者：抖音 无趣。Siemens NX 自动建模统一入口。支�
 ## 4. 工程图门禁
 
 ### 门禁 A
-- `unresolved = 0`
-- `dimension_closure.status = "closed"`
-- 存在 `overall_dimensions`、`coordinate_system`、`features`
+Gate A 判断的是**最低充分建模闭合**，不是“整张图所有文字/工艺信息都必须 100% 解释”。
 
-否则立即停止，不进入建模规划。
+同时满足以下条件才通过：
+- `blocking_unresolved = 0`，即 `unresolved` 中没有 `required_for_modeling=true` 的项目；
+- `dimension_conflicts = 0`；
+- `dimension_closure.status = "closed"`；
+- 存在 `overall_dimensions`、`coordinate_system`、`features`。
+
+其中：
+- 能由图中**明确尺寸 + 明确拓扑关系**唯一计算出的值进入 `derived`，不进入 `unresolved`；
+- `required_for_modeling=false` 的粗糙度、普通工艺说明、非建模表格字段、无关 OCR 模糊项进入 `warnings` / soft unresolved，**不得阻塞 Gate A**；
+- 只有会改变最终三维实体的尺寸、位置、数量、方向、轮廓、贯穿/深度等关键项无法唯一确定时才 BLOCKED。
+
+Gate A 失败时只向用户询问**真正 blocking 的最少问题**，不得把 non-blocking warning 一并当成澄清问题。
 
 ### 门禁 B
 - runner build/check 通过
