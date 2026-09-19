@@ -264,6 +264,15 @@ def main() -> None:
         if token not in output_rules:
             fail(f"Gate A user-output regression: missing {token}")
     for token in (
+        "B 阶段若因能力边界失败",
+        "不得进入 Runner",
+        "无法等价建模",
+        "禁止把 unsupported feature 描述成“已由普通孔/其它特征等价表达”",
+        "geometry-preserving surrogate",
+    ):
+        if token not in output_rules:
+            fail(f"Gate B capability user-output regression: missing {token}")
+    for token in (
         "blocking_unresolved = 0",
         "dimension_conflicts = 0",
         "最低充分建模闭合",
