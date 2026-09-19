@@ -2060,6 +2060,11 @@ def _drawing_check_feature_structure(errors: list[str], feature: dict) -> None:
         errors.append(f"feature {fid!r} hole-like geometry requires axis X/Y/Z")
         return
 
+    explicit = feature.get("explicit_centers")
+    count = _num(feature.get("count"))
+    if isinstance(explicit, list) and count is not None and count > 1:
+        return
+
     needed = {
         "X": ("y", "z"),
         "Y": ("x", "z"),
