@@ -8,8 +8,7 @@
     "length": 80,
     "width": 60,
     "height": 25,
-    "unit": "mm",
-    "source": "俯视图 80×60；总高 25 = 底板 10 + 凸台 15"
+    "unit": "mm"
   },
   "coordinate_system": {
     "origin": "part_center_xy_bottom_z0",
@@ -29,11 +28,6 @@
         "thickness": 10
       },
       "count": 1,
-      "source_views": [
-        "俯视图",
-        "剖视图 A-A"
-      ],
-      "confidence": "high",
       "required_for_modeling": true
     },
     {
@@ -51,11 +45,6 @@
         ]
       },
       "count": 1,
-      "source_views": [
-        "俯视图",
-        "剖视图 A-A"
-      ],
-      "confidence": "high",
       "required_for_modeling": true
     },
     {
@@ -72,211 +61,111 @@
         ]
       },
       "count": 1,
-      "source_views": [
-        "俯视图",
-        "剖视图 A-A"
-      ],
-      "confidence": "high",
       "required_for_modeling": true
     }
   ],
   "source_ledger": [
     {
-      "id": "S_BASE_L",
-      "semantic": "linear_dimension",
+      "id": "S_OVERALL_L",
+      "semantic": "overall_dimension",
       "value": 80,
-      "allowed_targets": [
-        "feature:F_BASE.dimensions.length"
-      ]
+      "target": "overall_dimensions.length"
+    },
+    {
+      "id": "S_OVERALL_W",
+      "semantic": "overall_dimension",
+      "value": 60,
+      "target": "overall_dimensions.width"
+    },
+    {
+      "id": "S_OVERALL_H",
+      "semantic": "overall_dimension",
+      "value": 25,
+      "target": "overall_dimensions.height"
+    },
+    {
+      "id": "S_BASE_L",
+      "semantic": "feature_dimension",
+      "value": 80,
+      "target": "feature:F_BASE.dimensions.length"
     },
     {
       "id": "S_BASE_W",
-      "semantic": "linear_dimension",
+      "semantic": "feature_dimension",
       "value": 60,
-      "allowed_targets": [
-        "feature:F_BASE.dimensions.width"
-      ]
+      "target": "feature:F_BASE.dimensions.width"
     },
     {
       "id": "S_BASE_T",
-      "semantic": "linear_dimension",
+      "semantic": "thickness",
       "value": 10,
-      "allowed_targets": [
-        "feature:F_BASE.dimensions.thickness"
-      ]
+      "target": "feature:F_BASE.dimensions.thickness"
     },
     {
       "id": "S_BASE_N",
       "semantic": "feature_count",
       "value": 1,
-      "allowed_targets": [
-        "feature:F_BASE.count"
-      ]
+      "target": "feature:F_BASE.count"
     },
     {
       "id": "S_BOSS_D",
       "semantic": "diameter",
       "value": 40,
-      "allowed_targets": [
-        "feature:F_BOSS.dimensions.diameter"
-      ]
+      "target": "feature:F_BOSS.dimensions.diameter"
     },
     {
       "id": "S_BOSS_H",
-      "semantic": "linear_dimension",
+      "semantic": "feature_dimension",
       "value": 15,
-      "allowed_targets": [
-        "feature:F_BOSS.dimensions.height"
-      ]
+      "target": "feature:F_BOSS.dimensions.height"
     },
     {
       "id": "S_BOSS_C",
-      "semantic": "center_relation",
+      "semantic": "center_position",
       "value": [
         0,
         0
       ],
-      "allowed_targets": [
-        "feature:F_BOSS.position.center"
-      ]
+      "target": "feature:F_BOSS.position.center"
     },
     {
       "id": "S_BOSS_N",
       "semantic": "feature_count",
       "value": 1,
-      "allowed_targets": [
-        "feature:F_BOSS.count"
-      ]
+      "target": "feature:F_BOSS.count"
     },
     {
       "id": "S_HOLE_D",
       "semantic": "diameter",
       "value": 20,
-      "allowed_targets": [
-        "feature:F_HOLE.dimensions.diameter"
-      ]
+      "target": "feature:F_HOLE.dimensions.diameter"
     },
     {
       "id": "S_HOLE_C",
-      "semantic": "center_relation",
+      "semantic": "center_position",
       "value": [
         0,
         0
       ],
-      "allowed_targets": [
-        "feature:F_HOLE.position.center"
-      ]
+      "target": "feature:F_HOLE.position.center"
     },
     {
       "id": "S_HOLE_N",
       "semantic": "feature_count",
       "value": 1,
-      "allowed_targets": [
-        "feature:F_HOLE.count"
-      ]
+      "target": "feature:F_HOLE.count"
     }
   ],
-  "source_ownership": {
-    "schema_version": 1,
-    "assignments": [
-      {
-        "target": "feature:F_BASE.dimensions.length",
-        "mode": "direct",
-        "source_refs": [
-          "S_BASE_L"
-        ]
-      },
-      {
-        "target": "feature:F_BASE.dimensions.width",
-        "mode": "direct",
-        "source_refs": [
-          "S_BASE_W"
-        ]
-      },
-      {
-        "target": "feature:F_BASE.dimensions.thickness",
-        "mode": "direct",
-        "source_refs": [
-          "S_BASE_T"
-        ]
-      },
-      {
-        "target": "feature:F_BASE.count",
-        "mode": "direct",
-        "source_refs": [
-          "S_BASE_N"
-        ]
-      },
-      {
-        "target": "feature:F_BOSS.dimensions.diameter",
-        "mode": "direct",
-        "source_refs": [
-          "S_BOSS_D"
-        ]
-      },
-      {
-        "target": "feature:F_BOSS.dimensions.height",
-        "mode": "direct",
-        "source_refs": [
-          "S_BOSS_H"
-        ]
-      },
-      {
-        "target": "feature:F_BOSS.position.center",
-        "mode": "direct",
-        "source_refs": [
-          "S_BOSS_C"
-        ]
-      },
-      {
-        "target": "feature:F_BOSS.count",
-        "mode": "direct",
-        "source_refs": [
-          "S_BOSS_N"
-        ]
-      },
-      {
-        "target": "feature:F_HOLE.dimensions.diameter",
-        "mode": "direct",
-        "source_refs": [
-          "S_HOLE_D"
-        ]
-      },
-      {
-        "target": "feature:F_HOLE.position.center",
-        "mode": "direct",
-        "source_refs": [
-          "S_HOLE_C"
-        ]
-      },
-      {
-        "target": "feature:F_HOLE.count",
-        "mode": "direct",
-        "source_refs": [
-          "S_HOLE_N"
-        ]
-      }
-    ]
-  },
   "derived": [],
   "patterns": [],
   "symmetry": [
     "凸台与中心孔同心，并与底板中心重合"
   ],
   "unresolved": [],
+  "warnings": [],
   "dimension_conflicts": [],
-  "coordinate_sanity": {
-    "status": "pass",
-    "checks": [
-      "overall bbox: X=-40..40, Y=-30..30, Z=0..25",
-      "全部特征中心位于 overall bbox 内"
-    ]
-  },
   "dimension_closure": {
     "status": "closed",
-    "basis": "所有 required geometry 均有 source_ledger 直接证据或 deterministic derived",
-    "checks": [
-      "总高 25 = 10 + 15 ✓"
-    ]
+    "basis": "required geometry has direct or deterministic provenance"
   }
 }
