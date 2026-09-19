@@ -153,22 +153,16 @@ SOFT 项允许保留未知，**不得让 Gate A BLOCKED，也不得向用户强�
 
 禁止为了闭合而补尺寸。Gate A 只关心 blocking unresolved，不要求 warnings 为空。
 
-## 7.5 固定坐标归一化与反算校验（Gate A 前强制）
+## 7.5 固定坐标归一化
 
-当 `coordinate_system.origin = "part_center_xy_bottom_z0"` 且总体尺寸为 `Lx / Ly / H` 时，最终 JSON 的全局范围固定为：
+Reader 只负责把最终几何统一到固定坐标系，不再自行输出“sanity pass”：
 
-- X：`[-Lx/2, +Lx/2]`
-- Y：`[-Ly/2, +Ly/2]`
-- Z：`[0, H]`
+- `coordinate_system.origin = "part_center_xy_bottom_z0"`；
+- 若总体尺寸为 `Lx / Ly / H`，全局范围是 X=`[-Lx/2,+Lx/2]`、Y=`[-Ly/2,+Ly/2]`、Z=`[0,H]`；
+- profile / feature centerline / pattern centers 必须使用该全局坐标；
+- 边缘基准尺寸必须先换算，不能原样冒充中心原点坐标。
 
-强制规则：
-1. final JSON 中的 `profile` / body range / feature centerline / pattern center 必须使用这一全局坐标系。不得把“从左边/从前边量的局部尺寸”直接写成全局坐标，也不得把视图局部坐标与全局坐标混用。
-2. 对孔、沉孔、螺纹孔等位于实体材料上的特征，其**非轴向中心坐标**必须落在对应 overall bbox 内；若输出值超出 bbox，而图纸没有明确表达外置/切边特征，则这是坐标转换错误，必须进入 blocking unresolved / conflict，不能 Gate A closed。
-3. profile/body 的最终全局范围不得超出 overall bbox；若局部草图确实需要自己的局部坐标，只能作为内部规划信息，不能冒充 Reader 的最终全局坐标。
-4. **中心距/节距反算**：若图纸明确给两中心距离 `P`，输出坐标必须满足对应坐标差的绝对值 = `P`（允许图纸公差范围内误差）；不能只因为“差值差不多”就接受。
-5. **对称反算**：若图纸明确关于全局中心线/对称线对称，成对中心 `a,b` 必须满足其中点落在该对称线。例如关于 X=0 对称时，`(x1+x2)/2 = 0`；若同时中心距为 `P`，则可唯一得到 `x1=-P/2, x2=+P/2`。这只是通用确定性算式，不得替换成型号专用常量。
-6. pattern / explicit centers 输出前必须用最终坐标反算 count、pitch/span、对称中心；任一结果与图纸明确尺寸不一致，都不能写 `dimension_closure.status="closed"`。
-7. 坐标 sanity 只校验**已经由图纸支持的关系**，禁止借此创造新尺寸。
+bbox、中心距、对称、pattern count 等反算由 `validate-drawing` 机器执行；Reader 不重复生成一份人工 `coordinate_sanity.status`。
 
 ## 8. DETAIL / SECTION 与跨视图一致性
 
