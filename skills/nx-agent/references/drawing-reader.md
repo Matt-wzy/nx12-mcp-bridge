@@ -215,7 +215,7 @@ DETAIL / SECTION 是局部几何高优先级证据。出现矛盾必须进入 `u
 ```
 
 `source_ledger` 使用机器可判定的语义，不允许自由定义“可绑定目标”：
-- direct：`overall_dimension / profile_dimension / feature_dimension / feature_count / diameter / radius / slot_width / depth / thickness / axis / center_position / thread_spec / side / through / pattern_dimension`；
+- direct：`overall_dimension / profile_dimension / feature_dimension / feature_count / diameter / radius / slot_width / depth / thickness / axis / center_position / thread_spec / feature_kind / side / through / pattern_dimension`；
 - relation：`center_distance / center_spacing / symmetry / upper_tangent / lower_tangent / coincident / alignment`。
 
 关键规则：
