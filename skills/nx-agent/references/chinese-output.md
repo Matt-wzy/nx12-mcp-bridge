@@ -103,3 +103,11 @@ C 修复后再次失败：
 - 不得展示长 plan
 - 不得把内部英文键名直接展示给用户
 - 不得把 repair 后的成功描述为 0 次失败
+
+## 工程图 Gate A 用户输出
+
+- Gate A BLOCKED 时，只列出 `required_for_modeling=true` 的 blocking unresolved，并只询问继续建模所需的**最少问题**。
+- `required_for_modeling=false` 的粗糙度、普通工艺说明、非建模字段等只可作为简短 warning；不得混入“必须确认”的问题列表。
+- 能 deterministic derived 的尺寸直接使用，并可在需要时简短注明算式；不得要求用户再次确认已经唯一推导出的值。
+- Gate A PASS 且只有 soft warnings 时，继续 Planner，不得仅因 warning 停止。
+
