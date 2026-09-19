@@ -144,7 +144,14 @@ def main() -> None:
     loader_source = (ROOT / "loader" / "NX_MCP_Loader.cs").read_text(encoding="utf-8")
     principal_plane_tokens = [
         "_sketchPlanes",
+        "CreateFixedTypePlane",
+        "SketchPlaneMatrix",
+        "SketchLocalXAxis",
         "b.PlaneReference = planeRef",
+        "b.AxisReference = axisRef",
+        "b.SketchOrigin = sketchOrigin",
+        "b.PlaneOption = Sketch.PlaneOption.ExistingPlane",
+        "b.OriginOption = OriginMethod.SpecifyPoint",
         "SketchPointForPlane",
         'case "XZ": return new Point3d(u, 0.0, v);',
         'case "YZ": return new Point3d(0.0, u, v);',
