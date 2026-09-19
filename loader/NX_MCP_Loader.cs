@@ -454,19 +454,31 @@ public static class NX_MCP_Loader
 
         _sketchCounter++;
         string id = "SKETCH_" + _sketchCounter;
-        Plane planeRef = _part.Planes.CreatePlane(
-            new Point3d(0.0, 0.0, 0.0),
-            SketchPlaneNormal(plane),
+
+        // NX 2506 does not reliably honor a bare CreatePlane(origin, normal)
+        // when CreateSketchInPlaceBuilder2 commits a non-XY sketch: the sketch
+        // can silently fall back to Z=0. Use an explicitly oriented fixed plane
+        // and fully specify origin + horizontal axis + ExistingPlane mode.
+        Point3d origin = new Point3d(0.0, 0.0, 0.0);
+        Plane planeRef = _part.Planes.CreateFixedTypePlane(
+            origin,
+            SketchPlaneMatrix(plane),
             SmartObject.UpdateOption.WithinModeling);
+        Direction axisRef = _part.Directions.CreateDirection(
+            origin,
+            SketchLocalXAxis(plane),
+            SmartObject.UpdateOption.WithinModeling);
+        NXOpen.Point sketchOrigin = _part.Points.CreatePoint(origin);
 
         var b = _part.Sketches.CreateSketchInPlaceBuilder2(null);
         Sketch sk;
         try
         {
-            // Attach the sketch to the requested principal plane at the work-part origin.
-            // Local sketch coordinates are mapped explicitly by SketchPoint/SketchVector.
             b.PlaneReference = planeRef;
-            b.OriginOption = OriginMethod.WorkPartOrigin;
+            b.AxisReference = axisRef;
+            b.SketchOrigin = sketchOrigin;
+            b.PlaneOption = Sketch.PlaneOption.ExistingPlane;
+            b.OriginOption = OriginMethod.SpecifyPoint;
             sk = (Sketch)b.Commit();
         }
         finally
@@ -1593,6 +1605,41 @@ public static class NX_MCP_Loader
             case "YZ": return new Vector3d(1.0, 0.0, 0.0);
             default: return new Vector3d(0.0, 0.0, 1.0);
         }
+    }
+
+    private static Vector3d SketchLocalXAxis(string plane)
+    {
+        switch (plane)
+        {
+            case "YZ": return new Vector3d(0.0, 1.0, 0.0);
+            default: return new Vector3d(1.0, 0.0, 0.0);
+        }
+    }
+
+    private static Matrix3x3 SketchPlaneMatrix(string plane)
+    {
+        Matrix3x3 m = new Matrix3x3();
+        if (plane == "XZ")
+        {
+            // local x -> +X, local y -> +Z, local normal -> -Y
+            m.Xx = 1.0; m.Xy = 0.0;  m.Xz = 0.0;
+            m.Yx = 0.0; m.Yy = 0.0;  m.Yz = 1.0;
+            m.Zx = 0.0; m.Zy = -1.0; m.Zz = 0.0;
+        }
+        else if (plane == "YZ")
+        {
+            // local x -> +Y, local y -> +Z, local normal -> +X
+            m.Xx = 0.0; m.Xy = 1.0; m.Xz = 0.0;
+            m.Yx = 0.0; m.Yy = 0.0; m.Yz = 1.0;
+            m.Zx = 1.0; m.Zy = 0.0; m.Zz = 0.0;
+        }
+        else
+        {
+            m.Xx = 1.0; m.Xy = 0.0; m.Xz = 0.0;
+            m.Yx = 0.0; m.Yy = 1.0; m.Yz = 0.0;
+            m.Zx = 0.0; m.Zy = 0.0; m.Zz = 1.0;
+        }
+        return m;
     }
 
     private static Vector3d SketchExtrudeAxis(string plane)
