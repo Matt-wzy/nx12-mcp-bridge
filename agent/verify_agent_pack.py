@@ -189,6 +189,14 @@ def main() -> None:
     for token in ("XY→+Z", "XZ→+Y", "YZ→+X", 'nx_extrude(operation="subtract")'):
         if token not in plane_rules:
             fail(f"principal-plane planning contract missing: {token}")
+    for token in (
+        "没有真实螺纹建模工具",
+        "不能自动等同于任意普通孔直径",
+        "`surrogate_geometry`",
+        "Planner 必须 fail-closed",
+    ):
+        if token not in plane_rules:
+            fail(f"certified thread capability regression: missing {token}")
 
     drawing_reader = (SKILL / "references" / "drawing-reader.md").read_text(encoding="utf-8")
     drawing_rules = (SKILL / "references" / "nx-drawing-rules.md").read_text(encoding="utf-8")
@@ -241,6 +249,14 @@ def main() -> None:
     if 'coordinate_sanity.status="pass"' not in pipeline_contract:
         fail("pipeline Gate A coordinate sanity rule missing")
     for token in (
+        "语义/数量/能力预检",
+        "`capability_violations=0`",
+        "pattern 总实例数与源 `count` 完全一致",
+        "unsupported threaded feature 不得被删除或替换成普通 through/clearance hole",
+    ):
+        if token not in pipeline_contract:
+            fail(f"pipeline Stage B semantic/capability regression: missing {token}")
+    for token in (
         "只列出 `required_for_modeling=true`",
         "最少问题",
         "继续 Planner",
@@ -256,6 +272,13 @@ def main() -> None:
             fail(f"top-level Gate A minimum-closure regression: missing {token}")
     if 'coordinate_sanity.status = "pass"' not in top:
         fail("top-level Gate A coordinate sanity rule missing")
+    for token in (
+        "capability_violations = 0",
+        "feature source/count preservation 通过",
+        "禁止把 threaded hole 删除或改成普通通孔/间隙孔",
+    ):
+        if token not in top:
+            fail(f"top-level Gate B semantic/capability regression: missing {token}")
 
     for token in (
         '"type": "coaxial_hole_group"',
@@ -276,6 +299,18 @@ def main() -> None:
         if token not in drawing_reader:
             fail(f"drawing association/coordinate sanity regression: missing {token}")
     for token in (
+        "HARD 几何字段一旦由明确证据绑定，其语义归属锁定",
+        "一旦 `slot.width` 已由明确槽边尺寸绑定",
+        "不得把该中心距拿去生成 `slot.depth` / `slot.bottom_z`",
+        "`derived` 必须写明 `target`",
+        "总实例数硬约束",
+        "`count_x * count_y == count`",
+        "对称不等于再复制一份数量",
+        "count back-check",
+    ):
+        if token not in drawing_reader:
+            fail(f"drawing ownership/count regression: missing {token}")
+    for token in (
         "coaxial_hole_group",
         "同组 member 必须继承同一个 centerline",
         "`C=2` 不等价于边标注 `C2`",
@@ -291,6 +326,18 @@ def main() -> None:
     ):
         if token not in drawing_rules:
             fail(f"quick drawing coordinate sanity regression: missing {token}")
+    for token in (
+        "字段归属锁定",
+        "已绑定的 `slot.width` 不得在后续阶段改写",
+        "不得再跨 feature 复用成 slot 终止尺寸",
+        "derived 必须绑定明确 `target`",
+        "`N×` 是该 feature 的**总实例数**",
+        "`len(explicit_centers) == count`",
+        "`count_x * count_y == count`",
+        "仅有对称线或总数时不得自动升级为 rectangular",
+    ):
+        if token not in drawing_rules:
+            fail(f"quick drawing ownership/count regression: missing {token}")
     for token in (
         "禁止数值 nudge / epsilon 修复",
         "`Z=50 → Z=49`",
@@ -339,6 +386,19 @@ def main() -> None:
     ):
         if token not in planner_rules:
             fail(f"Planner drawing-coordinate regression: missing {token}")
+    for token in (
+        "Reader 字段语义与 source ownership 不可重解释",
+        "`derived.target` 只允许写入它声明的目标字段",
+        "Pattern count 是不可变输入",
+        "禁止自动把 2 个扩成 4 个",
+        "能力边界不得通过几何替代偷偷绕过",
+        "禁止删除、改成普通通孔/间隙孔",
+        "`surrogate_geometry`",
+        "公称螺纹规格不足以自行推导替代圆柱直径",
+        "`capability_violation`",
+    ):
+        if token not in planner_rules:
+            fail(f"Planner ownership/count/capability regression: missing {token}")
     for token in ("澄清建议的几何一致性", "d >= r + R", "方位描述与坐标范围必须一致"):
         if token not in planner_rules:
             fail(f"Planner clarification geometry guard missing: {token}")
