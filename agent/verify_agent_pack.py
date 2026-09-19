@@ -253,6 +253,36 @@ def main() -> None:
         if token not in top:
             fail(f"top-level Gate A minimum-closure regression: missing {token}")
 
+    for token in (
+        'type:"coaxial_hole_group"',
+        "同一横向中心线坐标",
+        "同组所有 member 继承这一中心线",
+        "参数表中的字段名 `C` 与数值 `2`",
+    ):
+        if token not in drawing_reader:
+            fail(f"drawing coaxial/chamfer semantics regression: missing {token}")
+    for token in (
+        "coaxial_hole_group",
+        "同组 member 必须继承同一个 centerline",
+        "`C=2` 不等价于边标注 `C2`",
+    ):
+        if token not in drawing_rules:
+            fail(f"quick drawing coaxial/chamfer regression: missing {token}")
+    for token in (
+        "禁止数值 nudge / epsilon 修复",
+        "`Z=50 → Z=49`",
+        "不能把这种数值改写当成 Controlled Self-Healing",
+    ):
+        if token not in pipeline_contract:
+            fail(f"pipeline numeric-nudge repair regression: missing {token}")
+    for token in (
+        "nudge/epsilon",
+        "`Z=50 → Z=49`",
+        "Boolean 相切失败不能通过改坐标",
+    ):
+        if token not in top:
+            fail(f"top-level numeric-nudge repair regression: missing {token}")
+
     text_fast = (SKILL / "references" / "text-modeling.md").read_text(encoding="utf-8")
     for token in (
         "建议参数闭合检查",
@@ -271,6 +301,14 @@ def main() -> None:
     ):
         if token not in planner_rules:
             fail(f"Planner drawing-axis regression: missing {token}")
+    for token in (
+        "同轴复合孔 centerline 是不可变输入",
+        "所有 operation 必须继承组的同一 `axis` 与横向 `centerline`",
+        "同一 `coaxial_hole_group` 展开的所有 member operation 的非轴向中心坐标完全一致",
+        "孤立参数 `C=2`",
+    ):
+        if token not in planner_rules:
+            fail(f"Planner coaxial/chamfer regression: missing {token}")
     for token in ("澄清建议的几何一致性", "d >= r + R", "方位描述与坐标范围必须一致"):
         if token not in planner_rules:
             fail(f"Planner clarification geometry guard missing: {token}")
