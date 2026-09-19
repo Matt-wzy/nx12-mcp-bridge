@@ -92,7 +92,10 @@ Runner 正式开始建模后，任一 operation 失败：
    - 完整圆边 `Elliptical` / `Circular`；
    - 孔侧面 `Swept` / `Cylindrical`；
 3. 筛选条件过严，可替换为冻结契约中已验证的稳定组合；
-4. 上一次失败由**当前 Pipeline 自己创建**的计划输出零件处于 dirty 状态，需要无保存清理后完整重跑。
+4. frozen/executable 边界污染等**纯计划表达错误**（例如 Planner 误写
+   `result_bindings` / `selection_binding` / `retry` / `$reference`），
+   且修复仅删除/改写绑定表达，不改变任何尺寸、特征、选择几何或建模顺序；
+5. 上一次失败由**当前 Pipeline 自己创建**的计划输出零件处于 dirty 状态，需要无保存清理后完整重跑。
 
 ### 6.3 禁止自动修复
 以下任一情况必须最终失败：
