@@ -75,9 +75,11 @@ XY 原点为零件整体外形中心，Z=0 为零件底面，+X 向右、+Y 为�
 ## 6. 尺寸归属与特征语义
 
 - **明确箭头/引线优先绑定其实际指向的几何特征。** 同一区域出现其它孤立数值、表格字段或邻近标注时，禁止因为“位置接近”就覆盖明确箭头标注。
-- 对开缝/槽：直接跨两侧边界的线性尺寸才可作为 `width`；例如两条槽边之间明确标注 `2`，则槽宽就是 2。附近未通过尺寸线/引线绑定到该槽的 `1.6` 不得替代它。
-- `depth` 只能来自明确的深度语义（如 `深12` / `DEPTH 12`）、剖视图中明确的起止面，或其它能够唯一限定切除深度的标注。**普通线性位置尺寸不得因为数值合适就被改解释成 slot/cut depth。**
-- 因此像 `E=18` 这类线性/位置参数，除非图纸明确把它绑定为槽深，否则只能保留其原始位置尺寸语义，不能自动写成 `slot.depth=18`。
+- **HARD 几何字段一旦由明确证据绑定，其语义归属锁定。** 一个尺寸/标注默认只能作为一个几何字段的 source；只有图纸明确表达同一尺寸同时约束多个字段时才允许共享。禁止把已经属于 A 特征的位置尺寸，后续重新解释成 B 特征的宽度、深度、终止面或中心位置。
+- 对开缝/槽：直接跨两侧边界的线性尺寸才可作为 `width`；例如两条槽边之间明确标注 `2`，则槽宽就是 2。附近未通过尺寸线/引线绑定到该槽的 `1.6` 不得替代它；**一旦 `slot.width` 已由明确槽边尺寸绑定，后续任何其它数值都不得覆盖。**
+- `depth` / `bottom` / `termination` 只能来自明确的深度语义（如 `深12` / `DEPTH 12`）、剖视图中明确的起止面、明确的相切/共线终止关系，或其它能够唯一限定终止面的标注。**普通线性位置尺寸不得因为数值合适就被改解释成 slot/cut depth 或 bottom。**
+- 因此像某两条孔轴之间的中心距参数，只能用于它明确绑定的轴线位置；除非图纸明确把它同时绑定到槽终止面，否则不得把该中心距拿去生成 `slot.depth` / `slot.bottom_z`。
+- `derived` 必须写明 `target`，表示推导结果实际约束哪个 feature field；同一个 derived 值不得在没有额外图纸证据时跨 feature 复用。
 - 孔类 feature 必须输出 `axis`；slot/cut 必须输出 `width_axis`、`through_axis`（若非贯穿则再输出有明确证据的 `depth`）。任何会改变三维结果的方向字段不能唯一确定时，Gate A 不得 closed。
 - **同轴复合孔必须先做 association，再求全局 centerline**：通孔、沉孔、盲孔、螺纹孔等若在不同视图中由共中心线、同心圆、正投影对应、共同引线/尺寸链等明确证据指向同一加工轴，先建立一个候选 `coaxial_hole_group`；**禁止先给每个候选 member 分别赋全局 Z/Y/X，再根据已经猜出的坐标决定是否归组**。
 - association 阶段只比较图纸证据，不要求成员已经拥有最终全局坐标。归组完成后才统一求组级 `axis` 与 `centerline`，再让所有 member 继承。成员可以有不同直径、深度、轴向起止侧或加工语义，但不能拥有不同的非轴向中心坐标。
@@ -178,9 +180,14 @@ DETAIL / SECTION 是局部几何高优先级证据。出现矛盾必须进入 `u
 
 如果图纸表达一个连续外轮廓，禁止用“矩形 + 圆”等包络图元替代真实轮廓。JSON 必须提供足以唯一重建的 `profile.segments`：直线端点、圆弧圆心/半径/角度、圆角 R、斜边角度及参考方向、相切/连接关系。任一轮廓段不能唯一确定时，加入 `unresolved`。
 
-## 10. Pattern 语义
+## 10. Pattern / 数量语义
 
-二维孔阵列同时存在 X/Y 间距时必须输出 `rectangular`。圆周阵列除 count / PCD / angle 外，还必须输出 `start_angle_deg`、`angle_reference` 或 `explicit_centers`。中心线已经明确方向时可直接输出坐标，这不属于比例测量。
+- 图纸数量标注（如 `2×` / `4×`）是该 feature 的**总实例数硬约束**；后续对称、镜像、pattern 分类只能解释位置关系，不能把总数再次乘倍。
+- 若 Reader 输出 `count=N` 与 `explicit_centers`，必须满足 `explicit_centers.length == N`。
+- 若输出 `rectangular`，必须满足 `count_x * count_y == count`；若图纸只明确总数与若干中心位置、无法唯一证明二维矩形阵列，则保留 `explicit_centers`，禁止为了“看起来对称”自动升级成更高数量的 rectangular pattern。
+- 对称中心线只用于约束坐标中点/镜像关系；**对称不等于再复制一份数量**。例如源标注已经写 `2×`，对称关系用于求这 2 个中心，而不是生成 4 个。
+- 二维孔阵列只有在图纸明确给出 X/Y 两方向实例数或等价的二维阵列证据时才输出 `rectangular`。圆周阵列除 count / PCD / angle 外，还必须输出 `start_angle_deg`、`angle_reference` 或 `explicit_centers`。
+- 输出前必须做 count back-check：从最终 centers / count_x×count_y / circular count 反算出的总实例数必须等于源数量标注；不一致则进入 dimension conflict，Gate A 不能 closed。
 
 ## 11. 输出结构
 
@@ -196,6 +203,7 @@ DETAIL / SECTION 是局部几何高优先级证据。出现矛盾必须进入 `u
   "derived": [
     {
       "name": "",
+      "target": "",
       "value": null,
       "derivation": "",
       "source_dimensions": []
