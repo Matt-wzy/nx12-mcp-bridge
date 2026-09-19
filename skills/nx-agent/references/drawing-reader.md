@@ -119,7 +119,9 @@ XY 原点为零件整体外形中心，Z=0 为零件底面，+X 向右、+Y 为�
 ### 7.2 DERIVED：可确定推导
 若目标值没有直接单独标出，但能仅凭**图中明确尺寸、中心线、相切/共线/对称等明确拓扑关系**通过唯一算式得到，则：
 - 写入 `derived`；
-- 记录 `value`、`derivation`、`source_dimensions`；
+- 记录 `id`、`target`、`value`、`derivation`、`dependencies`；
+- `dependencies` 只允许 `source:<id>` 或 `target:<field-path>`；
+- 同时在 `source_ownership.assignments` 为该 target 写 `mode:"derived"`；
 - 视为已闭合，不进入 `unresolved`。
 
 允许示例：
@@ -189,48 +191,51 @@ DETAIL / SECTION 是局部几何高优先级证据。出现矛盾必须进入 `u
 - 二维孔阵列只有在图纸明确给出 X/Y 两方向实例数或等价的二维阵列证据时才输出 `rectangular`。圆周阵列除 count / PCD / angle 外，还必须输出 `start_angle_deg`、`angle_reference` 或 `explicit_centers`。
 - 输出前必须做 count back-check：从最终 centers / count_x×count_y / circular count 反算出的总实例数必须等于源数量标注；不一致则进入 dimension conflict，Gate A 不能 closed。
 
-## 11. 输出结构
+## 11. 输出结构与机器门禁
+
+最终 JSON 必须包含 `features[].id`、`source_ledger`、`source_ownership`、`derived`、`unresolved`、`dimension_conflicts`、`coordinate_sanity`、`dimension_closure`。
 
 ```json
 {
-  "views": [],
-  "overall_dimensions": {},
-  "coordinate_system": {},
-  "profile": {},
-  "features": [],
-  "patterns": [],
-  "symmetry": [],
-  "derived": [
+  "features": [{"id":"F1","required_for_modeling":true,"depth":10}],
+  "source_ledger": [
     {
-      "name": "",
-      "target": "",
-      "value": null,
-      "derivation": "",
-      "source_dimensions": []
+      "id":"S1",
+      "semantic":"linear_dimension",
+      "value":10,
+      "allowed_targets":["feature:F1.depth"]
     }
   ],
-  "unresolved": [
-    {
-      "item": "",
-      "reason": "",
-      "required_for_modeling": true
-    }
-  ],
-  "warnings": [],
-  "dimension_conflicts": [],
-  "coordinate_sanity": {
-    "status": "pass",
-    "checks": []
+  "source_ownership": {
+    "schema_version":1,
+    "assignments":[
+      {"target":"feature:F1.depth","mode":"direct","source_refs":["S1"]}
+    ]
   },
-  "dimension_closure": {"status": "closed"}
+  "derived": [],
+  "unresolved": [],
+  "dimension_conflicts": [],
+  "coordinate_sanity":{"status":"pass","checks":[]},
+  "dimension_closure":{"status":"closed"}
 }
 ```
 
-约定：
-- `blocking_unresolved` = `unresolved` 中 `required_for_modeling=true` 的数量；
-- Gate A closed 前必须有 `coordinate_sanity.status="pass"`；至少覆盖 overall bbox、非轴向特征中心、图纸明确的中心距/节距与对称反算关系。
-- `warnings` 与 `required_for_modeling=false` 的 soft unresolved 不计入 blocking；
-- 规格表字段不要求“逐字段解释完成”才能建模；只要最终三维实体所需的尺寸/位置/数量/方向/轮廓已经 explicit 或 derived 唯一确定即可。
+机器约定：
+- 每个 required feature 必须有稳定 `id`；
+- 每个 HARD 几何字段必须由 `source_ownership.assignments` 覆盖；
+- source 只能分配给自己的 `allowed_targets`；同一 source 真正约束多个 target 时必须显式 `shareable:true`；
+- direct assignment 的 source value 必须与目标字段一致；
+- derived target 必须有 `mode:"derived"` assignment，且 `dependencies` 与 source_refs 一致；
+- `N×` 数量必须通过 count back-check；
+- `blocking_unresolved` = `unresolved` 中 `required_for_modeling=true` 的数量。
+
+JSON 落盘后立即执行：
+
+```text
+<python_exe> <runner.py> validate-drawing <drawing.json>
+```
+
+只有 exit code=0 且返回 `source_ownership.status="pass"` 才算 Gate A PASS。validator 失败时停止，不进入 Planner，也不得由 Agent 自己覆盖错误。
 
 完整示例：`examples/example-output.json`。
 快速视图/标注识别规则：`references/nx-drawing-rules.md`。
