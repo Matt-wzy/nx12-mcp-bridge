@@ -76,14 +76,54 @@ XY 原点为零件整体外形中心，Z=0 为零件底面，+X 向右、+Y 为�
 - 因此像 `E=18` 这类线性/位置参数，除非图纸明确把它绑定为槽深，否则只能保留其原始位置尺寸语义，不能自动写成 `slot.depth=18`。
 - 孔类 feature 必须输出 `axis`；slot/cut 必须输出 `width_axis`、`through_axis`（若非贯穿则再输出有明确证据的 `depth`）。任何会改变三维结果的方向字段不能唯一确定时，Gate A 不得 closed。
 
-## 7. 尺寸闭合
+## 7. 最低充分建模闭合：HARD / DERIVED / SOFT
+
+工程图读取必须把“不确定信息”按是否影响最终三维实体分层，禁止把所有未识别内容都塞进 blocking `unresolved`。
+
+### 7.1 HARD：阻塞建模
+只有会改变最终三维结果的项目才允许 `required_for_modeling=true`，例如：
+- 总体/主体尺寸、关键轮廓段；
+- 特征位置、数量、直径/半径；
+- `axis` / `width_axis` / `through_axis`；
+- 是否贯穿；
+- 非贯穿特征真正需要的 `depth`；
+- 会改变实体的圆角/倒角尺寸。
+
+这些项目若无法由图纸唯一确定 → 写入 `unresolved` 且 `required_for_modeling=true`，Gate A BLOCKED。
+
+### 7.2 DERIVED：可确定推导
+若目标值没有直接单独标出，但能仅凭**图中明确尺寸、中心线、相切/共线/对称等明确拓扑关系**通过唯一算式得到，则：
+- 写入 `derived`；
+- 记录 `value`、`derivation`、`source_dimensions`；
+- 视为已闭合，不进入 `unresolved`。
+
+允许示例：
+- 已知中心高 `H=40` 和明确中心距 `E=18` → 另一轴线高度 `Z=40+18=58`；
+- 已知总高 66、主孔中心高 40、主孔 Ø20，且图形明确开缝止于主孔上切点 → 深度 `66-(40+10)=16`。
+
+禁止把以下情况伪装成 derived：
+- 需要像素比例；
+- 需要“看起来大概如此”的经验判断；
+- 存在两种以上同样合理的解释；
+- 需要修改/忽略图上冲突尺寸。
+
+### 7.3 SOFT：不阻塞建模
+不影响最终实体唯一性的内容使用 `required_for_modeling=false`，并进入 `warnings` 或 soft unresolved，例如：
+- 表面粗糙度；
+- 普通公差/材料/热处理/加工顺序说明；
+- 未参与实体生成的表格字段；
+- 与几何无关且 OCR 不清的文字。
+
+SOFT 项允许保留未知，**不得让 Gate A BLOCKED，也不得向用户强制追问**。
+
+### 7.4 dimension_closure
 
 `dimension_closure.status` 只允许：
-- `closed`：已给尺寸足够且互相一致
-- `incomplete`：缺失尺寸导致不能唯一建模
-- `conflict`：图上已给尺寸互相矛盾
+- `closed`：所有 `required_for_modeling=true` 的几何已由 explicit 或 derived 唯一确定，且无 dimension conflict；
+- `incomplete`：仍有至少 1 个 blocking unresolved；
+- `conflict`：图上会影响最终实体的已给尺寸/拓扑互相矛盾。
 
-禁止为了闭合而补尺寸。
+禁止为了闭合而补尺寸。Gate A 只关心 blocking unresolved，不要求 warnings 为空。
 
 ## 8. DETAIL / SECTION 与跨视图一致性
 
@@ -113,10 +153,31 @@ DETAIL / SECTION 是局部几何高优先级证据。出现矛盾必须进入 `u
   "features": [],
   "patterns": [],
   "symmetry": [],
-  "unresolved": [],
+  "derived": [
+    {
+      "name": "",
+      "value": null,
+      "derivation": "",
+      "source_dimensions": []
+    }
+  ],
+  "unresolved": [
+    {
+      "item": "",
+      "reason": "",
+      "required_for_modeling": true
+    }
+  ],
+  "warnings": [],
+  "dimension_conflicts": [],
   "dimension_closure": {"status": "closed"}
 }
 ```
+
+约定：
+- `blocking_unresolved` = `unresolved` 中 `required_for_modeling=true` 的数量；
+- `warnings` 与 `required_for_modeling=false` 的 soft unresolved 不计入 blocking；
+- 规格表字段不要求“逐字段解释完成”才能建模；只要最终三维实体所需的尺寸/位置/数量/方向/轮廓已经 explicit 或 derived 唯一确定即可。
 
 完整示例：`examples/example-output.json`。
 快速视图/标注识别规则：`references/nx-drawing-rules.md`。
