@@ -220,6 +220,7 @@ DETAIL / SECTION 是局部几何高优先级证据。出现矛盾必须进入 `u
 
 关键规则：
 - direct source 只写一个 `target`；语义与 target 不兼容时 validator 直接失败；
+- 每个 required feature 的顶层 `type` 必须用 `feature_kind` 绑定；member 的 `kind` 同样使用 `feature_kind`，禁止把 feature 类型当 metadata 绕过证据门禁；
 - direct 只用于图上尺寸线/引线/符号**直接绑定**的目标；由边距、中心距、相切、对称等关系计算出的值必须用 relation/derived，禁止伪装成 `center_position` / `position_dimension` 直接值；
 - `center_distance / center_spacing` 写 `between:[targetA,targetB]`，只能用于这两个 endpoint 的推导；
 - 从 overall 外形边到中心的尺寸写 `edge_offset` + `axis` + `from:min|max` + `targets`；机器按 centered bbox 反算，禁止把边距值直接当全局坐标；
@@ -227,6 +228,7 @@ DETAIL / SECTION 是局部几何高优先级证据。出现矛盾必须进入 `u
 - derived 用 `expr`；跨 feature 且没有关系证据时 validator 失败；
 - `N×` 数量、overall bbox、feature center、profile range、对称关系均由 validator 自己计算，不采信 Agent 自写 pass 状态。
 - hole-like feature 必须给出 `axis` 和与该轴垂直的两个中心坐标（X轴→Y/Z，Y轴→X/Z，Z轴→X/Y）；缺任一项由 validator 直接 BLOCK。
+- slot/slit 必须给出正宽度以及不同的 `width_axis/through_axis`；矩形阵列必须同时给出正整数 `count_x/count_y`，不得只有 `pattern_type=rectangular` 而缺少二维实例数。
 - `blocking_unresolved` = `unresolved` 中 `required_for_modeling=true` 的数量；仍由 Gate A fail-closed。
 
 JSON 落盘后立即执行：

@@ -91,6 +91,12 @@
       "target": "feature:F_BASE.dimensions.length"
     },
     {
+      "id": "S_BASE_KIND",
+      "semantic": "feature_kind",
+      "value": "base_plate",
+      "target": "feature:F_BASE.type"
+    },
+    {
       "id": "S_BASE_W",
       "semantic": "feature_dimension",
       "value": 60,
@@ -113,6 +119,12 @@
       "semantic": "diameter",
       "value": 40,
       "target": "feature:F_BOSS.dimensions.diameter"
+    },
+    {
+      "id": "S_BOSS_KIND",
+      "semantic": "feature_kind",
+      "value": "boss",
+      "target": "feature:F_BOSS.type"
     },
     {
       "id": "S_BOSS_H",
@@ -140,6 +152,12 @@
       "semantic": "axis",
       "value": "Z",
       "target": "feature:F_HOLE.axis"
+    },
+    {
+      "id": "S_HOLE_KIND",
+      "semantic": "feature_kind",
+      "value": "through_hole",
+      "target": "feature:F_HOLE.type"
     },
     {
       "id": "S_HOLE_D",
