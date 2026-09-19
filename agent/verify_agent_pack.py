@@ -588,10 +588,9 @@ def main() -> None:
     for token in (
         "先做 **feature association**",
         "禁止先给每个候选 member 分别赋全局 Z/Y/X",
-        "固定坐标归一化与反算校验",
-        'coordinate_sanity.status="pass"',
-        "(x1+x2)/2 = 0",
-        "x1=-P/2, x2=+P/2",
+        "固定坐标归一化",
+        "validate-drawing",
+        "Reader 不重复生成一份人工",
     ):
         if token not in drawing_reader:
             fail(f"drawing association/coordinate sanity regression: missing {token}")
@@ -619,10 +618,9 @@ def main() -> None:
             fail(f"quick drawing coaxial/chamfer regression: missing {token}")
     for token in (
         "先关联 feature，再求 group centerline，最后转全局坐标",
-        "最终全局 bbox 必须是",
-        "中心距反算",
-        "对称反算",
-        "`±P/2`",
+        "固定输出坐标系",
+        "不得把边缘基准尺寸原样当全局坐标",
+        "validate-drawing",
     ):
         if token not in drawing_rules:
             fail(f"quick drawing coordinate sanity regression: missing {token}")
