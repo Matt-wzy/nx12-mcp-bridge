@@ -1000,6 +1000,7 @@ def _thread_frozen_plan(
     center=None,
     depth=12,
     start_offset=-20,
+    reverse=False,
     omit_start_offset=False,
 ):
     center = center or {"x": 0, "y": 58}
@@ -1007,7 +1008,7 @@ def _thread_frozen_plan(
         "sketch_id": "sketch_thread",
         "distance": depth,
         "start_offset": start_offset,
-        "reverse": False,
+        "reverse": reverse,
         "operation": "subtract",
         "target_body_id": "body_main",
     }
@@ -1095,6 +1096,12 @@ def _thread_gate_errors(drawing, **plan_overrides):
     return recipe_errors + R.thread_surrogate_plan_errors(plan, recipes, geometries)
 
 
+def _freeze_test_task(drawing, drawing_path):
+    task_path, state = R.create_mode_b_task(drawing, drawing_path)
+    R.freeze_mode_b_gate_a(state, task_path, drawing)
+    return task_path
+
+
 def test_thread_gate_b_accepts_equivalent_axis_x_geometry():
     assert _thread_gate_errors(_thread_drawing()) == []
 
@@ -1176,16 +1183,20 @@ def test_gate_b_blocks_planner_generated_m6_tap_drill(tmp_path=None):
     drawing_path = os.path.join(directory, "drawing.json")
     frozen_path = os.path.join(directory, "frozen.json")
     executable_path = os.path.join(directory, "executable.json")
+    drawing = _thread_drawing()
     with open(drawing_path, "w", encoding="utf-8") as handle:
-        json.dump(_thread_drawing(), handle)
-    recipes, _ = R.resolve_thread_surrogates(_thread_drawing())
-    geometries, _ = R.resolve_thread_drawing_geometries(_thread_drawing())
+        json.dump(drawing, handle)
+    recipes, _ = R.resolve_thread_surrogates(drawing)
+    geometries, _ = R.resolve_thread_drawing_geometries(drawing)
     frozen = _thread_frozen_plan(recipes, geometries, include_provenance=False)
     with open(frozen_path, "w", encoding="utf-8") as handle:
         json.dump(frozen, handle)
     code, result = _capture_json_command(
         R._cmd_build,
-        SimpleNamespace(plan=frozen_path, out=executable_path, drawing=drawing_path),
+        SimpleNamespace(
+            plan=frozen_path, out=executable_path, drawing=drawing_path,
+            task_root=_freeze_test_task(drawing, drawing_path),
+        ),
     )
     assert code == 1
     assert not os.path.exists(executable_path)
@@ -1212,7 +1223,10 @@ def test_gate_b_builds_m6_parameterized_surrogate_with_machine_provenance(tmp_pa
         json.dump(_thread_frozen_plan(recipes, geometries), handle)
     code, result = _capture_json_command(
         R._cmd_build,
-        SimpleNamespace(plan=frozen_path, out=executable_path, drawing=drawing_path),
+        SimpleNamespace(
+            plan=frozen_path, out=executable_path, drawing=drawing_path,
+            task_root=_freeze_test_task(drawing, drawing_path),
+        ),
     )
     assert code == 0, result
     with open(executable_path, encoding="utf-8") as handle:
@@ -1286,13 +1300,22 @@ def test_gate_b_normal_drawing_path_still_builds_with_lineage(tmp_path=None):
     from types import SimpleNamespace
 
     directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
-    drawing_path = os.path.abspath(
+    source_drawing = os.path.abspath(
         os.path.join(PROJECT, "..", "..", "skills", "nx-agent", "examples", "example-output.json")
     )
+    drawing_path = os.path.join(directory, "drawing.json")
+    with open(source_drawing, encoding="utf-8") as handle:
+        drawing = json.load(handle)
+    with open(drawing_path, "w", encoding="utf-8") as handle:
+        json.dump(drawing, handle)
+    task_root = _freeze_test_task(drawing, drawing_path)
     executable_path = os.path.join(directory, "executable.json")
     code, result = _capture_json_command(
         R._cmd_build,
-        SimpleNamespace(plan=FROZEN_PLAN, out=executable_path, drawing=drawing_path),
+        SimpleNamespace(
+            plan=FROZEN_PLAN, out=executable_path, drawing=drawing_path,
+            task_root=task_root,
+        ),
     )
     assert code == 0, result
     with open(executable_path, encoding="utf-8") as handle:
@@ -1346,7 +1369,331 @@ def test_repair_rejects_geometry_bearing_range_change():
     errors = R.repair_request_errors(
         1, "benchmark", True, r"C:\ws\part.prt", previous, guard2
     )
-    assert any("geometry-bearing plan fields" in error for error in errors)
+    assert any("canonical executed geometry" in error for error in errors)
+
+
+def test_mode_b_schema_retry_rejects_slot_null_to_number(tmp_path=None):
+    import tempfile
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing_path = os.path.join(directory, "slot.json")
+    drawing = {
+        "features": [{"id": "S", "type": "slot", "bottom": None}],
+        "unresolved": [{
+            "target": "feature:S.bottom", "required_for_modeling": True,
+        }],
+    }
+    task_path, state = R.create_mode_b_task(drawing, drawing_path)
+    changed = json.loads(json.dumps(drawing))
+    changed["features"][0]["bottom"] = 40
+    assert any("schema repair must be semantics-preserving" in error
+               for error in R.mode_b_task_drawing_errors(state, changed))
+    assert R.load_mode_b_task(task_path)["initial_geometry_semantics"] == (
+        R.drawing_semantic_projection(drawing)
+    )
+
+
+def test_mode_b_schema_retry_rejects_added_thread_interval(tmp_path=None):
+    import tempfile
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing_path = os.path.join(directory, "thread.json")
+    drawing = _thread_drawing()
+    del drawing["features"][0]["axis_range"]
+    drawing["unresolved"] = [{
+        "target": "feature:T1.axis_range", "required_for_modeling": True,
+    }]
+    _, state = R.create_mode_b_task(drawing, drawing_path)
+    changed = json.loads(json.dumps(drawing))
+    changed["features"][0]["axis_range"] = [54, 66]
+    changed["unresolved"] = []
+    assert R.mode_b_task_drawing_errors(state, changed)
+
+
+def test_mode_b_schema_retry_allows_equivalent_shape_only_change(tmp_path=None):
+    import tempfile
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing_path = os.path.join(directory, "shape.json")
+    drawing = {
+        "features": {"H": {
+            "type": "hole",
+            "dimension": [{"name": "diameter", "value": "6.0"}],
+            "center": [1, 2, 3],
+        }},
+        "source_ledger": {},
+    }
+    _, state = R.create_mode_b_task(drawing, drawing_path)
+    equivalent = {
+        "features": [{
+            "id": "H", "type": "hole", "dimensions": {"diameter": 6},
+            "position": {"center": [1, 2, 3]},
+        }],
+        "source_ledger": [],
+    }
+    assert R.mode_b_task_drawing_errors(state, equivalent) == []
+
+
+def test_gate_a_frozen_geometry_rejects_revalidate_and_build_mutation(tmp_path=None):
+    import tempfile
+    from types import SimpleNamespace
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing_path = os.path.join(directory, "drawing.json")
+    frozen_path = os.path.join(directory, "frozen.json")
+    executable_path = os.path.join(directory, "executable.json")
+    drawing = _thread_drawing()
+    recipes, _ = R.resolve_thread_surrogates(drawing)
+    geometries, _ = R.resolve_thread_drawing_geometries(drawing)
+    with open(drawing_path, "w", encoding="utf-8") as handle:
+        json.dump(drawing, handle)
+    with open(frozen_path, "w", encoding="utf-8") as handle:
+        json.dump(_thread_frozen_plan(recipes, geometries), handle)
+    task_root = _freeze_test_task(drawing, drawing_path)
+    drawing["features"][0]["dimensions"]["depth"] = 13
+    with open(drawing_path, "w", encoding="utf-8") as handle:
+        json.dump(drawing, handle)
+    validate_code, validate_result = _capture_json_command(
+        R._cmd_validate_drawing,
+        SimpleNamespace(drawing=drawing_path, new_task=False, task_root=task_root),
+    )
+    assert validate_code == 1
+    assert any("semantics-preserving" in error for error in validate_result["errors"])
+    build_code, build_result = _capture_json_command(
+        R._cmd_build,
+        SimpleNamespace(
+            plan=frozen_path, out=executable_path, drawing=drawing_path,
+            task_root=task_root,
+        ),
+    )
+    assert build_code == 1
+    assert any("immutable Gate A baseline" in error
+               for error in build_result["capability_errors"])
+
+
+def test_mode_b_task_lineage_ignores_drawing_output_and_history_paths(tmp_path=None):
+    import tempfile
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing = _thread_drawing()
+    original = os.path.join(directory, "drawing.json")
+    task_path, state = R.create_mode_b_task(drawing, original)
+    R.freeze_mode_b_gate_a(state, task_path, drawing)
+    R.record_mode_b_attempt(task_path, state, 0, "failed", {
+        "failed_step": 26, "planned_part": os.path.join(directory, "part.prt"),
+    })
+    reloaded = R.load_mode_b_task(task_path)
+    assert R.mode_b_task_attempt_errors(reloaded, 0)
+    guard = R.make_design_guard(
+        drawing, os.path.join(directory, "renamed-drawing.json"), {"operations": []},
+        task_path=task_path, task_state=reloaded,
+    )
+    for history_name in ("history-a.json", "history-b.json"):
+        history = R.RunHistory(os.path.join(directory, history_name))
+        history.record_start(
+            os.path.join(directory, "renamed-output.prt"), "benchmark", "plan.json",
+            design_guard=guard,
+        )
+        assert history.most_recent_design(guard)["mode_b_task_id"] == (
+            state["mode_b_task_id"]
+        )
+
+
+def test_run_cannot_escape_failed_task_with_fresh_history_path(tmp_path=None):
+    import asyncio
+    import contextlib
+    import io
+    import tempfile
+    from types import SimpleNamespace
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing = _thread_drawing()
+    drawing_path = os.path.join(directory, "renamed-drawing.json")
+    task_path, state = R.create_mode_b_task(drawing, drawing_path)
+    R.freeze_mode_b_gate_a(state, task_path, drawing)
+    plan = {"operations": [{
+        "step": 1, "tool": "nx_create_part",
+        "tool_args": {"path": os.path.join(directory, "renamed-output.prt")},
+        "result_bindings": {"part": "part"}, "topology_changes": False,
+    }]}
+    plan["design_guard"] = R.make_design_guard(
+        drawing, drawing_path, plan, task_path=task_path, task_state=state,
+    )
+    R.record_mode_b_attempt(task_path, state, 0, "failed", {"failed_step": 1})
+    plan_path = os.path.join(directory, "plan.json")
+    with open(plan_path, "w", encoding="utf-8") as handle:
+        json.dump(plan, handle)
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        code = asyncio.run(R._cmd_run(SimpleNamespace(
+            plan=plan_path,
+            repair_attempt=0,
+            history=os.path.join(directory, "fresh-history.json"),
+        )))
+    result = json.loads(output.getvalue())
+    assert code == 1
+    assert result["status"] == "repair_precheck_blocked"
+    assert any("attempt-0 modeling failure" in error for error in result["errors"])
+
+
+def test_new_mode_b_task_allows_fresh_attempt_zero_for_same_drawing(tmp_path=None):
+    import tempfile
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing = _thread_drawing()
+    path = os.path.join(directory, "drawing.json")
+    first_path, first = R.create_mode_b_task(drawing, path)
+    R.record_mode_b_attempt(first_path, first, 0, "failed")
+    second_path, second = R.create_mode_b_task(drawing, path)
+    assert first["mode_b_task_id"] != second["mode_b_task_id"]
+    assert first_path != second_path
+    assert R.mode_b_task_attempt_errors(second, 0) == []
+
+
+def test_axial_range_order_has_same_canonical_design_hash():
+    first = _thread_drawing()
+    second = _thread_drawing()
+    first["features"][0]["axis_range"] = [66, 54]
+    second["features"][0]["axis_range"] = [54, 66]
+    first_projection = R.drawing_semantic_projection(first)
+    second_projection = R.drawing_semantic_projection(second)
+    assert first_projection == second_projection
+    assert R._json_sha256(first_projection) == R._json_sha256(second_projection)
+    first_geometry, _ = R.resolve_thread_drawing_geometries(first)
+    second_geometry, _ = R.resolve_thread_drawing_geometries(second)
+    assert first_geometry[0]["drawing_geometry_sha256"] == (
+        second_geometry[0]["drawing_geometry_sha256"]
+    )
+
+
+def test_reverse_and_forward_thread_execution_are_canonically_equivalent(tmp_path=None):
+    import tempfile
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing = _thread_drawing()
+    drawing["features"][0]["axis_range"] = [54, 66]
+    recipes, _ = R.resolve_thread_surrogates(drawing)
+    geometries, _ = R.resolve_thread_drawing_geometries(drawing)
+    reverse_plan = _thread_frozen_plan(
+        recipes, geometries, start_offset=66, reverse=True,
+    )
+    forward_plan = _thread_frozen_plan(
+        recipes, geometries, start_offset=54, reverse=False,
+    )
+    reverse_projection, reverse_errors = R.canonical_executed_geometry_projection(
+        reverse_plan, recipes, geometries
+    )
+    forward_projection, forward_errors = R.canonical_executed_geometry_projection(
+        forward_plan, recipes, geometries
+    )
+    assert reverse_errors == []
+    assert forward_errors == []
+    assert reverse_projection == forward_projection
+    task_path, state = R.create_mode_b_task(
+        drawing, os.path.join(directory, "drawing.json")
+    )
+    R.freeze_mode_b_gate_a(state, task_path, drawing)
+    first_guard = R.make_design_guard(
+        drawing, "drawing.json", reverse_plan, recipes, geometries,
+        task_path=task_path, task_state=state,
+    )
+    repair_guard = R.make_design_guard(
+        drawing, "drawing.json", forward_plan, recipes, geometries,
+        task_path=task_path, task_state=state,
+    )
+    previous = {
+        "status": "failed", "failed_step": 9, "repair_attempt": 0,
+        "planned_part": "part.prt", "design_guard": first_guard,
+    }
+    assert R.repair_request_errors(
+        1, "benchmark", True, "part.prt", previous, repair_guard
+    ) == []
+
+
+def test_repair_rejects_canonical_interval_change():
+    drawing = _thread_drawing()
+    drawing["features"][0]["axis_range"] = [54, 66]
+    recipes, _ = R.resolve_thread_surrogates(drawing)
+    geometries, _ = R.resolve_thread_drawing_geometries(drawing)
+    baseline = _thread_frozen_plan(recipes, geometries, start_offset=54)
+    changed = _thread_frozen_plan(recipes, geometries, start_offset=54, depth=16)
+    guard1 = R.make_design_guard(drawing, "drawing.json", baseline, recipes, geometries)
+    guard2 = R.make_design_guard(drawing, "drawing.json", changed, recipes, geometries)
+    previous = {
+        "status": "failed", "failed_step": 9, "repair_attempt": 0,
+        "planned_part": "part.prt", "design_guard": guard1,
+    }
+    errors = R.repair_request_errors(
+        1, "benchmark", True, "part.prt", previous, guard2
+    )
+    assert any("canonical executed geometry" in error for error in errors)
+
+
+def test_thread_hole_and_sketch_subtract_are_canonically_equivalent(tmp_path=None):
+    import tempfile
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing = _thread_drawing()
+    feature = drawing["features"][0]
+    feature["axis"] = "Z"
+    feature["position"]["center"] = [0, 58, 54]
+    feature["axis_range"] = [54, 66]
+    recipes, _ = R.resolve_thread_surrogates(drawing)
+    geometries, _ = R.resolve_thread_drawing_geometries(drawing)
+    sketch_plan = _thread_frozen_plan(
+        recipes, geometries, plane="XY", center={"x": 0, "y": 58},
+        start_offset=54,
+    )
+    hole_plan = {
+        "mode": "FAST",
+        "thread_surrogates": recipes,
+        "operations": json.loads(json.dumps(sketch_plan["operations"][:5])),
+    }
+    use = json.loads(json.dumps(sketch_plan["operations"][-1]["thread_surrogate_use"]))
+    hole_plan["operations"].append({
+        "step": 6,
+        "tool": "nx_hole",
+        "tool_args": {
+            "body_id": "body_main", "center": {"x": 0, "y": 58},
+            "diameter": recipes[0]["surrogate_diameter"], "depth": 12,
+            "start_offset": 54,
+        },
+        "thread_surrogate_use": use,
+        "topology_changes": True,
+    })
+    sketch_projection, sketch_errors = R.canonical_executed_geometry_projection(
+        sketch_plan, recipes, geometries
+    )
+    hole_projection, hole_errors = R.canonical_executed_geometry_projection(
+        hole_plan, recipes, geometries
+    )
+    assert sketch_errors == [], sketch_errors
+    assert hole_errors == [], hole_errors
+    assert sketch_projection == hole_projection, (sketch_projection, hole_projection)
+    task_path, state = R.create_mode_b_task(
+        drawing, os.path.join(directory, "drawing.json")
+    )
+    R.freeze_mode_b_gate_a(state, task_path, drawing)
+    sketch_guard = R.make_design_guard(
+        drawing, "drawing.json", sketch_plan, recipes, geometries,
+        task_path=task_path, task_state=state,
+    )
+    hole_guard = R.make_design_guard(
+        drawing, "drawing.json", hole_plan, recipes, geometries,
+        task_path=task_path, task_state=state,
+    )
+    previous = {
+        "status": "failed", "failed_step": 9, "repair_attempt": 0,
+        "planned_part": "part.prt", "design_guard": sketch_guard,
+    }
+    assert R.repair_request_errors(
+        1, "benchmark", True, "part.prt", previous, hole_guard
+    ) == []
+
+
+def test_plan_geometry_tamper_hash_still_detects_direct_edit():
+    plan = {"operations": [{
+        "step": 1, "tool": "nx_extrude",
+        "tool_args": {"distance": 12, "start_offset": 0},
+        "topology_changes": True,
+    }]}
+    guard = R.make_design_guard({"features": []}, "drawing.json", plan)
+    edited = json.loads(json.dumps(plan))
+    edited["operations"][0]["tool_args"]["distance"] = 13
+    assert R._json_sha256(R.plan_geometry_projection(edited)) != (
+        guard["plan_geometry_sha256"]
+    )
 
 
 def _capture_json_command(command, args):
@@ -1364,15 +1711,26 @@ def test_validate_build_check_return_independent_timing(tmp_path=None):
     from types import SimpleNamespace
 
     directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
-    drawing = os.path.abspath(
+    source_drawing = os.path.abspath(
         os.path.join(PROJECT, "..", "..", "skills", "nx-agent", "examples", "example-output.json")
     )
+    drawing = os.path.join(directory, "timing-drawing.json")
+    with open(source_drawing, encoding="utf-8") as source:
+        with open(drawing, "w", encoding="utf-8") as target:
+            target.write(source.read())
     validate_results = []
-    for _ in range(2):
+    task_root = None
+    for index in range(2):
         exit_code, result = _capture_json_command(
-            R._cmd_validate_drawing, SimpleNamespace(drawing=drawing)
+            R._cmd_validate_drawing,
+            SimpleNamespace(
+                drawing=drawing,
+                new_task=index == 0,
+                task_root=task_root,
+            ),
         )
         assert exit_code == 0
+        task_root = result["mode_b_task"]["task_root"]
         validate_results.append(result["timing"])
     for timing in validate_results:
         assert timing["stage"] == "A4_VALIDATE"
@@ -1397,16 +1755,23 @@ def test_validate_build_check_return_independent_timing(tmp_path=None):
 
 
 def test_timing_failure_does_not_change_validate_result():
+    import tempfile
     from types import SimpleNamespace
 
-    drawing = os.path.abspath(
+    source_drawing = os.path.abspath(
         os.path.join(PROJECT, "..", "..", "skills", "nx-agent", "examples", "example-output.json")
     )
+    directory = tempfile.mkdtemp()
+    drawing = os.path.join(directory, "timing-failure-drawing.json")
+    with open(source_drawing, encoding="utf-8") as source:
+        with open(drawing, "w", encoding="utf-8") as target:
+            target.write(source.read())
     original = R.time.perf_counter_ns
     try:
         R.time.perf_counter_ns = lambda: (_ for _ in ()).throw(RuntimeError("clock failed"))
         exit_code, result = _capture_json_command(
-            R._cmd_validate_drawing, SimpleNamespace(drawing=drawing)
+            R._cmd_validate_drawing,
+            SimpleNamespace(drawing=drawing, new_task=True, task_root=None),
         )
     finally:
         R.time.perf_counter_ns = original
