@@ -55,6 +55,8 @@
 - `nx_hole / nx_counterbore_hole / nx_countersink_hole` 当前仍是 **Z 轴孔工具**；
   X/Y 轴方向的侧板/竖板孔必须在 `XZ` / `YZ` 主平面画圆，再用
   `nx_extrude(operation="subtract")` 沿该平面法向切除，禁止拿 Z 轴孔工具硬套。
+- 当前 32 个 certified tools **没有真实螺纹建模工具**。`M6` / `M8` 等螺纹规格不能自动等同于任意普通孔直径，也不能用同轴的 clearance/through hole 代替。
+- 只有上游输入明确给出允许建模的 `surrogate_geometry`（实际圆柱直径、深度、轴向范围）时，才可用现有 sketch + subtract / hole 工具执行该 surrogate；否则属于能力边界，Planner 必须 fail-closed。
 
 ### 实体创建
 | 工具 | 参数 | 说明 |
