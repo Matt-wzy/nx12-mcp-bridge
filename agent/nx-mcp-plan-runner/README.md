@@ -55,6 +55,7 @@ nx-mcp-plan-runner/
 ## 用法
 
 ```text
+python runner.py validate-drawing <drawing.json>
 python runner.py run   <executable-plan.json> [--workspace DIR] [--report out.json]
                        [--mode normal|benchmark] [--allow-overwrite] [--history FILE]
                        [--repair-attempt 0|1] [--repair-report attempt1.json]
@@ -63,6 +64,7 @@ python runner.py build <frozen-plan.json> <out.json>
 python runner.py test  #（等价：运行 tests/test_plan_resolution.py）
 ```
 
+- `validate-drawing`：纯本地 Gate A 结构/证据校验；检查 source ownership、derived target、required geometry evidence 与 count conservation，不触 NX。
 - `run`：静态校验 → Loader ping → **preflight 安全检查** → 顺序执行全部
   operation → 输出 JSON 报告（per-step 日志 + 汇总 + 分阶段计时）。
 - `check`：不触 NX 的静态检查（工具合法性、参数合法性、引用可解析、占位符
