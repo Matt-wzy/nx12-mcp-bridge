@@ -190,6 +190,26 @@ def main() -> None:
         if token not in plane_rules:
             fail(f"principal-plane planning contract missing: {token}")
 
+    drawing_reader = (SKILL / "references" / "drawing-reader.md").read_text(encoding="utf-8")
+    drawing_rules = (SKILL / "references" / "nx-drawing-rules.md").read_text(encoding="utf-8")
+    for token in (
+        "正视图 / Front：位于 **XZ** 平面，视图法向轴为 **Y**",
+        "width_axis",
+        "through_axis",
+        "槽宽就是 2",
+        "普通线性位置尺寸不得因为数值合适就被改解释成 slot/cut depth",
+    ):
+        if token not in drawing_reader:
+            fail(f"drawing projection/dimension semantics regression: missing {token}")
+    for token in (
+        "Front/正视图 = XZ 平面，法向轴 Y",
+        "两边间距只确定 `width_axis`",
+        "不得把附近没有绑定到槽宽的 `1.6` 当成槽宽",
+        "普通位置尺寸",
+    ):
+        if token not in drawing_rules:
+            fail(f"quick drawing rules regression: missing {token}")
+
     text_fast = (SKILL / "references" / "text-modeling.md").read_text(encoding="utf-8")
     for token in (
         "建议参数闭合检查",
@@ -200,6 +220,14 @@ def main() -> None:
             fail(f"text-mode clarification geometry guard missing: {token}")
 
     planner_rules = (SKILL / "references" / "modeling-planner.md").read_text(encoding="utf-8")
+    for token in (
+        "禁止 Planner 二次猜轴",
+        "`axis=X` → YZ sketch → 沿 X subtract",
+        "`axis=Y` → XZ sketch → 沿 Y subtract",
+        "`through_axis=Y` → XZ sketch → 沿 Y subtract",
+    ):
+        if token not in planner_rules:
+            fail(f"Planner drawing-axis regression: missing {token}")
     for token in ("澄清建议的几何一致性", "d >= r + R", "方位描述与坐标范围必须一致"):
         if token not in planner_rules:
             fail(f"Planner clarification geometry guard missing: {token}")
