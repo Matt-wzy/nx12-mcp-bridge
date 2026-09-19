@@ -454,6 +454,37 @@ def test_frozen_check_rejects_dollar_references():
     assert any("executable reference" in e for e in errs)
 
 
+def test_frozen_check_rejects_bare_selection_consumer_name():
+    plan = {"mode": "FAST", "operations": [{
+        "step": 24,
+        "tool": "nx_edge_blend",
+        "tool_args": {
+            "body_id": "body_main",
+            "radius": 5,
+            "edge_indices": "base_plate_vertical_edges",
+        },
+        "topology_changes": True,
+    }]}
+    errs = R.check_plan(plan, executable=False)
+    assert any("frozen edge_indices string must be a <stepN" in e for e in errs)
+
+
+def test_executable_check_rejects_unresolved_selection_consumer_name():
+    plan = {"mode": "FAST", "operations": [{
+        "step": 24,
+        "tool": "nx_edge_blend",
+        "tool_args": {
+            "body_id": "$body_main",
+            "radius": 5,
+            "edge_indices": "base_plate_vertical_edges",
+        },
+        "topology_changes": True,
+        "result_bindings": {"body": "body_dummy"},
+    }]}
+    errs = R.check_plan(plan, executable=True)
+    assert any("executable edge_indices string must be a $selection reference" in e for e in errs)
+
+
 def test_build_is_idempotent_shape():
     with open(FROZEN_PLAN, encoding="utf-8") as f:
         plan = json.load(f)
