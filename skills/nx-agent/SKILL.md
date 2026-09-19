@@ -86,6 +86,8 @@ Gate A 判断的是**最低充分建模闭合**，不是“整张图所有文字
 Gate A 失败时只向用户询问**真正 blocking 的最少问题**，不得把 non-blocking warning 一并当成澄清问题。
 
 ### 门禁 B
+- capability_violations = 0；任何 required feature 超出 32 个 certified tools 且没有输入明确提供的 geometry-preserving surrogate 时，B 阶段直接失败
+- feature source/count preservation 通过：Reader 已闭合的 HARD 字段、derived.target、pattern 总 count 不得被 Planner 改写
 - runner build/check 通过
 - unresolved reference = 0
 - illegal tool_args = 0
@@ -131,3 +133,4 @@ frozen plan 首次落盘前必须完成静态自检。B 阶段 build/check 失�
 只使用仓库当前 32 个 certified tools。禁止为了完成任务自行新增工具或修改 NX_MCP / Loader。
 
 当前不建议或不支持：Sweep、Loft、真实螺纹、渐开线/斜齿轮、任意倾斜工作平面、复杂自由曲面。
+能力边界不能靠改变几何语义绕过：例如真实螺纹不支持时，禁止把 threaded hole 删除或改成普通通孔/间隙孔。只有输入明确给出允许使用的几何替代体及其实际尺寸时才可建模该替代体；否则在 B 阶段 fail-closed。
