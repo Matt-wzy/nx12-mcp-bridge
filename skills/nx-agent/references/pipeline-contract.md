@@ -24,18 +24,21 @@
 所有 plan / report / PRT / STEP 都必须落在 `workspace_root` 内，禁止把聊天目录或临时对话目录当作工作区。
 
 ## 3. 阶段 A：工程图读取
-读取 `drawing-reader.md` 与 `nx-drawing-rules.md`。
-输出结构化 JSON 并落盘。
+读取 `drawing-reader.md` 与 `nx-drawing-rules.md`，输出 drawing JSON 并落盘。正常路径不预读 examples。
+随后用 runtime-config 的 `python_exe` 执行：
+
+```text
+runner.py validate-drawing <drawing.json>
+```
 
 门禁：
+- validate-drawing exit code=0 且 `source_ownership.status="pass"`
 - blocking_unresolved=0（只统计 `required_for_modeling=true`）
 - dimension_conflicts=0
-- coordinate_sanity.status="pass"（overall bbox / feature center / 明确中心距、节距、对称关系反算一致）
+- coordinate_sanity.status="pass"
 - dimension_closure.status="closed"
-- overall_dimensions / coordinate_system / features 均存在
 
-`derived` 视为已解析几何；`warnings` 与 `required_for_modeling=false` 的 soft unresolved 不阻塞 A。
-A 失败立即停止，**不允许自动修复**。
+validator 失败立即停止，**不允许 Agent 自己覆盖错误，也不允许自动修复**。warnings 与 soft unresolved 不阻塞 A。
 
 ## 4. 阶段 B：建模规划
 输入可以是工程图模式 A 阶段 JSON，或文字模式中已经确认完整的结构化建模意图。
