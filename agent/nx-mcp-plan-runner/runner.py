@@ -33,6 +33,7 @@ import os
 import re
 import sys
 import time
+import uuid
 from typing import Any
 
 # --------------------------------------------------------------------------
@@ -757,19 +758,28 @@ class RunHistory:
         """
         if not isinstance(design_guard, dict):
             return None
+        task_id = str(design_guard.get("mode_b_task_id") or "")
+        gate_hash = str(design_guard.get("gate_a_geometry_sha256") or "")
         source = _norm_path(str(design_guard.get("source_drawing") or ""))
         semantic_hash = str(design_guard.get("drawing_semantics_sha256") or "")
         matches = []
         for entry in self.entries.values():
             if not isinstance(entry, dict):
                 continue
-            same_source = source and _norm_path(
-                str(entry.get("design_source_drawing") or "")
-            ) == source
-            same_semantics = semantic_hash and str(
-                entry.get("drawing_semantics_sha256") or ""
-            ) == semantic_hash
-            if same_source or same_semantics:
+            if task_id and gate_hash:
+                same_design = (
+                    str(entry.get("mode_b_task_id") or "") == task_id
+                    and str(entry.get("gate_a_geometry_sha256") or "") == gate_hash
+                )
+            else:
+                same_source = source and _norm_path(
+                    str(entry.get("design_source_drawing") or "")
+                ) == source
+                same_semantics = semantic_hash and str(
+                    entry.get("drawing_semantics_sha256") or ""
+                ) == semantic_hash
+                same_design = bool(same_source or same_semantics)
+            if same_design:
                 matches.append(entry)
         if not matches:
             return None
@@ -794,6 +804,13 @@ class RunHistory:
             )
             entry["plan_geometry_sha256"] = design_guard.get(
                 "plan_geometry_sha256"
+            )
+            entry["mode_b_task_id"] = design_guard.get("mode_b_task_id")
+            entry["gate_a_geometry_sha256"] = design_guard.get(
+                "gate_a_geometry_sha256"
+            )
+            entry["canonical_executed_geometry_sha256"] = design_guard.get(
+                "canonical_executed_geometry_sha256"
             )
         self.entries[self._key(p)] = entry
         self.save()
@@ -914,14 +931,18 @@ def repair_request_errors(
         if not isinstance(previous_guard, dict):
             errors.append("previous report has no design lineage")
         else:
-            if previous_guard.get("drawing_semantics_sha256") != (
-                current_design_guard.get("drawing_semantics_sha256")
+            if previous_guard.get("mode_b_task_id") != current_design_guard.get(
+                "mode_b_task_id"
             ):
-                errors.append("repair changes drawing geometry semantics")
-            if previous_guard.get("plan_geometry_sha256") != (
-                current_design_guard.get("plan_geometry_sha256")
+                errors.append("repair changes Mode B task root")
+            if previous_guard.get("gate_a_geometry_sha256") != (
+                current_design_guard.get("gate_a_geometry_sha256")
             ):
-                errors.append("repair changes geometry-bearing plan fields")
+                errors.append("repair changes immutable Gate A geometry")
+            if previous_guard.get("canonical_executed_geometry_sha256") != (
+                current_design_guard.get("canonical_executed_geometry_sha256")
+            ):
+                errors.append("repair changes canonical executed geometry")
 
     return errors
 
@@ -1598,6 +1619,10 @@ def _canonical_number(value: Any) -> Any:
 
 
 def _canonical_semantic_value(value: Any, key: str = "") -> Any:
+    if key in {"axis_range", "axial_range", "through_range"}:
+        interval = _canonical_axial_interval(value)
+        if interval is not None:
+            return interval
     if isinstance(value, dict):
         return {
             str(k): _canonical_semantic_value(v, str(k))
@@ -1608,6 +1633,18 @@ def _canonical_semantic_value(value: Any, key: str = "") -> Any:
     if key in _NUMERIC_GEOMETRY_KEYS:
         return _canonical_number(value)
     return value
+
+
+def _canonical_axial_interval(value: Any) -> dict | None:
+    """Return direction-free occupied extent; execution direction lives elsewhere."""
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        return None
+    first = _num(value[0])
+    second = _num(value[1])
+    if first is None or second is None:
+        return None
+    low, high = sorted((float(first), float(second)))
+    return {"min": low, "max": high}
 
 
 def _list_of_named_values(value: Any) -> dict | None:
@@ -1648,6 +1685,23 @@ def _canonical_feature(feature: dict) -> dict:
             _canonical_feature(member) if isinstance(member, dict) else member
             for member in item["members"]
         ]
+    range_key = next(
+        (key for key in ("axis_range", "axial_range", "through_range", "range")
+         if key in item),
+        None,
+    )
+    interval = _canonical_axial_interval(item.get(range_key)) if range_key else None
+    if interval is None:
+        start = item.get("axial_start", item.get("start_offset"))
+        end = item.get("axial_end", item.get("end_offset"))
+        interval = _canonical_axial_interval([start, end])
+        if interval is not None:
+            for key in ("axial_start", "start_offset", "axial_end", "end_offset"):
+                item.pop(key, None)
+    if interval is not None:
+        if range_key:
+            item.pop(range_key, None)
+        item["axial_interval"] = interval
     return _canonical_semantic_value(item)
 
 
@@ -1683,7 +1737,24 @@ def drawing_semantic_projection(data: dict) -> dict:
         item = copy.deepcopy(source)
         for key in ("source_views", "confidence", "description", "evidence"):
             item.pop(key, None)
+        target = str(item.get("target") or "").lower()
+        if target.endswith((".axis_range", ".axial_range", ".through_range", ".range")):
+            interval = _canonical_axial_interval(item.get("value"))
+            if interval is not None:
+                item["value"] = interval
         source_projection.append(_canonical_semantic_value(item))
+    derived_projection = []
+    for derived in _canonical_object_list(data.get("derived"), id_from_key=True):
+        if not isinstance(derived, dict):
+            derived_projection.append(derived)
+            continue
+        item = copy.deepcopy(derived)
+        target = str(item.get("target") or "").lower()
+        if target.endswith((".axis_range", ".axial_range", ".through_range", ".range")):
+            interval = _canonical_axial_interval(item.get("value"))
+            if interval is not None:
+                item["value"] = interval
+        derived_projection.append(_canonical_semantic_value(item))
     projection = {
         "overall_dimensions": _canonical_semantic_value(
             data.get("overall_dimensions") or {}
@@ -1696,9 +1767,7 @@ def drawing_semantic_projection(data: dict) -> dict:
             _canonical_object_list(data.get("patterns"), id_from_key=True)
         ),
         "source_ledger": source_projection,
-        "derived": _canonical_semantic_value(
-            _canonical_object_list(data.get("derived"), id_from_key=True)
-        ),
+        "derived": _canonical_semantic_value(derived_projection),
         "relations": _canonical_semantic_value(
             _canonical_object_list(data.get("relations"), id_from_key=True)
         ),
@@ -1786,6 +1855,134 @@ def _json_sha256(value: Any) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
+_MODE_B_TASK_SCHEMA_VERSION = 1
+
+
+def _write_json_atomic(path: str, value: dict) -> None:
+    directory = os.path.dirname(os.path.abspath(path))
+    os.makedirs(directory, exist_ok=True)
+    temp_path = path + ".tmp"
+    with open(temp_path, "w", encoding="utf-8") as handle:
+        json.dump(value, handle, ensure_ascii=False, indent=2)
+    os.replace(temp_path, path)
+
+
+def create_mode_b_task(drawing: dict, drawing_path: str) -> tuple[str, dict]:
+    """Create the Runner-owned identity for one explicit Mode B interpretation."""
+    task_id = str(uuid.uuid4())
+    task_dir = os.path.join(os.path.dirname(os.path.abspath(drawing_path)), ".mode-b-tasks")
+    task_path = os.path.join(task_dir, f"{task_id}.json")
+    initial_projection = drawing_semantic_projection(drawing)
+    state = {
+        "schema_version": _MODE_B_TASK_SCHEMA_VERSION,
+        "mode_b_task_id": task_id,
+        "created_at_utc": _now_iso(),
+        "original_drawing_path": os.path.abspath(drawing_path),
+        "initial_geometry_semantics": initial_projection,
+        "initial_geometry_sha256": _json_sha256(initial_projection),
+        "gate_a": None,
+        "attempts": [],
+    }
+    _write_json_atomic(task_path, state)
+    return task_path, state
+
+
+def load_mode_b_task(task_path: str) -> dict:
+    with open(task_path, encoding="utf-8-sig") as handle:
+        state = json.load(handle)
+    if not isinstance(state, dict):
+        raise PlanError("Mode B task root must be a JSON object")
+    if state.get("schema_version") != _MODE_B_TASK_SCHEMA_VERSION:
+        raise PlanError("unsupported Mode B task root schema")
+    if not state.get("mode_b_task_id"):
+        raise PlanError("Mode B task root has no mode_b_task_id")
+    return state
+
+
+def mode_b_task_drawing_errors(
+    state: dict, drawing: dict, require_gate_a: bool = False,
+) -> list[str]:
+    """Reject semantic mutation during A5 retries and after Gate A freeze."""
+    current = drawing_semantic_projection(drawing)
+    errors: list[str] = []
+    if current != state.get("initial_geometry_semantics"):
+        errors.append(
+            "Mode B task drawing geometry/evidence changed after initial interpretation; "
+            "schema repair must be semantics-preserving"
+        )
+    gate_a = state.get("gate_a")
+    if require_gate_a and not isinstance(gate_a, dict):
+        errors.append("Mode B task has no successful Gate A baseline")
+    if isinstance(gate_a, dict):
+        if current != gate_a.get("canonical_drawing_semantics"):
+            errors.append("drawing geometry differs from immutable Gate A baseline")
+        expected_hash = gate_a.get("gate_a_geometry_sha256")
+        if expected_hash != _json_sha256(current):
+            errors.append("drawing geometry hash differs from immutable Gate A baseline")
+    return errors
+
+
+def freeze_mode_b_gate_a(state: dict, task_path: str, drawing: dict) -> dict:
+    projection = drawing_semantic_projection(drawing)
+    geometry_hash = _json_sha256(projection)
+    gate_a = state.get("gate_a")
+    if isinstance(gate_a, dict):
+        if gate_a.get("gate_a_geometry_sha256") != geometry_hash:
+            raise PlanError("cannot replace immutable Gate A geometry baseline")
+        return gate_a
+    gate_a = {
+        "passed_at_utc": _now_iso(),
+        "canonical_drawing_semantics": projection,
+        "gate_a_geometry_sha256": geometry_hash,
+    }
+    state["gate_a"] = gate_a
+    _write_json_atomic(task_path, state)
+    return gate_a
+
+
+def mode_b_task_summary(task_path: str, state: dict) -> dict:
+    gate_a = state.get("gate_a")
+    return {
+        "mode_b_task_id": state.get("mode_b_task_id"),
+        "task_root": os.path.abspath(task_path),
+        "gate_a_geometry_sha256": (
+            gate_a.get("gate_a_geometry_sha256") if isinstance(gate_a, dict) else None
+        ),
+        "gate_a_frozen": isinstance(gate_a, dict),
+    }
+
+
+def record_mode_b_attempt(
+    task_path: str, state: dict, attempt: int, status: str, report: dict | None = None,
+) -> None:
+    attempts = state.setdefault("attempts", [])
+    attempts.append({
+        "repair_attempt": int(attempt),
+        "status": status,
+        "recorded_at_utc": _now_iso(),
+        "failed_step": report.get("failed_step") if isinstance(report, dict) else None,
+        "planned_part": report.get("planned_part") if isinstance(report, dict) else None,
+    })
+    _write_json_atomic(task_path, state)
+
+
+def mode_b_task_attempt_errors(state: dict, repair_attempt: int) -> list[str]:
+    attempts = [item for item in state.get("attempts") or [] if isinstance(item, dict)]
+    failed_normal = any(
+        int(item.get("repair_attempt", 0) or 0) == 0 and item.get("status") == "failed"
+        for item in attempts
+    )
+    repair_seen = any(int(item.get("repair_attempt", 0) or 0) == 1 for item in attempts)
+    if repair_attempt == 0 and failed_normal:
+        return [
+            "this Mode B task already has an attempt-0 modeling failure; "
+            "the next run must be repair_attempt=1"
+        ]
+    if repair_attempt == 1 and repair_seen:
+        return ["controlled self-healing already consumed for this Mode B task"]
+    return []
+
+
 def plan_geometry_projection(plan: dict) -> list[dict]:
     """Project only geometry-bearing plan data; output names/bindings are ignored."""
     projection = []
@@ -1812,12 +2009,17 @@ def make_design_guard(
     plan: dict,
     thread_surrogates: list[dict] | None = None,
     thread_geometries: list[dict] | None = None,
+    task_path: str | None = None,
+    task_state: dict | None = None,
 ) -> dict:
     drawing_projection = drawing_semantic_projection(drawing)
     plan_projection = plan_geometry_projection(plan)
     surrogates = copy.deepcopy(thread_surrogates or [])
     geometries = copy.deepcopy(thread_geometries or [])
-    return {
+    executed_projection, executed_errors = canonical_executed_geometry_projection(
+        plan, surrogates, geometries
+    )
+    guard = {
         "source_drawing": os.path.abspath(drawing_path),
         "drawing_semantics": drawing_projection,
         "drawing_semantics_sha256": _json_sha256(drawing_projection),
@@ -1827,7 +2029,19 @@ def make_design_guard(
         "thread_surrogates_sha256": _json_sha256(surrogates),
         "thread_geometries": geometries,
         "thread_geometries_sha256": _json_sha256(geometries),
+        "canonical_executed_geometry": executed_projection,
+        "canonical_executed_geometry_sha256": _json_sha256(executed_projection),
     }
+    if executed_errors:
+        guard["canonical_executed_geometry_errors"] = executed_errors
+    if isinstance(task_state, dict) and task_path:
+        gate_a = task_state.get("gate_a") or {}
+        guard.update({
+            "mode_b_task_id": task_state.get("mode_b_task_id"),
+            "task_root": os.path.abspath(task_path),
+            "gate_a_geometry_sha256": gate_a.get("gate_a_geometry_sha256"),
+        })
+    return guard
 
 
 def _thread_features(value: Any):
@@ -2014,7 +2228,8 @@ def resolve_thread_drawing_geometries(drawing: dict) -> tuple[list[dict], list[s
                 f"thread_geometry_violation: feature {fid!r} has no explicit axial range"
             )
             continue
-        axial_range = [float(_num(axial_range[0])), float(_num(axial_range[1]))]
+        directed_range = [float(_num(axial_range[0])), float(_num(axial_range[1]))]
+        axial_range = sorted(directed_range)
         if not _drawing_equal(abs(axial_range[1] - axial_range[0]), depth):
             errors.append(
                 f"thread_geometry_violation: feature {fid!r} depth and axial range disagree"
@@ -2260,15 +2475,17 @@ def _thread_operation_geometry(
         depth = _num(args.get("depth"))
         start = _num(args.get("start_offset"))
         diameter = _num(args.get("diameter"))
-        if transverse is None or depth is None or depth <= 0 or start is None:
+        if (transverse is None or depth is None or depth <= 0 or start is None
+                or diameter is None or diameter <= 0):
             return None, [f"step {step}: invalid nx_hole thread geometry"]
         if expected_diameter is None or not _drawing_equal(diameter, expected_diameter):
             errors.append(f"step {step}: thread surrogate diameter differs from resolver")
         return {
             "axis": "Z",
             "transverse_center": transverse,
+            "diameter": float(diameter),
             "depth": float(depth),
-            "axial_range": [float(start), float(start + depth)],
+            "axial_range": sorted([float(start), float(start + depth)]),
         }, errors
 
     if tool != "nx_extrude" or args.get("operation") != "subtract":
@@ -2324,7 +2541,7 @@ def _thread_operation_geometry(
     # Sketch coordinates are already the ordered transverse coordinates for
     # XY/XZ/YZ respectively; they are not global XYZ coordinates.
     transverse = _axis_transverse_center("Z", center) if axis else None
-    if axis is None or transverse is None:
+    if axis is None or transverse is None or diameter is None or diameter <= 0:
         return None, [f"step {step}: invalid thread sketch plane/center"]
     if expected_diameter is None or not _drawing_equal(diameter, expected_diameter):
         errors.append(f"step {step}: thread surrogate diameter differs from resolver")
@@ -2332,8 +2549,9 @@ def _thread_operation_geometry(
     return {
         "axis": axis,
         "transverse_center": transverse,
+        "diameter": float(diameter),
         "depth": float(distance),
-        "axial_range": [float(start), float(start + direction * distance)],
+        "axial_range": sorted([float(start), float(start + direction * distance)]),
     }, errors
 
 
@@ -2442,6 +2660,117 @@ def thread_surrogate_plan_errors(
             ):
                 errors.append(f"thread surrogate for feature {fid!r} changes axial range")
     return errors
+
+
+def canonical_executed_geometry_projection(
+    plan: dict,
+    thread_surrogates: list[dict] | None = None,
+    drawing_geometries: list[dict] | None = None,
+) -> tuple[dict, list[str]]:
+    """Normalize supported execution alternatives to their final design geometry.
+
+    Non-thread geometry keeps the existing plan projection. Thread hole versus
+    sketch/subtract implementations are replaced by the same feature-level
+    projection, so execution mechanics do not become design semantics.
+    """
+    recipes = thread_surrogates or []
+    geometries = drawing_geometries or []
+    errors = thread_surrogate_plan_errors(plan, recipes, geometries)
+    operations = plan.get("operations") or []
+    excluded_ids: set[int] = set()
+    marked_ops: list[dict] = []
+    thread_sketch_ids: set[str] = set()
+    for op in operations:
+        if not isinstance(op, dict) or not isinstance(op.get("thread_surrogate_use"), dict):
+            continue
+        marked_ops.append(op)
+        excluded_ids.add(id(op))
+        if op.get("tool") == "nx_extrude":
+            sketch_id = (op.get("tool_args") or {}).get("sketch_id")
+            if isinstance(sketch_id, str):
+                thread_sketch_ids.add(sketch_id)
+    for op in operations:
+        if not isinstance(op, dict):
+            continue
+        args = op.get("tool_args") or {}
+        if args.get("sketch_id") in thread_sketch_ids and op.get("tool") in {
+            "nx_sketch_circle", "nx_finish_sketch",
+        }:
+            excluded_ids.add(id(op))
+    for sketch_id in thread_sketch_ids:
+        circle_indexes = [
+            index for index, op in enumerate(operations)
+            if isinstance(op, dict)
+            and op.get("tool") == "nx_sketch_circle"
+            and (op.get("tool_args") or {}).get("sketch_id") == sketch_id
+        ]
+        if not circle_indexes:
+            continue
+        create_ops = [
+            op for op in operations[:circle_indexes[-1]]
+            if isinstance(op, dict) and op.get("tool") == "nx_create_sketch"
+        ]
+        if create_ops:
+            excluded_ids.add(id(create_ops[-1]))
+
+    recipe_by_feature = {
+        item.get("feature_id"): item for item in recipes if isinstance(item, dict)
+    }
+    drawing_by_feature = {
+        item.get("feature_id"): item for item in geometries if isinstance(item, dict)
+    }
+    actual_by_feature: dict[str, list[dict]] = {}
+    for op in marked_ops:
+        use = op.get("thread_surrogate_use") or {}
+        feature_id = str(use.get("feature_id") or "")
+        recipe = recipe_by_feature.get(feature_id) or {}
+        actual, actual_errors = _thread_operation_geometry(
+            plan, op, _num(recipe.get("surrogate_diameter"))
+        )
+        errors.extend(actual_errors)
+        if actual is not None:
+            actual_by_feature.setdefault(feature_id, []).append(actual)
+
+    thread_projection = []
+    for feature_id, recipe in sorted(recipe_by_feature.items(), key=lambda item: str(item[0])):
+        expected = drawing_by_feature.get(feature_id) or {}
+        actuals = actual_by_feature.get(str(feature_id), [])
+        centers = sorted(
+            (_canonical_semantic_value(item.get("transverse_center")) for item in actuals),
+            key=lambda value: json.dumps(value, sort_keys=True),
+        )
+        axes = sorted({str(item.get("axis")) for item in actuals})
+        diameters = sorted({_num(item.get("diameter")) for item in actuals})
+        depths = sorted({_num(item.get("depth")) for item in actuals})
+        intervals = sorted(
+            (_canonical_axial_interval(item.get("axial_range")) for item in actuals),
+            key=lambda value: json.dumps(value, sort_keys=True),
+        )
+        item = {
+            "feature_id": feature_id,
+            "owner_feature_id": expected.get("owner_feature_id"),
+            "thread_spec": recipe.get("thread_spec"),
+            "representation": recipe.get("representation"),
+            "surrogate_method": recipe.get("surrogate_method"),
+            "axis": axes[0] if len(axes) == 1 else axes,
+            "transverse_centers": centers,
+            "diameter": diameters[0] if len(diameters) == 1 else diameters,
+            "depth": depths[0] if len(depths) == 1 else depths,
+            "axial_intervals": intervals,
+            "count": len(actuals),
+        }
+        if "side" in expected:
+            item["side"] = copy.deepcopy(expected.get("side"))
+        thread_projection.append(_canonical_semantic_value(item))
+
+    non_thread_plan = {
+        "operations": [op for op in operations if id(op) not in excluded_ids]
+    }
+    projection = {
+        "non_thread_plan_geometry": plan_geometry_projection(non_thread_plan),
+        "thread_features": thread_projection,
+    }
+    return _canonical_semantic_value(projection), errors
 
 
 def thread_approximations_from_guard(design_guard: Any) -> list[dict]:
@@ -3712,9 +4041,28 @@ def _load_drawing(path: str) -> dict:
 def _cmd_validate_drawing(args: argparse.Namespace) -> int:
     timing_state = _begin_command_timing("A4_VALIDATE", args.drawing)
     original = _load_drawing(args.drawing)
+    task_path = getattr(args, "task_root", None)
+    new_task = bool(getattr(args, "new_task", False))
+    task_state = None
+    task_errors: list[str] = []
+    try:
+        if new_task and task_path:
+            raise PlanError("--new-task and --task-root are mutually exclusive")
+        if new_task:
+            task_path, task_state = create_mode_b_task(original, args.drawing)
+        elif task_path:
+            task_path = os.path.abspath(task_path)
+            task_state = load_mode_b_task(task_path)
+            task_errors.extend(mode_b_task_drawing_errors(task_state, original))
+        else:
+            raise PlanError(
+                "first Mode B validation requires --new-task; retries require --task-root"
+            )
+    except (OSError, json.JSONDecodeError, PlanError) as exc:
+        task_errors.append(str(exc))
     drawing, normalization_errors, changes = normalize_drawing_schema(original)
     wrote_normalized = False
-    if not normalization_errors and drawing != original:
+    if not task_errors and not normalization_errors and drawing != original:
         try:
             temp_path = args.drawing + ".normalize.tmp"
             with open(temp_path, "w", encoding="utf-8") as handle:
@@ -3723,11 +4071,16 @@ def _cmd_validate_drawing(args: argparse.Namespace) -> int:
             wrote_normalized = True
         except OSError as exc:
             normalization_errors.append(f"cannot persist normalized drawing: {exc}")
-    errors = list(normalization_errors)
+    errors = list(task_errors) + list(normalization_errors)
     errors.extend(check_drawing_json(drawing))
     thread_surrogates, thread_surrogate_errors = resolve_thread_surrogates(drawing)
     thread_geometries, thread_geometry_errors = resolve_thread_drawing_geometries(drawing)
     errors.extend(thread_geometry_errors)
+    if not errors and isinstance(task_state, dict) and task_path:
+        try:
+            freeze_mode_b_gate_a(task_state, task_path, drawing)
+        except (OSError, PlanError) as exc:
+            errors.append(str(exc))
     result = {
         "drawing": args.drawing,
         "normalization": {
@@ -3742,6 +4095,10 @@ def _cmd_validate_drawing(args: argparse.Namespace) -> int:
         "thread_surrogate_errors": thread_surrogate_errors,
         "thread_geometries": thread_geometries,
         "thread_geometry_errors": thread_geometry_errors,
+        "mode_b_task": (
+            mode_b_task_summary(task_path, task_state)
+            if isinstance(task_state, dict) and task_path else None
+        ),
         "errors": errors,
         "ok": not errors,
     }
@@ -3788,6 +4145,8 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     t_start = time.monotonic()
     plan = _load_plan(args.plan)
     design_guard = plan.get("design_guard")
+    task_path = None
+    task_state = None
     if isinstance(design_guard, dict):
         current_plan_hash = _json_sha256(plan_geometry_projection(plan))
         if current_plan_hash != design_guard.get("plan_geometry_sha256"):
@@ -3798,6 +4157,40 @@ async def _cmd_run(args: argparse.Namespace) -> int:
             }
             print(json.dumps(timed(result), ensure_ascii=False, indent=2))
             return 1
+        task_path = design_guard.get("task_root")
+        if design_guard.get("mode_b_task_id") or design_guard.get("gate_a_geometry_sha256"):
+            try:
+                if not task_path:
+                    raise PlanError("executable has no Mode B task root")
+                task_path = os.path.abspath(str(task_path))
+                task_state = load_mode_b_task(task_path)
+                gate_a = task_state.get("gate_a") or {}
+                lineage_mismatch = (
+                    task_state.get("mode_b_task_id") != design_guard.get("mode_b_task_id")
+                    or gate_a.get("gate_a_geometry_sha256")
+                    != design_guard.get("gate_a_geometry_sha256")
+                )
+                if lineage_mismatch:
+                    raise PlanError("executable does not match immutable Mode B task root")
+                task_attempt_errors = mode_b_task_attempt_errors(
+                    task_state, int(args.repair_attempt)
+                )
+                if task_attempt_errors:
+                    result = {
+                        "status": "repair_precheck_blocked",
+                        "failed_step": None,
+                        "errors": task_attempt_errors,
+                    }
+                    print(json.dumps(timed(result), ensure_ascii=False, indent=2))
+                    return 1
+            except (OSError, json.JSONDecodeError, PlanError) as exc:
+                result = {
+                    "status": "repair_precheck_blocked",
+                    "failed_step": None,
+                    "errors": [f"invalid Mode B task root: {exc}"],
+                }
+                print(json.dumps(timed(result), ensure_ascii=False, indent=2))
+                return 1
     elif _plan_mentions_thread(plan):
         result = {
             "status": "failed",
@@ -3931,6 +4324,15 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     report["repair_source_report"] = args.repair_report
     report["design_guard"] = design_guard if isinstance(design_guard, dict) else None
     report["approximations"] = thread_approximations_from_guard(design_guard)
+    if isinstance(task_state, dict) and task_path:
+        record_mode_b_attempt(
+            task_path,
+            task_state,
+            int(args.repair_attempt),
+            str(report.get("status") or "failed"),
+            report,
+        )
+        report["mode_b_task"] = mode_b_task_summary(task_path, task_state)
     timed(report)
     print("===REPORT===")
     print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -3976,6 +4378,8 @@ def _cmd_build(args: argparse.Namespace) -> int:
     plan = _load_plan(args.plan)
     drawing_path = getattr(args, "drawing", None)
     drawing = None
+    task_path = getattr(args, "task_root", None)
+    task_state = None
     thread_surrogates: list[dict] = []
     thread_geometries: list[dict] = []
     capability_errors: list[str] = []
@@ -3984,6 +4388,17 @@ def _cmd_build(args: argparse.Namespace) -> int:
             _load_drawing(drawing_path)
         )
         capability_errors.extend(normalization_errors)
+        if not task_path:
+            capability_errors.append("Mode B build requires --task-root from Gate A")
+        else:
+            try:
+                task_path = os.path.abspath(task_path)
+                task_state = load_mode_b_task(task_path)
+                capability_errors.extend(
+                    mode_b_task_drawing_errors(task_state, drawing, require_gate_a=True)
+                )
+            except (OSError, json.JSONDecodeError, PlanError) as exc:
+                capability_errors.append(f"invalid Mode B task root: {exc}")
         thread_surrogates, resolution_errors = resolve_thread_surrogates(drawing)
         thread_geometries, geometry_errors = resolve_thread_drawing_geometries(drawing)
         capability_errors.extend(resolution_errors)
@@ -4025,6 +4440,8 @@ def _cmd_build(args: argparse.Namespace) -> int:
             exe,
             thread_surrogates=thread_surrogates,
             thread_geometries=thread_geometries,
+            task_path=task_path,
+            task_state=task_state,
         )
     errs = check_plan(exe, executable=True)
     if not errs:
@@ -4076,10 +4493,16 @@ def main(argv: list[str] | None = None) -> int:
     pb.add_argument("out")
     pb.add_argument("--drawing", default=None,
                     help="Mode B source drawing JSON for capability checks and lineage")
+    pb.add_argument("--task-root", default=None,
+                    help="Runner-created Mode B task manifest returned by validate-drawing")
     pb.set_defaults(func=_cmd_build)
 
     pd = sub.add_parser("validate-drawing", help="Gate A evidence/source validator (no NX)")
     pd.add_argument("drawing")
+    pd.add_argument("--new-task", action="store_true",
+                    help="start a new interpretation; Runner creates mode_b_task_id")
+    pd.add_argument("--task-root", default=None,
+                    help="continue schema retry/validation in an existing Mode B task")
     pd.set_defaults(func=_cmd_validate_drawing)
 
     args = p.parse_args(argv)

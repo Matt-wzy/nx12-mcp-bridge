@@ -119,11 +119,13 @@ SpecifyPoint** 创建非 XY 草图；仅设置 `PlaneReference` 会发生 XZ/YZ 
 
 - `runner.py check <frozen> --frozen` 必须先通过；frozen 中若出现任何 executable-only
   字段或 `$reference`，视为 Planner/格式错误。
-- `runner.py build <frozen> <executable>` 内部会再次执行 frozen check；失败时
+- Mode B 在首次 `validate-drawing --new-task` 后必须保存 Runner 返回的 `task_root`；同任务 retry、build 与 repair 均复用该 root。`mode_b_task_id` 不由 Agent 生成。
+- `runner.py build <frozen> <executable> --drawing <drawing> --task-root <task>` 内部会验证 immutable Gate A geometry，并再次执行 frozen check；失败时
   **不写出 executable 文件**，防止错误绑定延迟到 NX 运行期才爆炸。
 
 ```
-python runner.py build <frozen_plan.json> <out_executable.json>
+python runner.py build <frozen_plan.json> <out_executable.json> \
+  --drawing <drawing.json> --task-root <task.json>
 # 输出: {"built": path, "operations": N, "check_errors": [...], "ok": bool}
 # 机械转换 + 绑定推断 + 对产物执行 executable check；exit 0/1
 
@@ -215,6 +217,8 @@ Loader 日志固定写入 `NX_MCP_WORKSPACE\nx_mcp_loader.log`；安装器会持
 - previous failed_step 非空
 - previous planned_part 与当前 plan 一致
 - previous repair_attempt=0
+- current `mode_b_task_id` 与 `gate_a_geometry_sha256` 等于 previous report
+- canonical executed geometry 等价；`nx_hole` 与 sketch/subtract、reverse/start_offset 等执行表达可以变化，但 axis/center/diameter/depth/interval/count/ownership/thread interpretation 不得变化
 
 Runner 只做 repair 门禁与安全 preflight，不自行修改 plan。
 

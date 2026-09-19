@@ -28,11 +28,13 @@
 按 §2 固定路径只解析一次 runtime-config，随后用其 `python_exe` 执行：
 
 ```text
-runner.py validate-drawing <drawing.json>
+runner.py validate-drawing <drawing.json> --new-task
 ```
 
 门禁：
 - validate-drawing exit code=0
+- `mode_b_task_id` 由 Runner 生成；保存返回的 `mode_b_task.task_root`
+- 同一任务的 schema retry 使用 `--task-root <path>`，不得重新 `--new-task`
 - validator 返回 `source_ownership.status="pass"`
 - validator 返回 `coordinate_sanity.status="pass"`
 - blocking_unresolved=0（只统计 `required_for_modeling=true`）
@@ -138,6 +140,10 @@ Runner 正式开始建模后，任一 operation 失败：
 
 第二次执行必须使用：
 ```text
+python_exe runner.py build <repair-frozen.json> <repair-executable.json> \
+  --drawing <drawing.json> \
+  --task-root <首次 validate 返回的 task_root>
+
 python_exe runner.py run <repair-executable.json>
   --workspace <workspace_root>
   --report <attempt2-report.json>
