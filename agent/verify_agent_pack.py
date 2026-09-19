@@ -246,6 +246,10 @@ def main() -> None:
     if "frozen check/build 对混入 executable 字段的 plan 必须 fail-closed" not in text_fast:
         fail("text-mode frozen/executable boundary rule missing")
 
+    pipeline_contract = (SKILL / "references" / "pipeline-contract.md").read_text(encoding="utf-8")
+    if "纯计划表达错误" not in pipeline_contract or "result_bindings" not in pipeline_contract:
+        fail("pipeline contract does not allow safe one-shot repair of binding-only plan errors")
+
     timing_tests = (RUNNER / "tests" / "test_bbox_report.py").read_text(encoding="utf-8")
     if "test_timing_bucket_separates_postprocess_from_validation" not in timing_tests:
         fail("Runner timing phase regression test missing")
