@@ -80,6 +80,19 @@
 - 普通位置尺寸（如某轴线间距、中心高、参数 `E`）不得自动改解释为槽深；没有深度证据就保持原始尺寸语义。
 - directional feature 输出要求：hole/counterbore/countersink → `axis`；slot/cut → `width_axis` + `through_axis`，非贯穿时才另给有证据的 `depth`。
 
+### 7.1 同轴复合孔归组
+
+- 通孔 / 沉孔 / 盲孔 / 螺纹孔若有明确证据共享同一轴线，先输出一个 `coaxial_hole_group`，再把不同加工段放入 `members`。
+- 归组必须同时满足：同一 `axis`、同一横向 `centerline`、图纸存在共中心线/同心圆/跨视图投影/明确尺寸链等确定性证据。
+- 同组 member 必须继承同一个 centerline；禁止一个 member 用 `Z=58`，另一个因为“看起来与主孔齐平”被另行放到 `Z=40`。
+- 只有 axis 相同但中心线证据不足时不得强行合并；若会影响实体则 blocking unresolved。
+- 位置尺寸绑定同轴组 centerline，而不是分别绑定各 member。
+
+### 7.2 C 参数与倒角
+
+- `C2` / `C2×45°` 只有在实际标注明确绑定到边时才表示倒角。
+- 参数表字段 `C=2` 不等价于边标注 `C2`；没有明确边绑定时禁止自动生成 chamfer。
+
 ## 8. 最低充分建模闭合
 
 - Gate A 只阻塞**会改变最终三维实体**的不确定项。
