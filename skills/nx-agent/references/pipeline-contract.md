@@ -25,19 +25,21 @@
 
 ## 3. 阶段 A：工程图读取
 读取 `drawing-reader.md` 与 `nx-drawing-rules.md`，输出 drawing JSON 并落盘。正常路径不预读 examples。
-随后用 runtime-config 的 `python_exe` 执行：
+按 §2 固定路径只解析一次 runtime-config，随后用其 `python_exe` 执行：
 
 ```text
 runner.py validate-drawing <drawing.json>
 ```
 
 门禁：
-- validate-drawing exit code=0 且 `source_ownership.status="pass"`
+- validate-drawing exit code=0
+- validator 返回 `source_ownership.status="pass"`
+- validator 返回 `coordinate_sanity.status="pass"`
 - blocking_unresolved=0（只统计 `required_for_modeling=true`）
 - dimension_conflicts=0
-- coordinate_sanity.status="pass"
 - dimension_closure.status="closed"
 
+bbox / feature center / profile range / count / symmetry / source semantic 由 validator 自己计算；禁止把 Agent 自写的 pass 状态当机器门禁。
 validator 失败立即停止，**不允许 Agent 自己覆盖错误，也不允许自动修复**。warnings 与 soft unresolved 不阻塞 A。
 
 ## 4. 阶段 B：建模规划
