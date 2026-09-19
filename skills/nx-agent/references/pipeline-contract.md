@@ -30,6 +30,7 @@
 门禁：
 - blocking_unresolved=0（只统计 `required_for_modeling=true`）
 - dimension_conflicts=0
+- coordinate_sanity.status="pass"（overall bbox / feature center / 明确中心距、节距、对称关系反算一致）
 - dimension_closure.status="closed"
 - overall_dimensions / coordinate_system / features 均存在
 
