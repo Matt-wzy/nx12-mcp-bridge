@@ -230,6 +230,7 @@ DETAIL / SECTION 是局部几何高优先级证据。出现矛盾必须进入 `u
 - tangent relation 写 `center / diameter / tangent / links`，由机器反算切点；
 - derived 用 `expr`；跨 feature 且没有关系证据时 validator 失败；
 - `N×` 数量、overall bbox、feature center、profile range、对称关系均由 validator 自己计算，不采信 Agent 自写 pass 状态。
+- `blocking_unresolved` = `unresolved` 中 `required_for_modeling=true` 的数量；仍由 Gate A fail-closed。
 
 JSON 落盘后立即执行：
 
