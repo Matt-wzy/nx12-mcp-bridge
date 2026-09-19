@@ -82,6 +82,8 @@ Runner 固定为：
   `selection_binding` / `retry` / `$reference`；这些全部由 Runner build 生成。
   frozen check/build 对混入 executable 字段的 plan 必须 fail-closed。
 - edge/face 选择只写 `selection_criteria`；`expectation` 只做判定。
+  后续 `edge_indices` / `remove_face_index` 若消费该选择，frozen 中必须写
+  `<stepN ...>` 占位符，禁止写裸语义名；build 自动转换为 `$selection.sel_N`。
 - 任何 Boolean / Hole / Pattern / Mirror / Blend / Chamfer 等拓扑变化后，
   旧 edge/face index 立即失效；需要继续选边/面时必须重新 list。
 - 完整圆边使用 `curve_type:["Elliptical","Circular"] + length + midpoint_z + count`，
