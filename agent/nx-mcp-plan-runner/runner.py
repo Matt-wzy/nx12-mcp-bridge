@@ -1513,24 +1513,78 @@ def check_drawing_json(data: dict) -> list[str]:
         if sid in sources:
             errors.append(f"duplicate source id {sid!r}")
             continue
-        targets = source.get("targets")
-        if not isinstance(targets, list) or not targets or not all(isinstance(x, str) and x for x in targets):
-            errors.append(f"source {sid!r} must declare non-empty targets")
-            targets = []
-        if len(set(targets)) != len(targets):
-            errors.append(f"source {sid!r} has duplicate targets")
-        if len(targets) > 1 and source.get("shareable") is not True:
-            errors.append(f"source {sid!r} targets multiple fields but shareable=true is not declared")
-        for target in targets:
+        allowed = source.get("allowed_targets")
+        if not isinstance(allowed, list) or not allowed or not all(isinstance(x, str) and x for x in allowed):
+            errors.append(f"source {sid!r} must declare non-empty allowed_targets")
+            allowed = []
+        if len(set(allowed)) != len(allowed):
+            errors.append(f"source {sid!r} has duplicate allowed_targets")
+        for target in allowed:
             try:
                 _drawing_path_get(data, target)
             except KeyError:
-                errors.append(f"source {sid!r} targets missing field {target!r}")
+                errors.append(f"source {sid!r} allows missing field {target!r}")
         sources[sid] = source
 
     ownership = data.get("source_ownership")
+    assignments: list[dict] = []
     if not isinstance(ownership, dict) or ownership.get("schema_version") != 1:
         errors.append("source_ownership.schema_version must be 1")
+    else:
+        raw_assignments = ownership.get("assignments")
+        if not isinstance(raw_assignments, list) or not raw_assignments:
+            errors.append("source_ownership.assignments must be a non-empty list")
+        else:
+            assignments = [x for x in raw_assignments if isinstance(x, dict)]
+            if len(assignments) != len(raw_assignments):
+                errors.append("source_ownership.assignments entries must be objects")
+
+    assignment_by_target: dict[str, dict] = {}
+    source_usage: dict[str, set[str]] = {}
+    for i, assignment in enumerate(assignments):
+        target = assignment.get("target")
+        refs = assignment.get("source_refs")
+        mode = assignment.get("mode")
+        if not isinstance(target, str) or not target:
+            errors.append(f"source_ownership.assignments[{i}] missing target")
+            continue
+        if target in assignment_by_target:
+            errors.append(f"duplicate source ownership assignment for {target!r}")
+        else:
+            assignment_by_target[target] = assignment
+        try:
+            actual = _drawing_path_get(data, target)
+        except KeyError:
+            errors.append(f"ownership assignment targets missing field {target!r}")
+            actual = None
+        if mode not in ("direct", "derived"):
+            errors.append(f"ownership assignment {target!r} mode must be direct or derived")
+        if not isinstance(refs, list) or not refs or not all(isinstance(x, str) and x for x in refs):
+            errors.append(f"ownership assignment {target!r} must declare source_refs")
+            refs = []
+        for sid in refs:
+            source = sources.get(sid)
+            if source is None:
+                errors.append(f"ownership assignment {target!r} references unknown source {sid!r}")
+                continue
+            if target not in (source.get("allowed_targets") or []):
+                errors.append(
+                    f"source {sid!r} is assigned to {target!r} outside allowed_targets"
+                )
+            source_usage.setdefault(sid, set()).add(target)
+        if mode == "direct" and len(refs) == 1 and actual is not None:
+            source = sources.get(refs[0])
+            if source is not None and "value" in source and not _drawing_equal(actual, source.get("value")):
+                errors.append(
+                    f"direct source {refs[0]!r} value does not match {target!r}"
+                )
+
+    for sid, targets in source_usage.items():
+        source = sources.get(sid) or {}
+        if len(targets) > 1 and source.get("shareable") is not True:
+            errors.append(
+                f"source {sid!r} is assigned to multiple targets but shareable=true is not declared"
+            )
 
     derived_items = data.get("derived")
     if not isinstance(derived_items, list):
@@ -1557,6 +1611,9 @@ def check_drawing_json(data: dict) -> list[str]:
         if target in derived_targets:
             errors.append(f"multiple derived entries target {target!r}")
         derived_targets.add(target)
+        assignment = assignment_by_target.get(target)
+        if assignment is None or assignment.get("mode") != "derived":
+            errors.append(f"derived target {target!r} lacks mode=derived ownership assignment")
         try:
             actual = _drawing_path_get(data, target)
         except KeyError:
@@ -1571,19 +1628,21 @@ def check_drawing_json(data: dict) -> list[str]:
         if not isinstance(deps, list) or not deps:
             errors.append(f"derived {did or i!r} must declare dependencies")
             deps = []
+        dep_sources: set[str] = set()
         for dep in deps:
             if not isinstance(dep, str):
                 errors.append(f"derived {did or i!r} has non-string dependency")
                 continue
             if dep.startswith("source:"):
                 sid = dep[len("source:"):]
+                dep_sources.add(sid)
                 source = sources.get(sid)
                 if source is None:
                     errors.append(f"derived {did or i!r} references unknown source {sid!r}")
-                elif target not in (source.get("targets") or []):
+                elif target not in (source.get("allowed_targets") or []):
                     errors.append(
                         f"source {sid!r} is used for derived target {target!r} "
-                        "without declaring that target"
+                        "outside allowed_targets"
                     )
             elif dep.startswith("target:"):
                 ref_target = dep[len("target:"):]
@@ -1595,16 +1654,20 @@ def check_drawing_json(data: dict) -> list[str]:
                 errors.append(
                     f"derived {did or i!r} dependency must start with source: or target:"
                 )
+        if assignment is not None:
+            assigned_refs = set(assignment.get("source_refs") or [])
+            if assigned_refs != dep_sources:
+                errors.append(
+                    f"derived {did or i!r} source dependencies do not match ownership assignment"
+                )
 
-    direct_targets = {
-        target
-        for source in sources.values()
-        for target in (source.get("targets") or [])
-        if isinstance(target, str)
-    }
-    covered_targets = direct_targets | derived_targets
+    for target, assignment in assignment_by_target.items():
+        if assignment.get("mode") == "derived" and target not in derived_targets:
+            errors.append(f"mode=derived ownership assignment has no derived entry: {target!r}")
 
-    # Every geometry-bearing field on a required feature must have direct or derived evidence.
+    covered_targets = set(assignment_by_target)
+
+    # Every geometry-bearing field on a required feature must have ownership evidence.
     for feature in features:
         if not isinstance(feature, dict) or feature.get("required_for_modeling") is False:
             continue
@@ -1618,7 +1681,7 @@ def check_drawing_json(data: dict) -> list[str]:
         for path in sorted(hard_paths):
             target = f"feature:{fid}.{path}"
             if target not in covered_targets:
-                errors.append(f"required geometry field lacks evidence: {target}")
+                errors.append(f"required geometry field lacks ownership evidence: {target}")
 
     # Count conservation.
     for feature in features:
@@ -1636,7 +1699,7 @@ def check_drawing_json(data: dict) -> list[str]:
         if isinstance(centers, list) and len(centers) != n_int:
             errors.append(
                 f"feature {feature.get('id')!r} explicit_centers count "
-                f"{len(centers)} != source count {n_int}"
+                f"{len(centers)} != count {n_int}"
             )
         if feature.get("pattern_type") == "rectangular":
             cx, cy = _num(feature.get("count_x")), _num(feature.get("count_y"))
@@ -1646,22 +1709,22 @@ def check_drawing_json(data: dict) -> list[str]:
                     f"{int(cx) * int(cy)} != count {n_int}"
                 )
 
-    # Source count values must equal the bound count field.
-    for sid, source in sources.items():
-        if source.get("semantic") != "feature_count" or "value" not in source:
+    # Feature-count source values must equal bound count fields.
+    for target, assignment in assignment_by_target.items():
+        if not target.endswith(".count"):
             continue
-        for target in source.get("targets") or []:
-            if not target.endswith(".count"):
-                continue
-            try:
-                actual = _drawing_path_get(data, target)
-            except KeyError:
-                continue
-            if not _drawing_equal(actual, source.get("value")):
-                errors.append(
-                    f"feature-count source {sid!r} value {source.get('value')!r} "
-                    f"does not match {target}={actual!r}"
-                )
+        try:
+            actual = _drawing_path_get(data, target)
+        except KeyError:
+            continue
+        for sid in assignment.get("source_refs") or []:
+            source = sources.get(sid) or {}
+            if source.get("semantic") == "feature_count" and "value" in source:
+                if not _drawing_equal(actual, source.get("value")):
+                    errors.append(
+                        f"feature-count source {sid!r} value {source.get('value')!r} "
+                        f"does not match {target}={actual!r}"
+                    )
 
     unresolved = data.get("unresolved")
     if isinstance(unresolved, list):
@@ -1680,7 +1743,6 @@ def check_drawing_json(data: dict) -> list[str]:
         errors.append("dimension_closure.status must be closed")
 
     return errors
-
 
 def _load_drawing(path: str) -> dict:
     with open(path, encoding="utf-8-sig") as f:
