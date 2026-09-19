@@ -227,6 +227,25 @@ def main() -> None:
     if "test_transport_ping_error_passthrough" not in plan_tests:
         fail("Runner Loader ping diagnostic test missing")
 
+    for token in (
+        "frozen plan must not contain executable field",
+        "frozen plan must not contain executable reference",
+        "frozen_errs = check_plan(plan, executable=False)",
+    ):
+        if token not in runner_source:
+            fail(f"Runner frozen/executable boundary regression: missing {token}")
+
+    plan_tests = (RUNNER / "tests" / "test_plan_resolution.py").read_text(encoding="utf-8")
+    for token in (
+        "test_frozen_check_rejects_executable_only_fields",
+        "test_frozen_check_rejects_dollar_references",
+    ):
+        if token not in plan_tests:
+            fail(f"Runner frozen-boundary test missing: {token}")
+
+    if "frozen check/build 对混入 executable 字段的 plan 必须 fail-closed" not in text_fast:
+        fail("text-mode frozen/executable boundary rule missing")
+
     timing_tests = (RUNNER / "tests" / "test_bbox_report.py").read_text(encoding="utf-8")
     if "test_timing_bucket_separates_postprocess_from_validation" not in timing_tests:
         fail("Runner timing phase regression test missing")
