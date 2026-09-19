@@ -1390,30 +1390,98 @@ def check_plan(plan: dict, executable: bool = True) -> list[str]:
 # Gate A drawing JSON validator — deterministic, part-agnostic, no NX
 # --------------------------------------------------------------------------
 _DRAWING_HARD_KEYS = {
-    "length", "length_x", "width", "width_y", "height", "height_z", "thickness",
-    "diameter", "radius", "depth", "axis", "width_axis", "through_axis",
-    "center", "centerline", "centerline_x", "centerline_y", "centerline_z",
-    "x", "y", "z", "top_z", "bottom_z", "start_z", "end_z", "side",
-    "start_side", "through_z", "count", "count_x", "count_y", "spacing",
-    "spacing_x", "spacing_y", "pitch", "pcd", "start_angle_deg",
-    "centers", "centers_x", "centers_y", "hole_x", "hole_y", "hole_z",
-    "spec", "kind", "pattern_type",
+    "length",
+    "length_x",
+    "width",
+    "width_y",
+    "height",
+    "height_z",
+    "thickness",
+    "diameter",
+    "hole_diameter",
+    "counterbore_diameter",
+    "countersink_diameter",
+    "radius",
+    "depth",
+    "hole_depth",
+    "counterbore_depth",
+    "axis",
+    "width_axis",
+    "through_axis",
+    "center",
+    "centerline",
+    "centerline_x",
+    "centerline_y",
+    "centerline_z",
+    "x",
+    "y",
+    "z",
+    "top_z",
+    "bottom_z",
+    "start_z",
+    "end_z",
+    "side",
+    "start_side",
+    "through",
+    "through_z",
+    "count",
+    "count_x",
+    "count_y",
+    "spacing",
+    "spacing_x",
+    "spacing_y",
+    "pitch",
+    "pcd",
+    "start_angle_deg",
+    "centers",
+    "centers_x",
+    "centers_y",
+    "explicit_centers",
+    "hole_x",
+    "hole_y",
+    "hole_z",
+    "spec",
+    "kind",
+    "pattern_type",
 }
 _DRAWING_META_KEYS = {
-    "id", "name", "type", "source_views", "confidence", "required_for_modeling",
-    "notes", "warning", "warnings", "description", "evidence", "hard_fields",
+    "id",
+    "name",
+    "type",
+    "source_views",
+    "confidence",
+    "required_for_modeling",
+    "notes",
+    "warning",
+    "warnings",
+    "description",
+    "evidence",
+    "hard_fields",
+}
+_DRAWING_RELATION_SEMANTICS = {
+    "center_distance",
+    "center_spacing",
+    "symmetry",
+    "upper_tangent",
+    "lower_tangent",
+    "coincident",
+    "alignment",
 }
 
 
 def _drawing_path_get(data: dict, target: str) -> Any:
-    """Resolve feature:<id>.<path> or overall_dimensions.<path>."""
+    """Resolve feature:<id>.<path> or a normal dotted/list path."""
     if target.startswith("feature:"):
-        rest = target[len("feature:"):]
+        rest = target[len("feature:") :]
         feature_id, dot, tail = rest.partition(".")
         if not feature_id:
             raise KeyError(target)
         feature = next(
-            (x for x in data.get("features", []) if isinstance(x, dict) and x.get("id") == feature_id),
+            (
+                item
+                for item in data.get("features", [])
+                if isinstance(item, dict) and item.get("id") == feature_id
+            ),
             None,
         )
         if feature is None:
@@ -1438,8 +1506,31 @@ def _drawing_path_get(data: dict, target: str) -> Any:
     return cur
 
 
+def _drawing_target_feature(data: dict, target: str) -> dict | None:
+    if not target.startswith("feature:"):
+        return None
+    rest = target[len("feature:") :]
+    feature_id, _, _ = rest.partition(".")
+    return next(
+        (
+            item
+            for item in data.get("features", [])
+            if isinstance(item, dict) and item.get("id") == feature_id
+        ),
+        None,
+    )
+
+
+def _drawing_target_feature_id(target: str) -> str | None:
+    if not target.startswith("feature:"):
+        return None
+    rest = target[len("feature:") :]
+    feature_id, _, _ = rest.partition(".")
+    return feature_id or None
+
+
 def _drawing_hard_paths(value: Any, prefix: str = "") -> set[str]:
-    """Collect geometry-bearing leaf paths from one required feature."""
+    """Collect geometry-bearing leaf paths from one required feature/profile."""
     out: set[str] = set()
     if isinstance(value, dict):
         for key, child in value.items():
@@ -1449,7 +1540,7 @@ def _drawing_hard_paths(value: Any, prefix: str = "") -> set[str]:
             if isinstance(child, dict):
                 out.update(_drawing_hard_paths(child, path))
             elif isinstance(child, list):
-                if child and all(isinstance(x, dict) for x in child):
+                if child and all(isinstance(item, dict) for item in child):
                     for idx, item in enumerate(child):
                         out.update(_drawing_hard_paths(item, f"{path}.{idx}"))
                 elif key in _DRAWING_HARD_KEYS:
@@ -1459,294 +1550,817 @@ def _drawing_hard_paths(value: Any, prefix: str = "") -> set[str]:
     return out
 
 
-def _drawing_equal(a: Any, b: Any) -> bool:
+def _drawing_equal(a: Any, b: Any, tol: float = 1e-9) -> bool:
     na, nb = _num(a), _num(b)
     if na is not None and nb is not None:
-        return abs(na - nb) <= 1e-9
+        return abs(na - nb) <= tol
     return a == b
 
 
+def _drawing_direct_semantic_ok(data: dict, source: dict) -> bool:
+    semantic = str(source.get("semantic") or "")
+    target = source.get("target")
+    if not isinstance(target, str) or not target:
+        return False
+    feature = _drawing_target_feature(data, target)
+    feature_type = str((feature or {}).get("type") or "").lower()
+    leaf = target.split(".")[-1].lower()
+
+    if semantic == "overall_dimension":
+        return target.startswith("overall_dimensions.")
+    if semantic == "profile_dimension":
+        return target.startswith("profile.")
+    if semantic == "feature_count":
+        return leaf == "count"
+    if semantic == "diameter":
+        return leaf in {
+            "diameter",
+            "hole_diameter",
+            "counterbore_diameter",
+            "countersink_diameter",
+        }
+    if semantic == "radius":
+        return leaf == "radius"
+    if semantic == "slot_width":
+        return feature_type in {"slot", "cut", "slit"} and leaf == "width"
+    if semantic == "depth":
+        return leaf in {"depth", "hole_depth", "counterbore_depth"}
+    if semantic == "thickness":
+        return leaf == "thickness"
+    if semantic == "axis":
+        return leaf in {"axis", "width_axis", "through_axis"}
+    if semantic == "center_position":
+        return (
+            ".centerline" in target
+            or ".position.center" in target
+            or leaf in {
+                "center",
+                "centerline_x",
+                "centerline_y",
+                "centerline_z",
+                "hole_x",
+                "hole_y",
+                "hole_z",
+            }
+        )
+    if semantic == "thread_spec":
+        return leaf == "spec"
+    if semantic == "side":
+        return leaf in {"side", "start_side"}
+    if semantic == "through":
+        return leaf in {"through", "through_z"}
+    if semantic == "pattern_dimension":
+        return leaf in {
+            "count_x",
+            "count_y",
+            "spacing",
+            "spacing_x",
+            "spacing_y",
+            "pitch",
+            "pcd",
+            "start_angle_deg",
+            "centers",
+            "centers_x",
+            "centers_y",
+            "explicit_centers",
+            "pattern_type",
+        }
+    if semantic == "feature_dimension":
+        # Generic direct dimensions are intentionally forbidden from fields whose
+        # meaning needs a more specific semantic class.
+        forbidden = {
+            "count",
+            "diameter",
+            "hole_diameter",
+            "counterbore_diameter",
+            "countersink_diameter",
+            "radius",
+            "width",
+            "depth",
+            "hole_depth",
+            "counterbore_depth",
+            "axis",
+            "width_axis",
+            "through_axis",
+            "center",
+            "centerline",
+            "centerline_x",
+            "centerline_y",
+            "centerline_z",
+            "bottom_z",
+            "top_z",
+            "side",
+            "start_side",
+            "spec",
+            "pattern_type",
+        }
+        return target.startswith("feature:") and leaf not in forbidden
+    return False
+
+
+def _drawing_source_value(source: dict) -> float | None:
+    value = source.get("value")
+    return _num(value)
+
+
+def _drawing_eval_expr(
+    data: dict,
+    sources: dict[str, dict],
+    expr: Any,
+) -> tuple[float | None, set[str], set[str], list[str]]:
+    """Evaluate a tiny arithmetic expression and return provenance."""
+    errors: list[str] = []
+    if not isinstance(expr, dict):
+        return None, set(), set(), ["derived expr must be an object"]
+
+    if "const" in expr:
+        value = _num(expr.get("const"))
+        if value is None:
+            errors.append("derived const must be numeric")
+        return value, set(), set(), errors
+
+    if "target" in expr:
+        target = expr.get("target")
+        if not isinstance(target, str) or not target:
+            return None, set(), set(), ["derived target reference must be a string"]
+        try:
+            value = _drawing_path_get(data, target)
+        except KeyError:
+            return None, set(), {target}, [f"derived references missing target {target!r}"]
+        number = _num(value)
+        if number is None:
+            errors.append(f"derived target {target!r} is not numeric")
+        return number, set(), {target}, errors
+
+    if "source" in expr:
+        sid = expr.get("source")
+        if not isinstance(sid, str) or not sid:
+            return None, set(), set(), ["derived source reference must be a string"]
+        source = sources.get(sid)
+        if source is None:
+            return None, {sid}, set(), [f"derived references unknown source {sid!r}"]
+        value = _drawing_source_value(source)
+        if value is None:
+            errors.append(f"derived source {sid!r} has no numeric value")
+        return value, {sid}, set(), errors
+
+    op = expr.get("op")
+    args = expr.get("args")
+    if op not in {"add", "sub", "mul", "div", "neg", "abs"}:
+        return None, set(), set(), [f"unsupported derived op {op!r}"]
+    if not isinstance(args, list):
+        return None, set(), set(), ["derived op args must be a list"]
+
+    expected = 1 if op in {"neg", "abs"} else 2
+    if len(args) != expected:
+        return None, set(), set(), [f"derived op {op!r} requires {expected} args"]
+
+    values: list[float] = []
+    source_refs: set[str] = set()
+    target_refs: set[str] = set()
+    for arg in args:
+        value, child_sources, child_targets, child_errors = _drawing_eval_expr(
+            data, sources, arg
+        )
+        errors.extend(child_errors)
+        source_refs.update(child_sources)
+        target_refs.update(child_targets)
+        if value is not None:
+            values.append(value)
+    if errors or len(values) != expected:
+        return None, source_refs, target_refs, errors
+
+    if op == "add":
+        result = values[0] + values[1]
+    elif op == "sub":
+        result = values[0] - values[1]
+    elif op == "mul":
+        result = values[0] * values[1]
+    elif op == "div":
+        if abs(values[1]) <= 1e-12:
+            return None, source_refs, target_refs, ["derived division by zero"]
+        result = values[0] / values[1]
+    elif op == "neg":
+        result = -values[0]
+    else:
+        result = abs(values[0])
+    return result, source_refs, target_refs, errors
+
+
+def _drawing_relation_source_ok(
+    data: dict,
+    source: dict,
+    derived_target: str,
+    target_refs: set[str],
+) -> tuple[bool, str | None]:
+    semantic = str(source.get("semantic") or "")
+
+    if semantic in {"center_distance", "center_spacing"}:
+        between = source.get("between")
+        if (
+            not isinstance(between, list)
+            or len(between) != 2
+            or not all(isinstance(item, str) and item for item in between)
+        ):
+            return False, f"{semantic} source requires between=[targetA,targetB]"
+        if derived_target not in between:
+            return False, f"{semantic} source cannot derive {derived_target!r}"
+        other = between[1] if between[0] == derived_target else between[0]
+        if other not in target_refs:
+            return False, f"{semantic} source requires the opposite endpoint {other!r}"
+        try:
+            a = _num(_drawing_path_get(data, between[0]))
+            b = _num(_drawing_path_get(data, between[1]))
+        except KeyError:
+            return False, f"{semantic} source references a missing endpoint"
+        expected = _drawing_source_value(source)
+        if a is None or b is None or expected is None:
+            return False, f"{semantic} source/endpoints must be numeric"
+        if abs(abs(a - b) - expected) > 1e-9:
+            return False, f"{semantic} source value does not match endpoint distance"
+        return True, None
+
+    return True, None
+
+
+def _drawing_relation_ref_ok(
+    data: dict,
+    source: dict,
+    derived_target: str,
+    target_refs: set[str],
+) -> tuple[bool, str | None]:
+    semantic = str(source.get("semantic") or "")
+    links = source.get("links")
+    if semantic not in {
+        "upper_tangent",
+        "lower_tangent",
+        "coincident",
+        "alignment",
+    }:
+        return False, f"source semantic {semantic!r} is not a relation_ref"
+    if not isinstance(links, list) or not all(isinstance(item, str) for item in links):
+        return False, f"relation source {semantic!r} requires links"
+    if derived_target not in links:
+        return False, f"relation source {semantic!r} does not cover {derived_target!r}"
+    if target_refs and not any(ref in links for ref in target_refs):
+        return False, f"relation source {semantic!r} does not link a derived dependency"
+
+    if semantic in {"upper_tangent", "lower_tangent"}:
+        center = source.get("center")
+        diameter = source.get("diameter")
+        tangent = source.get("tangent")
+        if not all(isinstance(item, str) and item for item in (center, diameter, tangent)):
+            return False, f"{semantic} source requires center/diameter/tangent targets"
+        try:
+            center_value = _num(_drawing_path_get(data, center))
+            diameter_value = _num(_drawing_path_get(data, diameter))
+            tangent_value = _num(_drawing_path_get(data, tangent))
+        except KeyError:
+            return False, f"{semantic} source references a missing target"
+        if center_value is None or diameter_value is None or tangent_value is None:
+            return False, f"{semantic} targets must be numeric"
+        sign = 1.0 if semantic == "upper_tangent" else -1.0
+        expected = center_value + sign * diameter_value / 2.0
+        if abs(expected - tangent_value) > 1e-9:
+            return False, f"{semantic} relation does not match target geometry"
+    return True, None
+
+
+def _drawing_overall_bbox(data: dict) -> tuple[float, float, float] | None:
+    overall = data.get("overall_dimensions")
+    if not isinstance(overall, dict):
+        return None
+
+    def first_number(*keys: str) -> float | None:
+        for key in keys:
+            value = _num(overall.get(key))
+            if value is not None:
+                return value
+        return None
+
+    lx = first_number("length_x", "length")
+    ly = first_number("width_y", "width")
+    hz = first_number("height_z", "height")
+    if lx is None or ly is None or hz is None:
+        return None
+    if lx <= 0 or ly <= 0 or hz <= 0:
+        return None
+    return lx, ly, hz
+
+
+def _drawing_check_coord(
+    errors: list[str],
+    label: str,
+    axis: str,
+    value: Any,
+    bbox: tuple[float, float, float],
+) -> None:
+    number = _num(value)
+    if number is None:
+        return
+    lx, ly, hz = bbox
+    if axis == "x":
+        lo, hi = -lx / 2.0, lx / 2.0
+    elif axis == "y":
+        lo, hi = -ly / 2.0, ly / 2.0
+    else:
+        lo, hi = 0.0, hz
+    if number < lo - 1e-9 or number > hi + 1e-9:
+        errors.append(
+            f"{label} {axis}={number:g} outside overall bbox [{lo:g},{hi:g}]"
+        )
+
+
+def _drawing_check_feature_bbox(
+    errors: list[str],
+    feature: dict,
+    bbox: tuple[float, float, float],
+) -> None:
+    fid = str(feature.get("id") or "?")
+    centerline = feature.get("centerline")
+    if isinstance(centerline, dict):
+        for axis in ("x", "y", "z"):
+            if axis in centerline:
+                _drawing_check_coord(
+                    errors,
+                    f"feature {fid} centerline",
+                    axis,
+                    centerline.get(axis),
+                    bbox,
+                )
+
+    for axis in ("x", "y", "z"):
+        key = f"centerline_{axis}"
+        if key in feature:
+            _drawing_check_coord(errors, f"feature {fid}", axis, feature.get(key), bbox)
+        hole_key = f"hole_{axis}"
+        if hole_key in feature:
+            _drawing_check_coord(
+                errors, f"feature {fid}", axis, feature.get(hole_key), bbox
+            )
+
+    position = feature.get("position")
+    if isinstance(position, dict):
+        center = position.get("center")
+        if isinstance(center, dict):
+            for axis in ("x", "y", "z"):
+                if axis in center:
+                    _drawing_check_coord(
+                        errors,
+                        f"feature {fid} position.center",
+                        axis,
+                        center.get(axis),
+                        bbox,
+                    )
+        elif isinstance(center, list):
+            for axis, value in zip(("x", "y", "z"), center):
+                _drawing_check_coord(
+                    errors, f"feature {fid} position.center", axis, value, bbox
+                )
+
+    centers = feature.get("explicit_centers")
+    if isinstance(centers, list):
+        for idx, center in enumerate(centers):
+            label = f"feature {fid} explicit_centers[{idx}]"
+            if isinstance(center, dict):
+                for axis in ("x", "y", "z"):
+                    if axis in center:
+                        _drawing_check_coord(
+                            errors, label, axis, center.get(axis), bbox
+                        )
+            elif isinstance(center, list):
+                for axis, value in zip(("x", "y", "z"), center):
+                    _drawing_check_coord(errors, label, axis, value, bbox)
+
+    for axis in ("x", "y", "z"):
+        values = feature.get(f"centers_{axis}")
+        if isinstance(values, list):
+            for idx, value in enumerate(values):
+                _drawing_check_coord(
+                    errors,
+                    f"feature {fid} centers_{axis}[{idx}]",
+                    axis,
+                    value,
+                    bbox,
+                )
+
+
+def _drawing_check_profile_bbox(
+    errors: list[str],
+    value: Any,
+    bbox: tuple[float, float, float],
+    prefix: str = "profile",
+) -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            path = f"{prefix}.{key}"
+            if key in {"x", "y", "z", "x_range", "y_range", "z_range"}:
+                axis = key[0]
+                if (
+                    isinstance(child, list)
+                    and len(child) == 2
+                    and all(_num(item) is not None for item in child)
+                ):
+                    for item in child:
+                        _drawing_check_coord(errors, path, axis, item, bbox)
+                    continue
+            _drawing_check_profile_bbox(errors, child, bbox, path)
+    elif isinstance(value, list):
+        for idx, child in enumerate(value):
+            _drawing_check_profile_bbox(errors, child, bbox, f"{prefix}.{idx}")
+
+
+def _drawing_check_count(errors: list[str], item: dict, label: str) -> None:
+    count = item.get("count")
+    if count is None:
+        return
+    n = _num(count)
+    if n is None or int(n) != n or n <= 0:
+        errors.append(f"{label} count must be a positive integer")
+        return
+    n_int = int(n)
+
+    explicit = item.get("explicit_centers")
+    if isinstance(explicit, list) and len(explicit) != n_int:
+        errors.append(f"{label} explicit_centers {len(explicit)} != count {n_int}")
+
+    count_x, count_y = _num(item.get("count_x")), _num(item.get("count_y"))
+    if item.get("pattern_type") == "rectangular" and count_x is not None and count_y is not None:
+        product = int(count_x) * int(count_y)
+        if product != n_int:
+            errors.append(f"{label} count_x*count_y {product} != count {n_int}")
+
+
+def _drawing_check_symmetry(
+    errors: list[str],
+    source: dict,
+    features: dict[str, dict],
+) -> None:
+    feature_id = source.get("feature")
+    axis = str(source.get("axis") or "").lower()
+    about = _num(source.get("about"))
+    feature = features.get(str(feature_id))
+    if feature is None or axis not in {"x", "y", "z"} or about is None:
+        errors.append("symmetry source requires feature, axis and numeric about")
+        return
+
+    values: list[float] = []
+    explicit = feature.get("explicit_centers")
+    if isinstance(explicit, list):
+        for center in explicit:
+            value: Any = None
+            if isinstance(center, dict):
+                value = center.get(axis)
+            elif isinstance(center, list):
+                idx = {"x": 0, "y": 1, "z": 2}[axis]
+                if idx < len(center):
+                    value = center[idx]
+            number = _num(value)
+            if number is not None:
+                values.append(number)
+    if not values:
+        axis_values = feature.get(f"centers_{axis}")
+        if isinstance(axis_values, list):
+            values = [number for item in axis_values if (number := _num(item)) is not None]
+    if not values:
+        errors.append(f"symmetry source has no machine-checkable centers for feature {feature_id!r}")
+        return
+
+    for value in values:
+        mirror = 2.0 * about - value
+        if not any(abs(other - mirror) <= 1e-9 for other in values):
+            errors.append(
+                f"feature {feature_id!r} centers are not symmetric about {axis}={about:g}"
+            )
+            return
+
+
 def check_drawing_json(data: dict) -> list[str]:
-    """Machine-check Gate A evidence ownership, derivations and source counts."""
+    """Machine-check Gate A provenance, derivations, counts and coordinate sanity."""
     errors: list[str] = []
     if not isinstance(data, dict):
         return ["drawing JSON root must be an object"]
 
-    for key in ("overall_dimensions", "coordinate_system", "features",
-                "source_ledger", "source_ownership", "derived",
-                "unresolved", "dimension_conflicts", "coordinate_sanity",
-                "dimension_closure"):
+    required_roots = (
+        "overall_dimensions",
+        "coordinate_system",
+        "features",
+        "source_ledger",
+        "derived",
+        "unresolved",
+        "dimension_conflicts",
+        "dimension_closure",
+    )
+    for key in required_roots:
         if key not in data:
             errors.append(f"drawing JSON missing {key}")
 
-    features = data.get("features")
-    if not isinstance(features, list) or not features:
+    features_raw = data.get("features")
+    if not isinstance(features_raw, list) or not features_raw:
         errors.append("features must be a non-empty list")
-        features = []
+        features_raw = []
 
-    feature_ids: set[str] = set()
-    for i, feature in enumerate(features):
+    features: dict[str, dict] = {}
+    for idx, feature in enumerate(features_raw):
         if not isinstance(feature, dict):
-            errors.append(f"features[{i}] must be an object")
+            errors.append(f"features[{idx}] must be an object")
             continue
         fid = feature.get("id")
         if not isinstance(fid, str) or not fid.strip():
-            errors.append(f"features[{i}] missing stable id")
-        elif fid in feature_ids:
+            errors.append(f"features[{idx}] missing stable id")
+            continue
+        if fid in features:
             errors.append(f"duplicate feature id {fid!r}")
-        else:
-            feature_ids.add(fid)
+            continue
+        features[fid] = feature
 
     ledger = data.get("source_ledger")
-    sources: dict[str, dict] = {}
     if not isinstance(ledger, list) or not ledger:
         errors.append("source_ledger must be a non-empty list")
         ledger = []
-    for i, source in enumerate(ledger):
+
+    sources: dict[str, dict] = {}
+    direct_targets: set[str] = set()
+    relation_targets: set[str] = set()
+    for idx, source in enumerate(ledger):
         if not isinstance(source, dict):
-            errors.append(f"source_ledger[{i}] must be an object")
+            errors.append(f"source_ledger[{idx}] must be an object")
             continue
         sid = source.get("id")
+        semantic = source.get("semantic")
         if not isinstance(sid, str) or not sid.strip():
-            errors.append(f"source_ledger[{i}] missing id")
+            errors.append(f"source_ledger[{idx}] missing id")
             continue
         if sid in sources:
             errors.append(f"duplicate source id {sid!r}")
             continue
-        allowed = source.get("allowed_targets")
-        if not isinstance(allowed, list) or not allowed or not all(isinstance(x, str) and x for x in allowed):
-            errors.append(f"source {sid!r} must declare non-empty allowed_targets")
-            allowed = []
-        if len(set(allowed)) != len(allowed):
-            errors.append(f"source {sid!r} has duplicate allowed_targets")
-        for target in allowed:
-            try:
-                _drawing_path_get(data, target)
-            except KeyError:
-                errors.append(f"source {sid!r} allows missing field {target!r}")
+        if not isinstance(semantic, str) or not semantic:
+            errors.append(f"source {sid!r} missing semantic")
+            continue
         sources[sid] = source
 
-    ownership = data.get("source_ownership")
-    assignments: list[dict] = []
-    if not isinstance(ownership, dict) or ownership.get("schema_version") != 1:
-        errors.append("source_ownership.schema_version must be 1")
-    else:
-        raw_assignments = ownership.get("assignments")
-        if not isinstance(raw_assignments, list) or not raw_assignments:
-            errors.append("source_ownership.assignments must be a non-empty list")
-        else:
-            assignments = [x for x in raw_assignments if isinstance(x, dict)]
-            if len(assignments) != len(raw_assignments):
-                errors.append("source_ownership.assignments entries must be objects")
-
-    assignment_by_target: dict[str, dict] = {}
-    source_usage: dict[str, set[str]] = {}
-    for i, assignment in enumerate(assignments):
-        target = assignment.get("target")
-        refs = assignment.get("source_refs")
-        mode = assignment.get("mode")
-        if not isinstance(target, str) or not target:
-            errors.append(f"source_ownership.assignments[{i}] missing target")
+        if semantic in _DRAWING_RELATION_SEMANTICS:
+            if "target" in source:
+                errors.append(f"relation source {sid!r} must not use direct target")
+            if semantic in {"center_distance", "center_spacing"}:
+                between = source.get("between")
+                if (
+                    not isinstance(between, list)
+                    or len(between) != 2
+                    or not all(isinstance(item, str) and item for item in between)
+                ):
+                    errors.append(f"source {sid!r} requires between=[targetA,targetB]")
+                else:
+                    for target in between:
+                        try:
+                            _drawing_path_get(data, target)
+                        except KeyError:
+                            errors.append(
+                                f"source {sid!r} references missing endpoint {target!r}"
+                            )
+                    value = _drawing_source_value(source)
+                    if value is None:
+                        errors.append(f"source {sid!r} must have numeric value")
+                    else:
+                        try:
+                            a = _num(_drawing_path_get(data, between[0]))
+                            b = _num(_drawing_path_get(data, between[1]))
+                        except KeyError:
+                            a, b = None, None
+                        if a is not None and b is not None:
+                            if abs(abs(a - b) - value) > 1e-9:
+                                errors.append(
+                                    f"source {sid!r} center distance does not match endpoints"
+                                )
+            elif semantic in {"upper_tangent", "lower_tangent"}:
+                center = source.get("center")
+                diameter = source.get("diameter")
+                tangent = source.get("tangent")
+                links = source.get("links")
+                if not all(
+                    isinstance(item, str) and item
+                    for item in (center, diameter, tangent)
+                ):
+                    errors.append(
+                        f"source {sid!r} requires center/diameter/tangent targets"
+                    )
+                if (
+                    not isinstance(links, list)
+                    or tangent not in links
+                    or center not in links
+                    or diameter not in links
+                ):
+                    errors.append(f"source {sid!r} tangent links are incomplete")
+                else:
+                    try:
+                        center_value = _num(_drawing_path_get(data, center))
+                        diameter_value = _num(_drawing_path_get(data, diameter))
+                        tangent_value = _num(_drawing_path_get(data, tangent))
+                    except KeyError:
+                        center_value, diameter_value, tangent_value = None, None, None
+                    if (
+                        center_value is None
+                        or diameter_value is None
+                        or tangent_value is None
+                    ):
+                        errors.append(f"source {sid!r} tangent targets must be numeric")
+                    else:
+                        sign = 1.0 if semantic == "upper_tangent" else -1.0
+                        expected = center_value + sign * diameter_value / 2.0
+                        if abs(expected - tangent_value) > 1e-9:
+                            errors.append(
+                                f"source {sid!r} tangent relation does not match geometry"
+                            )
+                    relation_targets.add(tangent)
+            elif semantic == "symmetry":
+                _drawing_check_symmetry(errors, source, features)
             continue
-        if target in assignment_by_target:
-            errors.append(f"duplicate source ownership assignment for {target!r}")
-        else:
-            assignment_by_target[target] = assignment
+
+        target = source.get("target")
+        if not isinstance(target, str) or not target:
+            errors.append(f"direct source {sid!r} missing target")
+            continue
         try:
             actual = _drawing_path_get(data, target)
         except KeyError:
-            errors.append(f"ownership assignment targets missing field {target!r}")
-            actual = None
-        if mode not in ("direct", "derived"):
-            errors.append(f"ownership assignment {target!r} mode must be direct or derived")
-        if not isinstance(refs, list) or not refs or not all(isinstance(x, str) and x for x in refs):
-            errors.append(f"ownership assignment {target!r} must declare source_refs")
-            refs = []
-        for sid in refs:
-            source = sources.get(sid)
-            if source is None:
-                errors.append(f"ownership assignment {target!r} references unknown source {sid!r}")
-                continue
-            if target not in (source.get("allowed_targets") or []):
-                errors.append(
-                    f"source {sid!r} is assigned to {target!r} outside allowed_targets"
-                )
-            source_usage.setdefault(sid, set()).add(target)
-        if mode == "direct" and len(refs) == 1 and actual is not None:
-            source = sources.get(refs[0])
-            if source is not None and "value" in source and not _drawing_equal(actual, source.get("value")):
-                errors.append(
-                    f"direct source {refs[0]!r} value does not match {target!r}"
-                )
-
-    for sid, targets in source_usage.items():
-        source = sources.get(sid) or {}
-        if len(targets) > 1 and source.get("shareable") is not True:
+            errors.append(f"source {sid!r} targets missing field {target!r}")
+            continue
+        if not _drawing_direct_semantic_ok(data, source):
             errors.append(
-                f"source {sid!r} is assigned to multiple targets but shareable=true is not declared"
+                f"source {sid!r} semantic {semantic!r} is incompatible with {target!r}"
             )
+            continue
+        if "value" in source and not _drawing_equal(actual, source.get("value")):
+            errors.append(f"source {sid!r} value does not match {target!r}")
+        direct_targets.add(target)
 
-    derived_items = data.get("derived")
-    if not isinstance(derived_items, list):
+    derived_raw = data.get("derived")
+    if not isinstance(derived_raw, list):
         errors.append("derived must be a list")
-        derived_items = []
+        derived_raw = []
+
     derived_targets: set[str] = set()
-    derived_ids: set[str] = set()
-    for i, item in enumerate(derived_items):
+    for idx, item in enumerate(derived_raw):
         if not isinstance(item, dict):
-            errors.append(f"derived[{i}] must be an object")
+            errors.append(f"derived[{idx}] must be an object")
             continue
         did = item.get("id")
         target = item.get("target")
-        deps = item.get("dependencies")
         if not isinstance(did, str) or not did:
-            errors.append(f"derived[{i}] missing id")
-        elif did in derived_ids:
-            errors.append(f"duplicate derived id {did!r}")
-        else:
-            derived_ids.add(did)
+            errors.append(f"derived[{idx}] missing id")
+            did = f"#{idx}"
         if not isinstance(target, str) or not target:
-            errors.append(f"derived[{i}] missing target")
+            errors.append(f"derived {did!r} missing target")
             continue
         if target in derived_targets:
             errors.append(f"multiple derived entries target {target!r}")
         derived_targets.add(target)
-        assignment = assignment_by_target.get(target)
-        if assignment is None or assignment.get("mode") != "derived":
-            errors.append(f"derived target {target!r} lacks mode=derived ownership assignment")
         try:
             actual = _drawing_path_get(data, target)
         except KeyError:
-            errors.append(f"derived {did or i!r} targets missing field {target!r}")
+            errors.append(f"derived {did!r} targets missing field {target!r}")
             actual = None
-        if "value" not in item:
-            errors.append(f"derived {did or i!r} missing value")
-        elif actual is not None and not _drawing_equal(actual, item.get("value")):
-            errors.append(f"derived {did or i!r} value does not match target {target!r}")
-        if not isinstance(item.get("derivation"), str) or not item.get("derivation", "").strip():
-            errors.append(f"derived {did or i!r} missing derivation")
-        if not isinstance(deps, list) or not deps:
-            errors.append(f"derived {did or i!r} must declare dependencies")
-            deps = []
-        dep_sources: set[str] = set()
-        for dep in deps:
-            if not isinstance(dep, str):
-                errors.append(f"derived {did or i!r} has non-string dependency")
+
+        value, source_refs, target_refs, expr_errors = _drawing_eval_expr(
+            data, sources, item.get("expr")
+        )
+        errors.extend(f"derived {did!r}: {error}" for error in expr_errors)
+
+        if value is not None:
+            if "value" not in item:
+                errors.append(f"derived {did!r} missing value")
+            elif not _drawing_equal(value, item.get("value")):
+                errors.append(f"derived {did!r} expr does not match declared value")
+            if actual is not None and not _drawing_equal(value, actual):
+                errors.append(f"derived {did!r} expr does not match target {target!r}")
+
+        relation_refs = item.get("relation_refs") or []
+        if not isinstance(relation_refs, list) or not all(
+            isinstance(ref, str) and ref for ref in relation_refs
+        ):
+            errors.append(f"derived {did!r} relation_refs must be a list")
+            relation_refs = []
+
+        relation_ok = False
+        for sid in source_refs:
+            source = sources.get(sid)
+            if source is None:
                 continue
-            if dep.startswith("source:"):
-                sid = dep[len("source:"):]
-                dep_sources.add(sid)
-                source = sources.get(sid)
-                if source is None:
-                    errors.append(f"derived {did or i!r} references unknown source {sid!r}")
-                elif target not in (source.get("allowed_targets") or []):
-                    errors.append(
-                        f"source {sid!r} is used for derived target {target!r} "
-                        "outside allowed_targets"
-                    )
-            elif dep.startswith("target:"):
-                ref_target = dep[len("target:"):]
-                try:
-                    _drawing_path_get(data, ref_target)
-                except KeyError:
-                    errors.append(f"derived {did or i!r} references missing target {ref_target!r}")
-            else:
-                errors.append(
-                    f"derived {did or i!r} dependency must start with source: or target:"
+            semantic = str(source.get("semantic") or "")
+            if semantic in {"center_distance", "center_spacing"}:
+                ok, reason = _drawing_relation_source_ok(
+                    data, source, target, target_refs
                 )
-        if assignment is not None:
-            assigned_refs = set(assignment.get("source_refs") or [])
-            if assigned_refs != dep_sources:
+                if not ok and reason:
+                    errors.append(f"derived {did!r}: {reason}")
+                relation_ok = relation_ok or ok
+            elif semantic in _DRAWING_RELATION_SEMANTICS:
                 errors.append(
-                    f"derived {did or i!r} source dependencies do not match ownership assignment"
+                    f"derived {did!r}: relation source {sid!r} cannot be numeric operand"
                 )
 
-    for target, assignment in assignment_by_target.items():
-        if assignment.get("mode") == "derived" and target not in derived_targets:
-            errors.append(f"mode=derived ownership assignment has no derived entry: {target!r}")
+        for sid in relation_refs:
+            source = sources.get(sid)
+            if source is None:
+                errors.append(f"derived {did!r} references unknown relation {sid!r}")
+                continue
+            ok, reason = _drawing_relation_ref_ok(data, source, target, target_refs)
+            if not ok and reason:
+                errors.append(f"derived {did!r}: {reason}")
+            relation_ok = relation_ok or ok
 
-    covered_targets = set(assignment_by_target)
+        target_feature = _drawing_target_feature_id(target)
+        dependency_features = {
+            feature_id
+            for ref in target_refs
+            if (feature_id := _drawing_target_feature_id(ref)) is not None
+        }
+        cross_feature = (
+            target_feature is not None
+            and any(feature_id != target_feature for feature_id in dependency_features)
+        )
+        if cross_feature and not relation_ok:
+            errors.append(
+                f"derived {did!r} crosses feature boundaries without relation evidence"
+            )
 
-    # Every geometry-bearing field on a required feature must have ownership evidence.
-    for feature in features:
-        if not isinstance(feature, dict) or feature.get("required_for_modeling") is False:
-            continue
-        fid = feature.get("id")
-        if not isinstance(fid, str) or not fid:
+    covered_targets = direct_targets | derived_targets | relation_targets
+
+    # Required feature geometry must have evidence; profile/overall get the same rule.
+    for fid, feature in features.items():
+        if feature.get("required_for_modeling") is False:
             continue
         hard_paths = _drawing_hard_paths(feature)
         declared = feature.get("hard_fields")
         if isinstance(declared, list):
-            hard_paths.update(str(x) for x in declared if isinstance(x, str) and x)
+            hard_paths.update(
+                item for item in declared if isinstance(item, str) and item
+            )
         for path in sorted(hard_paths):
             target = f"feature:{fid}.{path}"
             if target not in covered_targets:
-                errors.append(f"required geometry field lacks ownership evidence: {target}")
+                errors.append(f"required geometry field lacks evidence: {target}")
 
-    # Count conservation.
-    for feature in features:
-        if not isinstance(feature, dict):
-            continue
-        count = feature.get("count")
-        if count is None:
-            continue
-        n = _num(count)
-        if n is None or int(n) != n or n <= 0:
-            errors.append(f"feature {feature.get('id')!r} count must be a positive integer")
-            continue
-        n_int = int(n)
-        centers = feature.get("explicit_centers")
-        if isinstance(centers, list) and len(centers) != n_int:
-            errors.append(
-                f"feature {feature.get('id')!r} explicit_centers count "
-                f"{len(centers)} != count {n_int}"
-            )
-        if feature.get("pattern_type") == "rectangular":
-            cx, cy = _num(feature.get("count_x")), _num(feature.get("count_y"))
-            if cx is not None and cy is not None and int(cx) * int(cy) != n_int:
-                errors.append(
-                    f"feature {feature.get('id')!r} rectangular count_x*count_y "
-                    f"{int(cx) * int(cy)} != count {n_int}"
-                )
+    overall = data.get("overall_dimensions")
+    if isinstance(overall, dict):
+        for key in ("length_x", "length", "width_y", "width", "height_z", "height"):
+            if key in overall and _num(overall.get(key)) is not None:
+                target = f"overall_dimensions.{key}"
+                if target not in direct_targets and target not in derived_targets:
+                    errors.append(f"overall dimension lacks evidence: {target}")
 
-    # Feature-count source values must equal bound count fields.
-    for target, assignment in assignment_by_target.items():
-        if not target.endswith(".count"):
-            continue
-        try:
-            actual = _drawing_path_get(data, target)
-        except KeyError:
-            continue
-        for sid in assignment.get("source_refs") or []:
-            source = sources.get(sid) or {}
-            if source.get("semantic") == "feature_count" and "value" in source:
-                if not _drawing_equal(actual, source.get("value")):
-                    errors.append(
-                        f"feature-count source {sid!r} value {source.get('value')!r} "
-                        f"does not match {target}={actual!r}"
-                    )
+    profile = data.get("profile")
+    if isinstance(profile, dict):
+        for path in sorted(_drawing_hard_paths(profile)):
+            target = f"profile.{path}"
+            if target not in direct_targets and target not in derived_targets:
+                errors.append(f"profile geometry lacks evidence: {target}")
+
+    # Machine-computed coordinate sanity.
+    coord = data.get("coordinate_system")
+    if not isinstance(coord, dict) or coord.get("origin") != "part_center_xy_bottom_z0":
+        errors.append("coordinate_system.origin must be part_center_xy_bottom_z0")
+    bbox = _drawing_overall_bbox(data)
+    if bbox is None:
+        errors.append("overall_dimensions must provide positive X/Y/Z extents")
+    else:
+        for feature in features.values():
+            _drawing_check_feature_bbox(errors, feature, bbox)
+        if isinstance(profile, dict):
+            _drawing_check_profile_bbox(errors, profile, bbox)
+
+    # Count conservation for features and top-level patterns.
+    for fid, feature in features.items():
+        _drawing_check_count(errors, feature, f"feature {fid!r}")
+    patterns = data.get("patterns")
+    if isinstance(patterns, list):
+        for idx, pattern in enumerate(patterns):
+            if isinstance(pattern, dict):
+                _drawing_check_count(errors, pattern, f"patterns[{idx}]")
 
     unresolved = data.get("unresolved")
     if isinstance(unresolved, list):
         blockers = [
-            x for x in unresolved
-            if isinstance(x, dict) and x.get("required_for_modeling") is True
+            item
+            for item in unresolved
+            if isinstance(item, dict) and item.get("required_for_modeling") is True
         ]
         if blockers:
             errors.append(f"blocking_unresolved={len(blockers)}")
+
     conflicts = data.get("dimension_conflicts")
     if isinstance(conflicts, list) and conflicts:
         errors.append(f"dimension_conflicts={len(conflicts)}")
-    if (data.get("coordinate_sanity") or {}).get("status") != "pass":
-        errors.append("coordinate_sanity.status must be pass")
+
     if (data.get("dimension_closure") or {}).get("status") != "closed":
         errors.append("dimension_closure.status must be closed")
 
     return errors
 
+
 def _load_drawing(path: str) -> dict:
-    with open(path, encoding="utf-8-sig") as f:
-        data = json.load(f)
+    with open(path, encoding="utf-8-sig") as handle:
+        data = json.load(handle)
     if not isinstance(data, dict):
         raise PlanError(f"{path}: drawing JSON root must be an object")
     return data
@@ -1758,6 +2372,7 @@ def _cmd_validate_drawing(args: argparse.Namespace) -> int:
     result = {
         "drawing": args.drawing,
         "source_ownership": {"status": "pass" if not errors else "fail"},
+        "coordinate_sanity": {"status": "pass" if not errors else "fail"},
         "errors": errors,
         "ok": not errors,
     }
