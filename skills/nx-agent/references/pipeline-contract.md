@@ -24,8 +24,8 @@
 所有 plan / report / PRT / STEP 都必须落在 `workspace_root` 内，禁止把聊天目录或临时对话目录当作工作区。
 
 ## 3. 阶段 A：工程图读取
-读取 `drawing-reader.md` 与 `nx-drawing-rules.md`，输出 drawing JSON 并落盘。正常路径不预读 examples。
-按 §2 固定路径只解析一次 runtime-config，随后用其 `python_exe` 执行：
+读取上传图纸，再依次读取 `drawing-reader.md` 与 `nx-drawing-rules.md`。规则读取完成后，立即按 §2 固定路径只定位并读取一次 runtime-config；不得等待全部视图解析、全部尺寸绑定、feature ownership、relation closure、global coordinate conversion、source ledger 或 drawing JSON 完成。随后进行完整 drawing interpretation，输出 drawing JSON 并落盘。正常路径不预读 examples。
+使用 runtime-config 中的 `python_exe` 执行：
 
 ```text
 runner.py validate-drawing <drawing.json> --new-task
