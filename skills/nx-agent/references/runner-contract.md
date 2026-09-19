@@ -174,9 +174,17 @@ expectation 语法：`count` / `count_range` / `body_count`（nx_list_bodies）/
 旧字段 `step_export_settle_elapsed` 暂时保留为
 `export_settle_elapsed` 的兼容别名。
 
-## 10. Runtime Config 与 repair CLI
+## 10. Runtime Config、Loader 健康检查与 repair CLI
 
 Runner 安装目录包含 `runtime-config.json`，正常执行优先使用其中的 `python_exe` 与 `workspace_root`。
+
+Loader 的 `nx_status` 必须以 NX 当前 `Session.Parts.Work` 为权威来源，不能直接
+读取可能已经失效的缓存 `_part`；用户在 NX 中关闭/切换零件后，resident Loader
+仍应保持 ready。若健康检查返回 `ok=false`，Runner 必须保留并报告 Loader 的
+原始错误原因，不得统一伪装成 `loader pipe not reachable`。
+
+Loader 日志固定写入 `NX_MCP_WORKSPACE\nx_mcp_loader.log`；安装器会持久化
+`NX_MCP_WORKSPACE`，默认工作区为 `%USERPROFILE%\NX_MCP_WORKSPACE`。
 
 `run` 额外支持：
 
