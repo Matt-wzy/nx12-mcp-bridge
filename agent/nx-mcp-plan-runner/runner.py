@@ -1294,6 +1294,20 @@ def check_plan(plan: dict, executable: bool = True) -> list[str]:
             for k in _unknown_criteria_keys(crit, kind):
                 errors.append(f"step {step}: unknown {kind} criterion key {k!r}")
 
+        # Frozen plans are Planner output only. Executable-only extensions
+        # must be produced by build, never hand-authored by the Planner.
+        if not executable:
+            for key in ("result_bindings", "selection_binding", "retry"):
+                if key in op:
+                    errors.append(
+                        f"step {step}: frozen plan must not contain executable field {key!r}"
+                    )
+            for v in _walk(args):
+                if isinstance(v, str) and v.startswith("$"):
+                    errors.append(
+                        f"step {step}: frozen plan must not contain executable reference {v!r}"
+                    )
+
         # natural-language placeholders (executable plans only)
         if executable:
             for v in _walk(args):
@@ -1470,11 +1484,23 @@ def _cmd_check(args: argparse.Namespace) -> int:
 
 def _cmd_build(args: argparse.Namespace) -> int:
     plan = _load_plan(args.plan)
+    frozen_errs = check_plan(plan, executable=False)
+    if frozen_errs:
+        print(json.dumps({
+            "built": None,
+            "operations": len(plan.get("operations") or []),
+            "frozen_check_errors": frozen_errs,
+            "ok": False,
+        }, ensure_ascii=False, indent=2))
+        return 1
+
     exe = build_executable_plan(plan)
     errs = check_plan(exe, executable=True)
-    with open(args.out, "w", encoding="utf-8") as f:
-        json.dump(exe, f, ensure_ascii=False, indent=2)
-    print(json.dumps({"built": args.out, "operations": len(exe.get("operations") or []),
+    if not errs:
+        with open(args.out, "w", encoding="utf-8") as f:
+            json.dump(exe, f, ensure_ascii=False, indent=2)
+    print(json.dumps({"built": args.out if not errs else None,
+                      "operations": len(exe.get("operations") or []),
                       "check_errors": errs, "ok": not errs}, ensure_ascii=False, indent=2))
     return 0 if not errs else 1
 
