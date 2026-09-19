@@ -1,4 +1,4 @@
-# install.ps1
+﻿# install.ps1
 # NX_MCP-Enhanced + Agent Pack 一体化安装器
 # 用法：
 #   powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
