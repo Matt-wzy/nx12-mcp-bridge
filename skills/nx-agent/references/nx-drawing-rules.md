@@ -87,6 +87,7 @@
 - derived 必须绑定明确 `target`；没有额外图纸证据时禁止一个 derived 结果跨 feature 复用。
 - directional feature 输出要求：hole/counterbore/countersink → `axis`；slot/cut → `width_axis` + `through_axis`，非贯穿时才另给有证据的 `depth`。
 - source semantic 使用固定类别：槽宽=`slot_width`，两轴中心距=`center_distance/center_spacing`，外形边到中心=`edge_offset`，数量=`feature_count`，孔径=`diameter`，中心坐标=`center_position`；关系尺寸禁止降级成泛化 `feature_dimension`。
+- `center_position/position_dimension` 只能表示图上直接绑定的坐标；由中心距、边距、相切或对称算出的坐标必须保留 relation/derived 来源。
 
 ### 7.1 同轴复合孔归组
 
