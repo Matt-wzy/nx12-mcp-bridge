@@ -56,7 +56,7 @@
   X/Y 轴方向的侧板/竖板孔必须在 `XZ` / `YZ` 主平面画圆，再用
   `nx_extrude(operation="subtract")` 沿该平面法向切除，禁止拿 Z 轴孔工具硬套。
 - 当前 32 个 certified tools **没有真实螺纹建模工具**。螺纹规格不能由 Planner 临场等同于任意普通孔直径，也不能用同轴的 clearance/through hole 代替。
-- 上游输入明确给出允许建模的 `surrogate_geometry` 时优先使用；否则只允许使用机器参数化 resolver：解析 metric nominal diameter/pitch，bare designation 的 pitch 查独立标准粗牙 metadata，tap-drill surrogate 统一按 `nominal_diameter - pitch` 计算。禁止 thread-size → 最终孔径硬编码。resolver 不提供 axis、center、depth、range、count、side 或 ownership；这些字段未闭合时仍须阻断。
+- 上游输入明确给出允许建模的 `surrogate_geometry` 时优先使用；否则只允许使用机器参数化 resolver：解析 metric nominal diameter/pitch，bare designation 的 pitch 查 project-supported coarse-pitch subset，tap-drill surrogate 统一按 `nominal_diameter - pitch` 计算。禁止 thread-size → 最终孔径硬编码。resolver 不提供 axis、center、depth、range、count、side 或 ownership；Gate B 必须从实际 operation 核对这些 drawing geometry，且不得依赖工具默认 start_offset。
 
 ### 实体创建
 | 工具 | 参数 | 说明 |

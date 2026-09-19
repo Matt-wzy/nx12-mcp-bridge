@@ -100,7 +100,7 @@ Gate A 失败时只向用户询问**真正 blocking 的最少问题**，不得�
 - executable plan 存在且非空
 
 frozen plan 首次落盘前必须完成静态自检。B 阶段 build/check 失败直接结束，禁止现场补丁后继续。
-required threaded feature 优先使用输入明确提供并批准交付的 `surrogate_geometry`。没有输入 surrogate 时，`validate-drawing` 用通用 metric designation parser 取得 nominal diameter/pitch（bare M designation 的 pitch 来自独立标准粗牙 metadata），再统一按 `nominal_diameter - pitch` 计算 tap-drill surrogate；禁止 thread-size → 最终孔径映射。Planner 必须原样携带 resolver 结果与哈希 provenance，Gate B 重新计算并核对后才允许执行；Planner 禁止自行推导底孔直径。resolver 只能补 thread representation/surrogate diameter，不能补 axis、center、count、depth/range、side 或 ownership。无法解析或没有标准 pitch metadata 时返回 capability violation。使用 surrogate 的最终报告必须列入 `approximations`，不得描述为真实螺纹牙型。
+required threaded feature 优先使用输入明确提供并批准交付的 `surrogate_geometry`。没有输入 surrogate 时，`validate-drawing` 用通用 metric designation parser 取得 nominal diameter/pitch（bare M designation 的 pitch 来自项目支持粗牙参数子集），再统一按 `nominal_diameter - pitch` 计算 tap-drill surrogate；禁止 thread-size → 最终孔径映射。Planner 必须原样携带 resolver 与 drawing geometry 哈希 provenance，Gate B 重新计算，并把实际 hole 或 sketch-circle + subtract 的 axis、center、depth、显式 axial range、count、side/ownership 与 Gate A drawing 比较后才允许执行；Planner/Loader default 均不得补 thread 设计几何。resolver 只能补 thread representation/surrogate diameter，不能补 axis、center、count、depth/range、side 或 ownership。无法解析、没有支持集 pitch 或设计几何未闭合时返回 capability violation。当前支持集的标准来源/version 留作发布前资料审计，不声明覆盖完整 ISO metric 系列。使用 surrogate 的最终报告必须列入 `approximations`，不得描述为真实螺纹牙型。
 
 ## 5. 阶段 C 与受控自动修复
 

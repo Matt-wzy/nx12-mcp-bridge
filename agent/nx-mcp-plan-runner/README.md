@@ -64,12 +64,12 @@ python runner.py build <frozen-plan.json> <out.json> [--drawing <drawing.json>]
 python runner.py test  #（等价：运行 tests/test_plan_resolution.py）
 ```
 
-- `validate-drawing`：纯本地 Gate A 结构/证据校验；同一次调用先执行严格 schema-only normalization，并用 geometry-semantic projection 证明归一化前后语义一致；检查 source ownership、derived target、required geometry evidence 与 count conservation，不触 NX。normalizer 不会把 null/unresolved 补成几何值。输出同时列出机器解析的 `thread_surrogates`：metric designation 被解析为 nominal diameter/pitch，bare designation 的 pitch 来自独立标准粗牙 metadata，tap-drill 直径统一由 `nominal - pitch` 计算。resolver 不会补 placement/extent。
+- `validate-drawing`：纯本地 Gate A 结构/证据校验；同一次调用先执行严格 schema-only normalization，并用 geometry-semantic projection 证明归一化前后语义一致；检查 source ownership、derived target、required geometry evidence 与 count conservation，不触 NX。normalizer 不会把 null/unresolved 补成几何值。输出同时列出机器解析的 `thread_surrogates`：metric designation 被解析为 nominal diameter/pitch，bare designation 的 pitch 来自明确声明的 project-supported coarse-pitch subset，tap-drill 直径统一由 `nominal - pitch` 计算；同时输出只读 `thread_geometries` 供 Gate B 核对实际 operation，resolver 不补 placement/extent。
 - `run`：静态校验 → Loader ping → **preflight 安全检查** → 顺序执行全部
   operation → 输出 JSON 报告（per-step 日志 + 汇总 + 分阶段计时）。
 - `check`：不触 NX 的静态检查（工具合法性、参数合法性、引用可解析、占位符
   清零、selection criteria 语法）。
-- `build`：冻结 → 可执行转换（无 NX）。Mode B 必须传 `--drawing`；required thread 优先使用 drawing 输入 surrogate，否则只允许消费 `validate-drawing` 返回的参数化 resolver 结果。Gate B 会重新计算并核对 resolver/operation provenance，无法解析的 spec、缺失标准 pitch metadata 或 Planner 自行推导会失败。drawing/plan 语义指纹与 approximation 明细写入 executable，供 repair lineage 与最终报告校验。
+- `build`：冻结 → 可执行转换（无 NX）。Mode B 必须传 `--drawing`；required thread 优先使用 drawing 输入 surrogate，否则只允许消费 `validate-drawing` 返回的参数化 resolver 结果。Gate B 会重新计算 resolver，并从实际 `nx_hole` 或 sketch-circle + subtract operation 规范化 axis、center、depth、显式 axial range 与 count；任一项不同、依赖 Loader 默认、缺失支持集 pitch 或 provenance 不符都会失败。drawing/plan 语义指纹与 approximation 明细写入 executable，供 repair lineage 与最终报告校验。
 
 ### 命令内性能计时
 

@@ -663,7 +663,7 @@ def main() -> None:
     for token in (
         "没有真实螺纹建模工具",
         "机器参数化 resolver",
-        "标准粗牙 metadata",
+        "project-supported coarse-pitch subset",
         "nominal_diameter - pitch",
         "禁止 thread-size → 最终孔径硬编码",
     ):
@@ -886,7 +886,7 @@ def main() -> None:
         "能力边界不得通过几何替代偷偷绕过",
         "禁止删除、改成普通通孔/间隙孔",
         "`surrogate_geometry`",
-        "标准粗牙 metadata",
+        "project-supported coarse-pitch subset",
         "nominal_diameter - pitch",
         "禁止维护 thread-size → 最终孔径表",
         "`capability_violation`",
