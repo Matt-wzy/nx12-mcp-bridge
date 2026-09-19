@@ -80,6 +80,7 @@ XY 原点为零件整体外形中心，Z=0 为零件底面，+X 向右、+Y 为�
 - `depth` / `bottom` / `termination` 只能来自明确的深度语义（如 `深12` / `DEPTH 12`）、剖视图中明确的起止面、明确的相切/共线终止关系，或其它能够唯一限定终止面的标注。**普通线性位置尺寸不得因为数值合适就被改解释成 slot/cut depth 或 bottom。**
 - 因此像某两条孔轴之间的中心距参数，只能用于它明确绑定的轴线位置；除非图纸明确把它同时绑定到槽终止面，否则不得把该中心距拿去生成 `slot.depth` / `slot.bottom_z`。
 - `derived` 必须写明 `target`，表示推导结果实际约束哪个 feature field；同一个 derived 值不得在没有额外图纸证据时跨 feature 复用。
+- 尺寸证据写入 `source_ledger` 时必须选择固定 `semantic`；例如两条轴线间距必须写 `center_distance/center_spacing`，槽两边界间宽度写 `slot_width`，数量写 `feature_count`。禁止把关系尺寸降级成泛化 `feature_dimension` 来绕过机器语义检查。
 - 孔类 feature 必须输出 `axis`；slot/cut 必须输出 `width_axis`、`through_axis`（若非贯穿则再输出有明确证据的 `depth`）。任何会改变三维结果的方向字段不能唯一确定时，Gate A 不得 closed。
 - **同轴复合孔必须先做 association，再求全局 centerline**：通孔、沉孔、盲孔、螺纹孔等若在不同视图中由共中心线、同心圆、正投影对应、共同引线/尺寸链等明确证据指向同一加工轴，先建立一个候选 `coaxial_hole_group`；**禁止先给每个候选 member 分别赋全局 Z/Y/X，再根据已经猜出的坐标决定是否归组**。
 - association 阶段只比较图纸证据，不要求成员已经拥有最终全局坐标。归组完成后才统一求组级 `axis` 与 `centerline`，再让所有 member 继承。成员可以有不同直径、深度、轴向起止侧或加工语义，但不能拥有不同的非轴向中心坐标。
@@ -119,9 +120,9 @@ XY 原点为零件整体外形中心，Z=0 为零件底面，+X 向右、+Y 为�
 ### 7.2 DERIVED：可确定推导
 若目标值没有直接单独标出，但能仅凭**图中明确尺寸、中心线、相切/共线/对称等明确拓扑关系**通过唯一算式得到，则：
 - 写入 `derived`；
-- 记录 `id`、`target`、`value`、`derivation`、`dependencies`；
-- `dependencies` 只允许 `source:<id>` 或 `target:<field-path>`；
-- 同时在 `source_ownership.assignments` 为该 target 写 `mode:"derived"`；
+- 记录 `id`、`target`、`value`、`expr`；
+- `expr` 只允许引用已存在的 `target`、`source` 或常数，并使用 `add/sub/mul/div/neg/abs`；
+- 跨 feature 推导必须有关系证据：中心距/节距 source 本身提供关系，或在 `relation_refs` 引用明确的 tangent/coincident/alignment source；
 - 视为已闭合，不进入 `unresolved`。
 
 允许示例：
@@ -193,41 +194,42 @@ DETAIL / SECTION 是局部几何高优先级证据。出现矛盾必须进入 `u
 
 ## 11. 输出结构与机器门禁
 
-最终 JSON 必须包含 `features[].id`、`source_ledger`、`source_ownership`、`derived`、`unresolved`、`dimension_conflicts`、`coordinate_sanity`、`dimension_closure`。
+为降低 Mode B 文本量，**不再输出 `source_ownership.assignments`、`allowed_targets` 或 Agent 自写的 `coordinate_sanity.status`**。机器门禁自己计算这些结果。
+
+最小结构：
 
 ```json
 {
-  "features": [{"id":"F1","required_for_modeling":true,"depth":10}],
+  "overall_dimensions": {"length_x": 80, "width_y": 60, "height_z": 25},
+  "coordinate_system": {"origin": "part_center_xy_bottom_z0"},
+  "features": [
+    {"id": "F1", "type": "slot", "width": 2, "required_for_modeling": true}
+  ],
   "source_ledger": [
     {
-      "id":"S1",
-      "semantic":"linear_dimension",
-      "value":10,
-      "allowed_targets":["feature:F1.depth"]
+      "id": "S1",
+      "semantic": "slot_width",
+      "value": 2,
+      "target": "feature:F1.width"
     }
   ],
-  "source_ownership": {
-    "schema_version":1,
-    "assignments":[
-      {"target":"feature:F1.depth","mode":"direct","source_refs":["S1"]}
-    ]
-  },
   "derived": [],
   "unresolved": [],
   "dimension_conflicts": [],
-  "coordinate_sanity":{"status":"pass","checks":[]},
-  "dimension_closure":{"status":"closed"}
+  "dimension_closure": {"status": "closed"}
 }
 ```
 
-机器约定：
-- 每个 required feature 必须有稳定 `id`；
-- 每个 HARD 几何字段必须由 `source_ownership.assignments` 覆盖；
-- source 只能分配给自己的 `allowed_targets`；同一 source 真正约束多个 target 时必须显式 `shareable:true`；
-- direct assignment 的 source value 必须与目标字段一致；
-- derived target 必须有 `mode:"derived"` assignment，且 `dependencies` 与 source_refs 一致；
-- `N×` 数量必须通过 count back-check；
-- `blocking_unresolved` = `unresolved` 中 `required_for_modeling=true` 的数量。
+`source_ledger` 使用机器可判定的语义，不允许自由定义“可绑定目标”：
+- direct：`overall_dimension / profile_dimension / feature_dimension / feature_count / diameter / radius / slot_width / depth / thickness / axis / center_position / thread_spec / side / through / pattern_dimension`；
+- relation：`center_distance / center_spacing / symmetry / upper_tangent / lower_tangent / coincident / alignment`。
+
+关键规则：
+- direct source 只写一个 `target`；语义与 target 不兼容时 validator 直接失败；
+- `center_distance / center_spacing` 写 `between:[targetA,targetB]`，只能用于这两个 endpoint 的推导；
+- tangent relation 写 `center / diameter / tangent / links`，由机器反算切点；
+- derived 用 `expr`；跨 feature 且没有关系证据时 validator 失败；
+- `N×` 数量、overall bbox、feature center、profile range、对称关系均由 validator 自己计算，不采信 Agent 自写 pass 状态。
 
 JSON 落盘后立即执行：
 
@@ -235,7 +237,7 @@ JSON 落盘后立即执行：
 <python_exe> <runner.py> validate-drawing <drawing.json>
 ```
 
-只有 exit code=0 且返回 `source_ownership.status="pass"` 才算 Gate A PASS。validator 失败时停止，不进入 Planner，也不得由 Agent 自己覆盖错误。
+只有 exit code=0 且返回 `source_ownership.status="pass"`、`coordinate_sanity.status="pass"` 才算 Gate A PASS。validator 失败时停止，不进入 Planner，也不得由 Agent 覆盖错误。
 
 完整示例：`examples/example-output.json`。
 快速视图/标注识别规则：`references/nx-drawing-rules.md`。
