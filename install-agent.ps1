@@ -144,7 +144,7 @@ if(-not (Test-Path (Join-Path $runnerDst "plan_schema.json"))){ throw "plan_sche
     (Join-Path $dst "examples\pipeline-state-example.json"),
     $runtimeConfigPath
 ) | ForEach-Object {
-    try { Get-Content -Raw -LiteralPath $_ | ConvertFrom-Json | Out-Null }
+    try { Get-Content -Raw -LiteralPath $_ -Encoding UTF8 | ConvertFrom-Json | Out-Null }
     catch { throw "JSON 校验失败: $_" }
 }
 
