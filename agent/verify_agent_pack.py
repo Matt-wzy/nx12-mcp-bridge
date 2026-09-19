@@ -66,6 +66,40 @@ def main() -> None:
     sys.path.insert(0, str(RUNNER))
     import runner  # type: ignore  # noqa: E402
 
+    drawing_example = json.loads(
+        (SKILL / "examples" / "example-output.json").read_text(encoding="utf-8")
+    )
+    drawing_errors = runner.check_drawing_json(drawing_example)
+    if drawing_errors:
+        fail(f"drawing example fails Gate A validator: {drawing_errors[:5]}")
+
+    bad_missing = json.loads(json.dumps(drawing_example))
+    bad_missing["source_ownership"]["assignments"] = [
+        x for x in bad_missing["source_ownership"]["assignments"]
+        if x.get("target") != "feature:F_HOLE.dimensions.diameter"
+    ]
+    if not runner.check_drawing_json(bad_missing):
+        fail("drawing validator does not reject missing HARD-field ownership")
+
+    bad_count = json.loads(json.dumps(drawing_example))
+    for source in bad_count["source_ledger"]:
+        if source.get("id") == "S_HOLE_N":
+            source["value"] = 2
+    if not runner.check_drawing_json(bad_count):
+        fail("drawing validator does not reject feature-count source drift")
+
+    bad_share = json.loads(json.dumps(drawing_example))
+    for source in bad_share["source_ledger"]:
+        if source.get("id") == "S_BASE_L":
+            source["allowed_targets"].append("feature:F_BOSS.dimensions.diameter")
+    bad_share["source_ownership"]["assignments"].append({
+        "target": "feature:F_BOSS.dimensions.diameter",
+        "mode": "direct",
+        "source_refs": ["S_BASE_L"],
+    })
+    if not runner.check_drawing_json(bad_share):
+        fail("drawing validator does not reject unapproved/shared source ownership")
+
     contract = json.loads((SKILL / "references" / "certified-tool-contract.json").read_text(encoding="utf-8"))
     tools = set(contract["tools"])
     if tools != set(runner.CERTIFIED_TOOLS):
@@ -225,7 +259,7 @@ def main() -> None:
         "HARD / DERIVED / SOFT",
         "required_for_modeling=true",
         "required_for_modeling=false",
-        "source_dimensions",
+        "source_ledger",
         "blocking_unresolved",
         "规格表字段不要求“逐字段解释完成”才能建模",
     ):
@@ -282,6 +316,15 @@ def main() -> None:
     if 'coordinate_sanity.status = "pass"' not in top:
         fail("top-level Gate A coordinate sanity rule missing")
     for token in (
+        "validate-drawing",
+        'source_ownership.status="pass"',
+        "正常路径**不读取 examples**",
+        "禁止扫描目录",
+    ):
+        if token not in top:
+            fail(f"top-level Gate A validator/fast-path regression: missing {token}")
+
+    for token in (
         "capability_violations = 0",
         "feature source/count preservation 通过",
         "禁止把 threaded hole 删除或改成普通通孔/间隙孔",
@@ -312,6 +355,9 @@ def main() -> None:
         "一旦 `slot.width` 已由明确槽边尺寸绑定",
         "不得把该中心距拿去生成 `slot.depth` / `slot.bottom_z`",
         "`derived` 必须写明 `target`",
+        "source_ownership.assignments",
+        "allowed_targets",
+        "validate-drawing",
         "总实例数硬约束",
         "`count_x * count_y == count`",
         "对称不等于再复制一份数量",
@@ -430,6 +476,15 @@ def main() -> None:
             fail(f"SKILL Mode A Fast Path regression: missing {token}")
 
     runner_source = (RUNNER / "runner.py").read_text(encoding="utf-8")
+    for token in (
+        "def check_drawing_json",
+        "source_ownership.assignments",
+        "allowed_targets",
+        "required geometry field lacks ownership evidence",
+        "validate-drawing",
+    ):
+        if token not in runner_source:
+            fail(f"Runner Gate A drawing validator regression: missing {token}")
     for token in (
         '"nx_modeling_elapsed"',
         '"validation_ops_elapsed"',
