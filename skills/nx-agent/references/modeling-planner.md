@@ -123,10 +123,20 @@
   然后**一次性 Unite**（一个 `nx_unite` 传入全部 tool bodies）。
 - **所有孔（hole / counterbore / countersink）**放在最后一次大 Boolean 之后、
   圆角倒角之前，集中完成。
+- **工程图方向字段必须原样消费，禁止 Planner 二次猜轴**：
+  - hole/counterbore/countersink 使用 Drawing Reader 输出的 `axis`；
+  - slot/cut 使用 `width_axis` 与 `through_axis`，不得把 `width_axis` 当成贯穿方向；
+  - 输入若缺少会改变几何的轴字段，Planner 必须停止并回报输入不完整，禁止根据局部图外观补猜。
 - **孔轴方向必须匹配工具能力**：`nx_hole / counterbore / countersink` 仅用于
-  Z 轴孔。竖板/侧板上的 X/Y 轴孔，使用对应 `XZ / YZ` sketch 画圆，
-  再以 `nx_extrude(operation="subtract")` 沿主平面法向切穿；禁止把孔中心
-  坐标换算后仍调用 Z 轴孔工具。
+  Z 轴孔。X/Y 轴孔使用对应主平面圆草图 + subtract：
+  - `axis=X` → YZ sketch → 沿 X subtract；
+  - `axis=Y` → XZ sketch → 沿 Y subtract；
+  - `axis=Z` → XY sketch / Z 轴孔工具。
+- **slot/cut 的 through_axis 固定映射**：
+  - `through_axis=X` → YZ sketch → 沿 X subtract；
+  - `through_axis=Y` → XZ sketch → 沿 Y subtract；
+  - `through_axis=Z` → XY sketch → 沿 Z subtract。
+  禁止把孔中心或槽宽坐标换算后仍沿错误轴执行。
 - **圆角 / 倒角一律放最后**：完成主体几何 → 完成孔 → 完成 Boolean →
   重新 `nx_list_edges` 选边 → 操作 → 再次 `nx_list_edges` → 下一组。
 
