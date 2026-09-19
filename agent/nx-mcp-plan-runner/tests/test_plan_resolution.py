@@ -618,6 +618,19 @@ def test_build_existing_single_body_part_binding():
 # --------------------------------------------------------------------------
 # controlled self-healing + runtime config
 # --------------------------------------------------------------------------
+def test_transport_ping_error_passthrough():
+    class Bridge:
+        last_ping_error = "status failed: inactive NX object"
+
+        def ping(self):
+            return False
+
+    transport = R.NXTransport(workspace_root=".")
+    transport._bridge = Bridge()
+    assert transport.ping() is False
+    assert transport.ping_error() == "status failed: inactive NX object"
+
+
 def test_load_runtime_config_missing_is_empty():
     missing = os.path.join(PROJECT, "__missing_runtime_config__.json")
     assert R.load_runtime_config(missing) == {}
