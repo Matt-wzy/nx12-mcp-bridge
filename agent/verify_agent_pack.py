@@ -92,11 +92,9 @@ def main() -> None:
     for source in bad_share["source_ledger"]:
         if source.get("id") == "S_BASE_L":
             source["allowed_targets"].append("feature:F_BOSS.dimensions.diameter")
-    bad_share["source_ownership"]["assignments"].append({
-        "target": "feature:F_BOSS.dimensions.diameter",
-        "mode": "direct",
-        "source_refs": ["S_BASE_L"],
-    })
+    for assignment in bad_share["source_ownership"]["assignments"]:
+        if assignment.get("target") == "feature:F_BOSS.dimensions.diameter":
+            assignment["source_refs"].append("S_BASE_L")
     if not runner.check_drawing_json(bad_share):
         fail("drawing validator does not reject unapproved/shared source ownership")
 
