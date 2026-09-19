@@ -59,6 +59,8 @@
 
 - 格式 `数量×规格`，如 `4×Ø8 THRU`、`4×R8`、`4×Ø6.6 ON PCD Ø44`。
 - 数量作用于紧随其后的特征；同一标注行内多个规格依次计数。
+- `N×` 是该 feature 的**总实例数**，不是“先有 N 个再按对称/镜像翻倍”。对称、镜像、中心线只负责解释这 N 个实例的位置。
+- 输出 `explicit_centers` 时必须满足 `len(explicit_centers) == count`；输出 rectangular 时必须满足 `count_x * count_y == count`。任何反算不一致都不能 Gate A closed。
 
 ## 5. 对称 / 镜像 / 阵列
 
@@ -67,7 +69,7 @@
 | 对称 Symmetry | 十字中心线（点划线）、双侧对称轮廓；`对称` 字样 | symmetry 条目；中心位置由中心线确认 |
 | 镜像 Mirror | `MIRROR`/`镜像` 字样、左右相同结构 | symmetry 条目（镜像面） |
 | 线性阵列 Linear | 单方向等距重复（`N× 间距`） | patterns: type=linear，spacing 取标注间距 |
-| 矩形阵列 Rectangular | X/Y 两方向均有间距的规则孔阵 | patterns: type=rectangular，count_x/count_y/spacing_x/spacing_y；**禁止写成单一 linear**；阵列形式无法明确判断时保留 explicit_centers 明确坐标，不强行分类 |
+| 矩形阵列 Rectangular | 图纸明确给出 X/Y 两方向实例数或等价二维阵列证据 | patterns: type=rectangular，count_x/count_y/spacing_x/spacing_y，且 `count_x*count_y=count`；仅有对称线或总数时不得自动升级为 rectangular，无法唯一分类时保留 explicit_centers |
 | 圆周阵列 Circular | `ON PCD Øxx`、`N× 均布`、角度标注；孔位与中心线/对称线对齐 | patterns: type=circular，pcd=直径，angle=均布角（360/N）。图纸以中心线/对称线/水平垂直关系表达孔位方向时必须输出 start_angle_deg + angle_reference + explicit_centers（读取“对齐关系”不属于比例测量、不属于尺寸猜测）；只有图纸确实未表达旋转方向且方向不影响模型时，start_angle_deg 才可为 null |
 
 ## 6. 壳体壁厚
@@ -78,9 +80,11 @@
 ## 7. 尺寸归属与深度语义
 
 - 明确尺寸线/箭头/引线绑定到哪个特征，就优先归属于哪个特征；禁止用附近孤立数字或其它参数覆盖。
-- 槽两侧边界之间的明确线性尺寸 = 槽宽。若图中槽边之间明确标 `2`，不得把附近没有绑定到槽宽的 `1.6` 当成槽宽。
-- `深N` / `DEPTH N`、剖视图明确起止面或等价的唯一几何约束，才可生成 feature `depth`。
-- 普通位置尺寸（如某轴线间距、中心高、参数 `E`）不得自动改解释为槽深；没有深度证据就保持原始尺寸语义。
+- **字段归属锁定**：HARD 几何字段一旦被明确标注/确定性 derived 绑定，后续不得被其它 feature 的尺寸覆盖；一个 source 默认只服务一个 geometry field，除非图纸明确表达共享约束。
+- 槽两侧边界之间的明确线性尺寸 = 槽宽。若图中槽边之间明确标 `2`，不得把附近没有绑定到槽宽的 `1.6` 当成槽宽；已绑定的 `slot.width` 不得在后续阶段改写。
+- `深N` / `DEPTH N`、剖视图明确起止面、明确相切/共线终止关系或等价唯一几何约束，才可生成 feature `depth` / `bottom` / `termination`。
+- 普通位置尺寸（如某轴线间距、中心高、参数 `E`）不得自动改解释为槽深/槽底；已经绑定到孔轴 centerline 的尺寸不得再跨 feature 复用成 slot 终止尺寸。
+- derived 必须绑定明确 `target`；没有额外图纸证据时禁止一个 derived 结果跨 feature 复用。
 - directional feature 输出要求：hole/counterbore/countersink → `axis`；slot/cut → `width_axis` + `through_axis`，非贯穿时才另给有证据的 `depth`。
 
 ### 7.1 同轴复合孔归组
