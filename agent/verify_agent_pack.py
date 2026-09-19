@@ -238,6 +238,8 @@ def main() -> None:
     ):
         if token not in pipeline_contract:
             fail(f"pipeline Gate A minimum-closure regression: missing {token}")
+    if 'coordinate_sanity.status="pass"' not in pipeline_contract:
+        fail("pipeline Gate A coordinate sanity rule missing")
     for token in (
         "只列出 `required_for_modeling=true`",
         "最少问题",
@@ -252,6 +254,8 @@ def main() -> None:
     ):
         if token not in top:
             fail(f"top-level Gate A minimum-closure regression: missing {token}")
+    if 'coordinate_sanity.status = "pass"' not in top:
+        fail("top-level Gate A coordinate sanity rule missing")
 
     for token in (
         'type:"coaxial_hole_group"',
@@ -262,12 +266,31 @@ def main() -> None:
         if token not in drawing_reader:
             fail(f"drawing coaxial/chamfer semantics regression: missing {token}")
     for token in (
+        "先做 **feature association**",
+        "禁止先给每个候选 member 分别赋全局 Z/Y/X",
+        "固定坐标归一化与反算校验",
+        'coordinate_sanity.status="pass"',
+        "(x1+x2)/2 = 0",
+        "x1=-P/2, x2=+P/2",
+    ):
+        if token not in drawing_reader:
+            fail(f"drawing association/coordinate sanity regression: missing {token}")
+    for token in (
         "coaxial_hole_group",
         "同组 member 必须继承同一个 centerline",
         "`C=2` 不等价于边标注 `C2`",
     ):
         if token not in drawing_rules:
             fail(f"quick drawing coaxial/chamfer regression: missing {token}")
+    for token in (
+        "先关联 feature，再求 group centerline，最后转全局坐标",
+        "最终全局 bbox 必须是",
+        "中心距反算",
+        "对称反算",
+        "`±P/2`",
+    ):
+        if token not in drawing_rules:
+            fail(f"quick drawing coordinate sanity regression: missing {token}")
     for token in (
         "禁止数值 nudge / epsilon 修复",
         "`Z=50 → Z=49`",
@@ -309,6 +332,13 @@ def main() -> None:
     ):
         if token not in planner_rules:
             fail(f"Planner coaxial/chamfer regression: missing {token}")
+    for token in (
+        "coordinate_sanity.status",
+        "禁止 Planner 自己平移、居中、取绝对值、改正负号",
+        "A 阶段输入不一致",
+    ):
+        if token not in planner_rules:
+            fail(f"Planner drawing-coordinate regression: missing {token}")
     for token in ("澄清建议的几何一致性", "d >= r + R", "方位描述与坐标范围必须一致"):
         if token not in planner_rules:
             fail(f"Planner clarification geometry guard missing: {token}")
