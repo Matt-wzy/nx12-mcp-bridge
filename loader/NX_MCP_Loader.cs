@@ -350,10 +350,41 @@ public static class NX_MCP_Loader
     // ---- commands ------------------------------------------------------
     private static string Status()
     {
-        string partName = _part != null ? _part.FullPath : "";
-        return "{\"ok\":true,\"ready\":true,\"loader\":\"nx_mcp_loader\",\"nx\":\"2506\"," +
-               "\"part\":\"" + Esc(partName) + "\",\"sketches\":" + _sketches.Count +
-               ",\"bodies\":" + _bodies.Count + "}";
+        if (_session == null) _session = Session.GetSession();
+        try
+        {
+            // The NX work part is authoritative. _part may become an inactive
+            // wrapper when the user closes/switches parts outside the Loader.
+            NXOpen.Part work = _session.Parts.Work;
+            if (work == null)
+            {
+                if (_part != null || _partPath != null) ResetTaskState();
+                _part = null;
+                _partPath = null;
+                return "{\"ok\":true,\"ready\":true,\"loader\":\"nx_mcp_loader\",\"nx\":\"2506\"," +
+                       "\"part\":\"\",\"sketches\":0,\"bodies\":0}";
+            }
+
+            string fullPath = "";
+            try { fullPath = work.FullPath; } catch { }
+            _part = work;
+            _partPath = fullPath;
+
+            // Keep an unsaved active part visible to Runner preflight so it is
+            // never mistaken for "no active part".
+            string partName = string.IsNullOrEmpty(fullPath)
+                ? "<unsaved-active-part>"
+                : fullPath;
+
+            return "{\"ok\":true,\"ready\":true,\"loader\":\"nx_mcp_loader\",\"nx\":\"2506\"," +
+                   "\"part\":\"" + Esc(partName) + "\",\"sketches\":" + _sketches.Count +
+                   ",\"bodies\":" + _bodies.Count + "}";
+        }
+        catch (Exception e)
+        {
+            Log("status ERR: " + e.Message);
+            return ErrJson("status failed: " + e.Message);
+        }
     }
 
     private static string CreatePart(string[] parts)
