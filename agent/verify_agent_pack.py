@@ -190,6 +190,17 @@ def main() -> None:
         if token not in plane_rules:
             fail(f"principal-plane planning contract missing: {token}")
 
+    drawing_reader = (SKILL / "references" / "drawing-reader.md").read_text(encoding="utf-8")
+    drawing_rules = (SKILL / "references" / "nx-drawing-rules.md").read_text(encoding="utf-8")
+    for token in ("最多 2 个", "禁止 OCR 驱动的逐区扫描", "宁可 BLOCKED"):
+        if token not in drawing_reader:
+            fail(f"drawing-reader bounded image analysis rule missing: {token}")
+    for token in ("最多 **2 次**", "禁止 OCR 主导读图", "立即 `unresolved`"):
+        if token not in drawing_rules:
+            fail(f"nx-drawing-rules bounded image analysis rule missing: {token}")
+    if "整图之外最多 2 次" not in top or "不得继续裁剪/OCR" not in top:
+        fail("SKILL Mode B bounded image analysis rule missing")
+
     text_fast = (SKILL / "references" / "text-modeling.md").read_text(encoding="utf-8")
     for token in (
         "建议参数闭合检查",
