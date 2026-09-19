@@ -74,6 +74,7 @@ Gate A 判断的是**最低充分建模闭合**，不是“整张图所有文字
 同时满足以下条件才通过：
 - `blocking_unresolved = 0`，即 `unresolved` 中没有 `required_for_modeling=true` 的项目；
 - `dimension_conflicts = 0`；
+- `coordinate_sanity.status = "pass"`：固定全局 bbox、非轴向特征中心、图纸明确的中心距/节距、对称关系已从最终坐标反算一致；
 - `dimension_closure.status = "closed"`；
 - 存在 `overall_dimensions`、`coordinate_system`、`features`。
 
