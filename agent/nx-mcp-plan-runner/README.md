@@ -59,17 +59,17 @@ python runner.py validate-drawing <drawing.json>
 python runner.py run   <executable-plan.json> [--workspace DIR] [--report out.json]
                        [--mode normal|benchmark] [--allow-overwrite] [--history FILE]
                        [--repair-attempt 0|1] [--repair-report attempt1.json]
-python runner.py check <plan.json> [--frozen]
-python runner.py build <frozen-plan.json> <out.json>
+python runner.py check <plan.json> [--frozen] [--drawing <drawing.json>]
+python runner.py build <frozen-plan.json> <out.json> [--drawing <drawing.json>]
 python runner.py test  #（等价：运行 tests/test_plan_resolution.py）
 ```
 
-- `validate-drawing`：纯本地 Gate A 结构/证据校验；检查 source ownership、derived target、required geometry evidence 与 count conservation，不触 NX。
+- `validate-drawing`：纯本地 Gate A 结构/证据校验；同一次调用先执行严格 schema-only normalization，并用 geometry-semantic projection 证明归一化前后语义一致；检查 source ownership、derived target、required geometry evidence 与 count conservation，不触 NX。normalizer 不会把 null/unresolved 补成几何值。
 - `run`：静态校验 → Loader ping → **preflight 安全检查** → 顺序执行全部
   operation → 输出 JSON 报告（per-step 日志 + 汇总 + 分阶段计时）。
 - `check`：不触 NX 的静态检查（工具合法性、参数合法性、引用可解析、占位符
   清零、selection criteria 语法）。
-- `build`：冻结 → 可执行转换（无 NX）。
+- `build`：冻结 → 可执行转换（无 NX）。Mode B 必须传 `--drawing`，以执行 required thread capability fail-closed，并把 drawing/plan 语义指纹写入 executable 供 repair lineage 校验。
 
 ### 命令内性能计时
 
@@ -107,6 +107,8 @@ Runner 不自行修改 plan，但会机器校验第二次 repair：
 - 必须同时使用 `--mode benchmark --allow-overwrite`
 - previous report 必须是本零件第一次失败报告
 - previous report 的 `repair_attempt` 必须为 0
+- previous/current report 的 drawing semantic projection 与 plan geometry projection 必须一致
+- run history 按 drawing source/semantic lineage 查询，修改输出 part 文件名不能恢复为 normal run
 
 ## Preflight 安全检查（run 子命令）
 

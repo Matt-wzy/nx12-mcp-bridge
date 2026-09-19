@@ -34,9 +34,9 @@ description: 作者：抖音 无趣。Siemens NX 自动建模统一入口。支�
 用户上传二维机械工程图并要求“开始建模”“按图建模”“用 NX 画出来”等时：
 
 1. 读取 `references/drawing-reader.md` + `references/nx-drawing-rules.md`。正常路径**不读取 examples**；只有 validator 报 schema 错误时才查看 `examples/example-output.json`。
-2. 输出结构化 drawing JSON 后，按“运行时与路径”的固定规则只解析一次 `runtime-config.json`，禁止扫描目录；用其中 `python_exe` 执行同目录 `runner.py validate-drawing <drawing.json>`。
+2. 输出结构化 drawing JSON 后，按“运行时与路径”的固定规则只解析一次 `runtime-config.json`，禁止扫描目录；用其中 `python_exe` 执行同目录 `runner.py validate-drawing <drawing.json>`。该命令会在同一次调用内执行严格 schema-only normalization；normalizer 失败或 Gate A 失败时，禁止 Agent 手工补尺寸、方向、位置、数量、证据或删除 blocking unresolved 后重试。
 3. 只有 validate-drawing exit code=0，且返回 `source_ownership.status="pass"` 与 `coordinate_sanity.status="pass"`，才通过门禁 A。
-4. 读取建模规划与拓扑规则，生成 frozen plan，并通过门禁 B。
+4. 读取建模规划与拓扑规则，生成 frozen plan，并使用 `runner.py build <frozen> <executable> --drawing <drawing.json>` 通过门禁 B；Mode B 禁止省略 `--drawing`。
 5. 调用 Plan Runner 执行。
 6. 总控规则见 `references/pipeline-contract.md`；用户输出规范见 `references/chinese-output.md`。
 
@@ -100,6 +100,7 @@ Gate A 失败时只向用户询问**真正 blocking 的最少问题**，不得�
 - executable plan 存在且非空
 
 frozen plan 首次落盘前必须完成静态自检。B 阶段 build/check 失败直接结束，禁止现场补丁后继续。
+required threaded feature 没有输入明确提供并批准交付的 `surrogate_geometry` 时，机器 Gate B 必须返回 capability violation；Planner 不得生成标准底孔或其它替代圆柱。
 
 ## 5. 阶段 C 与受控自动修复
 
@@ -110,6 +111,8 @@ frozen plan 首次落盘前必须完成静态自检。B 阶段 build/check 失�
 - 禁止：猜尺寸、改图纸、改变主体结构、绕过能力边界、修改 Runner/NX_MCP/Loader。
 - 禁止把任何图纸/derived/frozen 几何数值做 nudge/epsilon 改写来“救”执行，例如 `Z=50 → Z=49`；Boolean 相切失败不能通过改坐标、深度、孔位、直径等设计数值自动修复。
 - 修复后必须重新 build/check，并由 Runner 安全 preflight 丢弃本任务自己的失败零件，然后从第 1 步完整重跑。
+- attempt 1 失败后，禁止改 PRT/STEP 文件名、复制 drawing 或改成新的 normal run 来绕过 repair lineage；下一次执行只能携带原失败 report 的合法 repair attempt。
+- repair 前后的 drawing semantic projection 与 plan geometry projection 必须一致；尺寸、轴、中心、数量、深度/范围、贯穿范围和 thread interpretation 的任何变化都会被机器拒绝。
 - 禁止从失败步骤续跑。
 - 第二次失败必须结束。
 

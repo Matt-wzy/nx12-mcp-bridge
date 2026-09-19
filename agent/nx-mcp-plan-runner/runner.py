@@ -25,6 +25,7 @@ import argparse
 import asyncio
 import copy
 import datetime as _dt
+import hashlib
 import inspect
 import json
 import math
@@ -748,10 +749,37 @@ class RunHistory:
     def most_recent(self, p: str) -> dict | None:
         return self.entries.get(self._key(p))
 
+    def most_recent_design(self, design_guard: dict | None) -> dict | None:
+        """Return the latest run for the same drawing source or semantics.
+
+        Output part names are deliberately not part of this lookup: changing
+        ``part.prt`` to ``part_v2.prt`` must not reset repair lineage.
+        """
+        if not isinstance(design_guard, dict):
+            return None
+        source = _norm_path(str(design_guard.get("source_drawing") or ""))
+        semantic_hash = str(design_guard.get("drawing_semantics_sha256") or "")
+        matches = []
+        for entry in self.entries.values():
+            if not isinstance(entry, dict):
+                continue
+            same_source = source and _norm_path(
+                str(entry.get("design_source_drawing") or "")
+            ) == source
+            same_semantics = semantic_hash and str(
+                entry.get("drawing_semantics_sha256") or ""
+            ) == semantic_hash
+            if same_source or same_semantics:
+                matches.append(entry)
+        if not matches:
+            return None
+        return max(matches, key=lambda item: str(item.get("started_at") or ""))
+
     def record_start(
-        self, p: str, mode: str, plan: str, repair_attempt: int = 0
+        self, p: str, mode: str, plan: str, repair_attempt: int = 0,
+        design_guard: dict | None = None,
     ) -> None:
-        self.entries[self._key(p)] = {
+        entry = {
             "save_ok": False,
             "mode": mode,
             "plan": plan or "",
@@ -759,6 +787,15 @@ class RunHistory:
             "started_at": _now_iso(),
             "saved_at": None,
         }
+        if isinstance(design_guard, dict):
+            entry["design_source_drawing"] = design_guard.get("source_drawing")
+            entry["drawing_semantics_sha256"] = design_guard.get(
+                "drawing_semantics_sha256"
+            )
+            entry["plan_geometry_sha256"] = design_guard.get(
+                "plan_geometry_sha256"
+            )
+        self.entries[self._key(p)] = entry
         self.save()
 
     def record_saved(self, p: str) -> None:
@@ -839,6 +876,7 @@ def repair_request_errors(
     overwrite_allowed: bool,
     planned_part: str | None,
     previous_report: dict | None,
+    current_design_guard: dict | None = None,
 ) -> list[str]:
     """Validate the one-shot Controlled Self-Healing gate."""
     if repair_attempt not in (0, 1):
@@ -871,7 +909,40 @@ def repair_request_errors(
     elif _norm_path(str(previous_part)) != _norm_path(str(planned_part)):
         errors.append("repair plan targets a different part")
 
+    if current_design_guard is not None:
+        previous_guard = previous_report.get("design_guard")
+        if not isinstance(previous_guard, dict):
+            errors.append("previous report has no design lineage")
+        else:
+            if previous_guard.get("drawing_semantics_sha256") != (
+                current_design_guard.get("drawing_semantics_sha256")
+            ):
+                errors.append("repair changes drawing geometry semantics")
+            if previous_guard.get("plan_geometry_sha256") != (
+                current_design_guard.get("plan_geometry_sha256")
+            ):
+                errors.append("repair changes geometry-bearing plan fields")
+
     return errors
+
+
+def normal_run_lineage_errors(
+    repair_attempt: int,
+    design_guard: dict | None,
+    history: RunHistory,
+) -> list[str]:
+    """Fail closed after a modeling failure, independent of output filename."""
+    if repair_attempt != 0 or not isinstance(design_guard, dict):
+        return []
+    previous = history.most_recent_design(design_guard)
+    if not previous or previous.get("save_ok") is not False:
+        return []
+    if int(previous.get("repair_attempt", 0) or 0) >= 1:
+        return ["controlled self-healing already consumed for this design lineage"]
+    return [
+        "previous modeling failure for this design lineage requires "
+        "--repair-attempt 1 with its source report"
+    ]
 
 
 async def run_preflight(transport, plan: dict, mode: str, overwrite_allowed: bool,
@@ -1487,6 +1558,325 @@ def check_plan(plan: dict, executable: bool = True) -> list[str]:
             bound_selections[op["selection_binding"]] = {"kind": kind2, "groups": groups}
 
     return errors
+
+
+# --------------------------------------------------------------------------
+# design-semantic preservation + drawing capability guards
+# --------------------------------------------------------------------------
+_NUMERIC_GEOMETRY_KEYS = {
+    "length", "length_x", "width", "width_y", "height", "height_z",
+    "thickness", "diameter", "hole_diameter", "counterbore_diameter",
+    "countersink_diameter", "radius", "depth", "hole_depth",
+    "counterbore_depth", "count", "count_x", "count_y", "spacing",
+    "spacing_x", "spacing_y", "pitch", "pcd", "start_angle_deg",
+    "top_z", "bottom_z", "start_z", "end_z", "start_offset",
+    "distance", "angle", "angle_deg", "x", "y", "z", "x1", "y1",
+    "z1", "x2", "y2", "z2", "value",
+}
+_FEATURE_META_KEYS = {
+    "name", "source_views", "confidence", "notes", "warning", "warnings",
+    "description", "evidence",
+}
+_NON_GEOMETRY_PLAN_ARGS = {
+    "sketch_id", "body_id", "target_body_id", "tool_body_ids", "path",
+    "name", "units", "save", "edge_indices", "remove_face_index",
+}
+_UNCERTAIN_WARNING_MARKERS = (
+    "推定", "需确认", "不确定", "待确认", "uncertain", "inferred",
+    "assumed", "assumption", "needs confirmation", "to confirm",
+)
+
+
+def _canonical_number(value: Any) -> Any:
+    if not isinstance(value, str):
+        return value
+    text = value.strip()
+    if not re.fullmatch(r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)", text):
+        return value
+    number = float(text)
+    return int(number) if number.is_integer() else number
+
+
+def _canonical_semantic_value(value: Any, key: str = "") -> Any:
+    if isinstance(value, dict):
+        return {
+            str(k): _canonical_semantic_value(v, str(k))
+            for k, v in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+    if isinstance(value, list):
+        return [_canonical_semantic_value(item, key) for item in value]
+    if key in _NUMERIC_GEOMETRY_KEYS:
+        return _canonical_number(value)
+    return value
+
+
+def _list_of_named_values(value: Any) -> dict | None:
+    """Convert only an unambiguous [{name/key, value}, ...] object list."""
+    if not isinstance(value, list) or not value:
+        return None
+    out: dict[str, Any] = {}
+    for item in value:
+        if not isinstance(item, dict):
+            return None
+        name = item.get("name", item.get("key"))
+        if not isinstance(name, str) or "value" not in item or name in out:
+            return None
+        if set(item) - {"name", "key", "value"}:
+            return None
+        out[name] = item["value"]
+    return out
+
+
+def _canonical_feature(feature: dict) -> dict:
+    item = copy.deepcopy(feature)
+    for key in _FEATURE_META_KEYS:
+        item.pop(key, None)
+    if "dimension" in item and "dimensions" not in item:
+        item["dimensions"] = item.pop("dimension")
+    converted = _list_of_named_values(item.get("dimensions"))
+    if converted is not None:
+        item["dimensions"] = converted
+    if "center" in item:
+        position = item.get("position")
+        if not isinstance(position, dict) or "center" not in position:
+            position = dict(position) if isinstance(position, dict) else {}
+            position["center"] = item["center"]
+            item["position"] = position
+        item.pop("center", None)
+    if isinstance(item.get("members"), list):
+        item["members"] = [
+            _canonical_feature(member) if isinstance(member, dict) else member
+            for member in item["members"]
+        ]
+    return _canonical_semantic_value(item)
+
+
+def _canonical_object_list(value: Any, id_from_key: bool = False) -> list:
+    if isinstance(value, list):
+        return copy.deepcopy(value)
+    if isinstance(value, dict):
+        out = []
+        for key, child in value.items():
+            if not isinstance(child, dict):
+                return copy.deepcopy(value)
+            item = copy.deepcopy(child)
+            if id_from_key:
+                item.setdefault("id", str(key))
+            out.append(item)
+        return out
+    return [] if value is None else copy.deepcopy(value)
+
+
+def drawing_semantic_projection(data: dict) -> dict:
+    """Canonical geometry/evidence projection used to prove no semantics moved."""
+    features = _canonical_object_list(data.get("features"), id_from_key=True)
+    feature_projection = [
+        _canonical_feature(item) if isinstance(item, dict) else item
+        for item in features
+    ]
+    sources = _canonical_object_list(data.get("source_ledger"), id_from_key=True)
+    source_projection = []
+    for source in sources:
+        if not isinstance(source, dict):
+            source_projection.append(source)
+            continue
+        item = copy.deepcopy(source)
+        for key in ("source_views", "confidence", "description", "evidence"):
+            item.pop(key, None)
+        source_projection.append(_canonical_semantic_value(item))
+    projection = {
+        "overall_dimensions": _canonical_semantic_value(
+            data.get("overall_dimensions") or {}
+        ),
+        "coordinate_system": _canonical_semantic_value(
+            data.get("coordinate_system") or {}
+        ),
+        "features": feature_projection,
+        "patterns": _canonical_semantic_value(
+            _canonical_object_list(data.get("patterns"), id_from_key=True)
+        ),
+        "source_ledger": source_projection,
+        "derived": _canonical_semantic_value(
+            _canonical_object_list(data.get("derived"), id_from_key=True)
+        ),
+        "relations": _canonical_semantic_value(
+            _canonical_object_list(data.get("relations"), id_from_key=True)
+        ),
+        "unresolved": _canonical_semantic_value(
+            _canonical_object_list(data.get("unresolved"), id_from_key=True)
+        ),
+        "dimension_conflicts": _canonical_semantic_value(
+            _canonical_object_list(
+                data.get("dimension_conflicts"), id_from_key=True
+            )
+        ),
+    }
+    return _canonical_semantic_value(projection)
+
+
+def normalize_drawing_schema(data: dict) -> tuple[dict, list[str], list[str]]:
+    """Strict schema-only normalizer; it never creates geometry or evidence."""
+    before = drawing_semantic_projection(data)
+    out = copy.deepcopy(data)
+    changes: list[str] = []
+
+    for key in (
+        "features", "source_ledger", "derived", "relations", "patterns",
+        "unresolved", "dimension_conflicts",
+    ):
+        original = out.get(key)
+        normalized = _canonical_object_list(
+            original, id_from_key=key in {"features", "source_ledger", "derived", "relations"}
+        )
+        if original is None:
+            out[key] = normalized
+            changes.append(f"defaulted metadata array {key}")
+        elif normalized != original:
+            out[key] = normalized
+            changes.append(f"normalized {key} object/list shape")
+
+    normalized_features = []
+    for feature in out.get("features") or []:
+        if not isinstance(feature, dict):
+            normalized_features.append(feature)
+            continue
+        item = copy.deepcopy(feature)
+        if "dimension" in item and "dimensions" not in item:
+            item["dimensions"] = item.pop("dimension")
+            changes.append("normalized feature dimension -> dimensions")
+        converted = _list_of_named_values(item.get("dimensions"))
+        if converted is not None:
+            item["dimensions"] = converted
+            changes.append("normalized feature dimensions list -> object")
+        if "center" in item and not (
+            isinstance(item.get("position"), dict)
+            and "center" in item["position"]
+        ):
+            position = dict(item.get("position") or {})
+            position["center"] = item.pop("center")
+            item["position"] = position
+            changes.append("normalized feature center -> position.center")
+        normalized_features.append(item)
+    out["features"] = normalized_features
+
+    def normalize_numbers(value: Any, key: str = "") -> Any:
+        if isinstance(value, dict):
+            return {k: normalize_numbers(v, str(k)) for k, v in value.items()}
+        if isinstance(value, list):
+            return [normalize_numbers(item, key) for item in value]
+        return _canonical_number(value) if key in _NUMERIC_GEOMETRY_KEYS else value
+
+    number_normalized = normalize_numbers(out)
+    if number_normalized != out:
+        out = number_normalized
+        changes.append("normalized unambiguous numeric strings")
+
+    after = drawing_semantic_projection(out)
+    errors = []
+    if before != after:
+        errors.append("normalizer semantic preservation check failed")
+        return copy.deepcopy(data), errors, []
+    return out, errors, changes
+
+
+def _json_sha256(value: Any) -> str:
+    payload = json.dumps(
+        value, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def plan_geometry_projection(plan: dict) -> list[dict]:
+    """Project only geometry-bearing plan data; output names/bindings are ignored."""
+    projection = []
+    for op in plan.get("operations") or []:
+        if not isinstance(op, dict):
+            continue
+        args = op.get("tool_args") or {}
+        geometry_args = {
+            key: copy.deepcopy(value)
+            for key, value in args.items()
+            if key not in _NON_GEOMETRY_PLAN_ARGS
+        }
+        projection.append({
+            "tool": op.get("tool"),
+            "geometry_args": _canonical_semantic_value(geometry_args),
+            "topology_changes": bool(op.get("topology_changes")),
+        })
+    return projection
+
+
+def make_design_guard(drawing: dict, drawing_path: str, plan: dict) -> dict:
+    drawing_projection = drawing_semantic_projection(drawing)
+    plan_projection = plan_geometry_projection(plan)
+    return {
+        "source_drawing": os.path.abspath(drawing_path),
+        "drawing_semantics": drawing_projection,
+        "drawing_semantics_sha256": _json_sha256(drawing_projection),
+        "plan_geometry": plan_projection,
+        "plan_geometry_sha256": _json_sha256(plan_projection),
+    }
+
+
+def _thread_features(value: Any):
+    if isinstance(value, dict):
+        type_text = str(
+            value.get("type") or value.get("kind") or value.get("feature_kind") or ""
+        ).lower()
+        dimensions = value.get("dimensions") if isinstance(value.get("dimensions"), dict) else {}
+        has_spec = any(
+            key in value or key in dimensions
+            for key in ("thread_spec", "thread_size", "spec")
+        )
+        if has_spec or any(token in type_text for token in ("thread", "tapped", "螺纹")):
+            yield value
+        for key, child in value.items():
+            if key in {"surrogate_geometry", "dimensions"}:
+                continue
+            yield from _thread_features(child)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _thread_features(item)
+
+
+def _valid_thread_surrogate(surrogate: Any) -> bool:
+    if not isinstance(surrogate, dict):
+        return False
+    diameter = _num(surrogate.get("diameter"))
+    depth = _num(surrogate.get("depth"))
+    axial_range = surrogate.get("axis_range", surrogate.get("range"))
+    has_range = (
+        isinstance(axial_range, list)
+        and len(axial_range) == 2
+        and all(_num(value) is not None for value in axial_range)
+    ) or all(
+        _num(surrogate.get(key)) is not None
+        for key in ("start_offset", "end_offset")
+    )
+    approved = surrogate.get("approved_for_delivery") is True
+    return bool(diameter and diameter > 0 and depth and depth > 0 and has_range and approved)
+
+
+def drawing_thread_capability_errors(drawing: dict) -> list[str]:
+    errors = []
+    for index, feature in enumerate(_thread_features(drawing.get("features") or [])):
+        if feature.get("required_for_modeling") is False:
+            continue
+        if not _valid_thread_surrogate(feature.get("surrogate_geometry")):
+            fid = feature.get("id") or f"thread[{index}]"
+            errors.append(
+                f"capability_violation: required threaded feature {fid!r} has no "
+                "explicit approved geometry-preserving surrogate"
+            )
+    return errors
+
+
+def _plan_mentions_thread(plan: dict) -> bool:
+    pattern = re.compile(r"(?:\bM\d+(?:\.\d+)?\b|thread|tap drill|底孔|螺纹)", re.I)
+    for value in _walk({"notes": plan.get("notes"), "operations": plan.get("operations")}):
+        if isinstance(value, str) and pattern.search(value):
+            return True
+    return False
 
 
 # --------------------------------------------------------------------------
@@ -2700,7 +3090,20 @@ def check_drawing_json(data: dict) -> list[str]:
     if isinstance(conflicts, list) and conflicts:
         errors.append(f"dimension_conflicts={len(conflicts)}")
 
-    if (data.get("dimension_closure") or {}).get("status") != "closed":
+    closure_status = (data.get("dimension_closure") or {}).get("status")
+    warnings = data.get("warnings")
+    uncertain_warning = False
+    if isinstance(warnings, list):
+        uncertain_warning = any(
+            any(marker in str(item).lower() for marker in _UNCERTAIN_WARNING_MARKERS)
+            for item in warnings
+        )
+    if closure_status == "closed" and uncertain_warning:
+        errors.append(
+            "dimension_closure.status cannot be closed while warnings contain "
+            "inferred/uncertain geometry"
+        )
+    if closure_status != "closed":
         errors.append("dimension_closure.status must be closed")
 
     return errors
@@ -2716,10 +3119,28 @@ def _load_drawing(path: str) -> dict:
 
 def _cmd_validate_drawing(args: argparse.Namespace) -> int:
     timing_state = _begin_command_timing("A4_VALIDATE", args.drawing)
-    drawing = _load_drawing(args.drawing)
-    errors = check_drawing_json(drawing)
+    original = _load_drawing(args.drawing)
+    drawing, normalization_errors, changes = normalize_drawing_schema(original)
+    wrote_normalized = False
+    if not normalization_errors and drawing != original:
+        try:
+            temp_path = args.drawing + ".normalize.tmp"
+            with open(temp_path, "w", encoding="utf-8") as handle:
+                json.dump(drawing, handle, ensure_ascii=False, indent=2)
+            os.replace(temp_path, args.drawing)
+            wrote_normalized = True
+        except OSError as exc:
+            normalization_errors.append(f"cannot persist normalized drawing: {exc}")
+    errors = list(normalization_errors)
+    errors.extend(check_drawing_json(drawing))
     result = {
         "drawing": args.drawing,
+        "normalization": {
+            "status": "pass" if not normalization_errors else "fail",
+            "semantic_preservation": "pass" if not normalization_errors else "fail",
+            "changes": changes,
+            "written_in_place": wrote_normalized,
+        },
         "source_ownership": {"status": "pass" if not errors else "fail"},
         "coordinate_sanity": {"status": "pass" if not errors else "fail"},
         "errors": errors,
@@ -2767,6 +3188,27 @@ async def _cmd_run(args: argparse.Namespace) -> int:
 
     t_start = time.monotonic()
     plan = _load_plan(args.plan)
+    design_guard = plan.get("design_guard")
+    if isinstance(design_guard, dict):
+        current_plan_hash = _json_sha256(plan_geometry_projection(plan))
+        if current_plan_hash != design_guard.get("plan_geometry_sha256"):
+            result = {
+                "status": "failed",
+                "failed_step": None,
+                "errors": ["executable plan geometry changed after Gate B build"],
+            }
+            print(json.dumps(timed(result), ensure_ascii=False, indent=2))
+            return 1
+    elif _plan_mentions_thread(plan):
+        result = {
+            "status": "failed",
+            "failed_step": None,
+            "errors": [
+                "thread-capability provenance missing; rebuild Gate B with --drawing"
+            ],
+        }
+        print(json.dumps(timed(result), ensure_ascii=False, indent=2))
+        return 1
     if not _is_executable(plan):
         result = {
             "status": "failed",
@@ -2789,6 +3231,22 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         print(json.dumps(timed(result), ensure_ascii=False, indent=2))
         return 1
     transport = NXTransport(workspace_root=args.workspace)
+
+    history_path = args.history or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "run_history.json")
+    history = RunHistory(history_path)
+    lineage_errors = normal_run_lineage_errors(
+        args.repair_attempt, design_guard, history
+    )
+    if lineage_errors:
+        result = {
+            "status": "repair_precheck_blocked",
+            "failed_step": None,
+            "errors": lineage_errors,
+        }
+        print(json.dumps(timed(result), ensure_ascii=False, indent=2))
+        return 1
+
     if not transport.ping():
         detail = transport.ping_error()
         error = "loader health check failed"
@@ -2819,6 +3277,7 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         args.allow_overwrite,
         planned_for_repair,
         previous_report,
+        current_design_guard=design_guard if isinstance(design_guard, dict) else None,
     )
     if repair_errors:
         result = {
@@ -2829,12 +3288,10 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         print(json.dumps(timed(result), ensure_ascii=False, indent=2))
         return 1
 
-    history_path = args.history or os.path.join(
-        os.path.dirname(os.path.abspath(__file__)), "run_history.json")
-    history = RunHistory(history_path)
-
     if args.repair_attempt == 1 and planned_for_repair:
-        prior_history = history.most_recent(planned_for_repair) or {}
+        prior_history = history.most_recent_design(design_guard) or history.most_recent(
+            planned_for_repair
+        ) or {}
         if int(prior_history.get("repair_attempt", 0) or 0) >= 1:
             result = {
                 "status": "repair_precheck_blocked",
@@ -2860,7 +3317,11 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     planned_part = info["planned_part"] if info else None
     if planned_part:
         history.record_start(
-            planned_part, args.mode, args.plan, repair_attempt=args.repair_attempt
+            planned_part,
+            args.mode,
+            args.plan,
+            repair_attempt=args.repair_attempt,
+            design_guard=design_guard if isinstance(design_guard, dict) else None,
         )
     report = await run_plan(plan, transport, plan_path=args.plan,
                             wall_start=t_start, history=history,
@@ -2869,6 +3330,7 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     report["preflight_elapsed"] = round(preflight_elapsed, 3)
     report["repair_attempt"] = int(args.repair_attempt)
     report["repair_source_report"] = args.repair_report
+    report["design_guard"] = design_guard if isinstance(design_guard, dict) else None
     timed(report)
     print("===REPORT===")
     print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -2882,6 +3344,15 @@ def _cmd_check(args: argparse.Namespace) -> int:
     timing_state = _begin_command_timing("B3_CHECK", args.plan)
     plan = _load_plan(args.plan)
     errs = check_plan(plan, executable=not args.frozen)
+    drawing_path = getattr(args, "drawing", None)
+    if drawing_path:
+        drawing, normalization_errors, _ = normalize_drawing_schema(
+            _load_drawing(drawing_path)
+        )
+        errs.extend(normalization_errors)
+        errs.extend(drawing_thread_capability_errors(drawing))
+    elif _plan_mentions_thread(plan):
+        errs.append("thread-capability provenance missing; use --drawing")
     result = {
         "plan": args.plan,
         "frozen": bool(args.frozen),
@@ -2897,6 +3368,29 @@ def _cmd_check(args: argparse.Namespace) -> int:
 def _cmd_build(args: argparse.Namespace) -> int:
     timing_state = _begin_command_timing("B3_BUILD", args.plan)
     plan = _load_plan(args.plan)
+    drawing_path = getattr(args, "drawing", None)
+    drawing = None
+    capability_errors: list[str] = []
+    if drawing_path:
+        drawing, normalization_errors, _ = normalize_drawing_schema(
+            _load_drawing(drawing_path)
+        )
+        capability_errors.extend(normalization_errors)
+        capability_errors.extend(drawing_thread_capability_errors(drawing))
+    elif _plan_mentions_thread(plan):
+        capability_errors.append(
+            "thread-capability provenance missing; build Mode B with --drawing"
+        )
+    if capability_errors:
+        result = {
+            "built": None,
+            "operations": len(plan.get("operations") or []),
+            "capability_errors": capability_errors,
+            "ok": False,
+        }
+        _attach_command_timing(result, timing_state)
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 1
     frozen_errs = check_plan(plan, executable=False)
     if frozen_errs:
         result = {
@@ -2910,6 +3404,8 @@ def _cmd_build(args: argparse.Namespace) -> int:
         return 1
 
     exe = build_executable_plan(plan)
+    if drawing is not None and drawing_path:
+        exe["design_guard"] = make_design_guard(drawing, drawing_path, exe)
     errs = check_plan(exe, executable=True)
     if not errs:
         with open(args.out, "w", encoding="utf-8") as f:
@@ -2951,11 +3447,15 @@ def main(argv: list[str] | None = None) -> int:
     pc = sub.add_parser("check", help="static plan check (no NX)")
     pc.add_argument("plan")
     pc.add_argument("--frozen", action="store_true")
+    pc.add_argument("--drawing", default=None,
+                    help="Mode B source drawing JSON for capability checks")
     pc.set_defaults(func=_cmd_check)
 
     pb = sub.add_parser("build", help="convert a frozen plan to the executable format (no NX)")
     pb.add_argument("plan")
     pb.add_argument("out")
+    pb.add_argument("--drawing", default=None,
+                    help="Mode B source drawing JSON for capability checks and lineage")
     pb.set_defaults(func=_cmd_build)
 
     pd = sub.add_parser("validate-drawing", help="Gate A evidence/source validator (no NX)")

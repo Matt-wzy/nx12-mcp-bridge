@@ -777,6 +777,208 @@ def test_run_history_persists_consumed_repair(tmp_path=None):
     assert h2.most_recent(r"C:\work\repair.prt")["repair_attempt"] == 1
 
 
+# --------------------------------------------------------------------------
+# schema-only normalization / capability / repair lineage regressions
+# --------------------------------------------------------------------------
+def test_schema_normalizer_preserves_unresolved_slot_null():
+    drawing = {
+        "features": [{
+            "id": "SLOT",
+            "type": "slot",
+            "bottom_z": None,
+            "width": "2.0",
+            "required_for_modeling": True,
+        }],
+        "source_ledger": [{
+            "id": "SW",
+            "semantic": "slot_width",
+            "value": "2.0",
+            "target": "feature:SLOT.width",
+        }],
+        "derived": [],
+        "unresolved": [{
+            "target": "feature:SLOT.bottom_z",
+            "required_for_modeling": True,
+        }],
+        "dimension_conflicts": [],
+    }
+    before = R.drawing_semantic_projection(drawing)
+    normalized, errors, _ = R.normalize_drawing_schema(drawing)
+    assert errors == []
+    assert normalized["features"][0]["bottom_z"] is None
+    assert normalized["unresolved"] == drawing["unresolved"]
+    assert not any(
+        source.get("semantic") == "depth"
+        for source in normalized["source_ledger"]
+    )
+    assert R.drawing_semantic_projection(normalized) == before
+
+
+def test_schema_normalizer_does_not_wash_derived_relation_to_direct():
+    drawing = {
+        "features": [{"id": "H", "type": "through_hole", "count": "2"}],
+        "source_ledger": [{
+            "id": "SP",
+            "semantic": "center_spacing",
+            "value": "24",
+            "between": ["feature:H.explicit_centers.0", "feature:H.explicit_centers.1"],
+        }],
+        "derived": [{
+            "id": "D1",
+            "target": "feature:H.explicit_centers.1",
+            "value": "-10.3",
+            "expr": {"op": "sub", "args": ["13.7", "24"]},
+            "relation_refs": ["SP"],
+        }],
+        "unresolved": [],
+        "dimension_conflicts": [],
+    }
+    normalized, errors, _ = R.normalize_drawing_schema(drawing)
+    assert errors == []
+    assert normalized["source_ledger"][0]["semantic"] == "center_spacing"
+    assert normalized["source_ledger"][0].get("target") is None
+    assert len(normalized["derived"]) == 1
+    assert normalized["derived"][0]["target"] == "feature:H.explicit_centers.1"
+
+
+def test_uncertain_warning_cannot_coexist_with_closed_geometry():
+    drawing_path = os.path.abspath(
+        os.path.join(PROJECT, "..", "..", "skills", "nx-agent", "examples", "example-output.json")
+    )
+    with open(drawing_path, encoding="utf-8") as handle:
+        drawing = json.load(handle)
+    drawing["warnings"] = ["slot depth 为推定值，需确认"]
+    drawing["dimension_closure"] = {"status": "closed"}
+    errors = R.check_drawing_json(drawing)
+    assert any("warnings contain inferred/uncertain geometry" in error for error in errors)
+
+
+def _thread_drawing(surrogate=None):
+    feature = {
+        "id": "T1",
+        "type": "tapped_hole",
+        "dimensions": {"thread_size": "M6", "depth": 12},
+        "required_for_modeling": True,
+    }
+    if surrogate is not None:
+        feature["surrogate_geometry"] = surrogate
+    return {"features": [feature]}
+
+
+def test_required_m6_without_surrogate_is_capability_violation():
+    errors = R.drawing_thread_capability_errors(_thread_drawing())
+    assert any("capability_violation" in error for error in errors)
+
+
+def test_explicit_approved_thread_surrogate_is_allowed():
+    drawing = _thread_drawing({
+        "diameter": 5.0,
+        "depth": 12,
+        "axis_range": [-20, -8],
+        "approved_for_delivery": True,
+    })
+    assert R.drawing_thread_capability_errors(drawing) == []
+
+
+def test_gate_b_blocks_planner_generated_m6_tap_drill(tmp_path=None):
+    import tempfile
+    from types import SimpleNamespace
+
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing_path = os.path.join(directory, "drawing.json")
+    frozen_path = os.path.join(directory, "frozen.json")
+    executable_path = os.path.join(directory, "executable.json")
+    with open(drawing_path, "w", encoding="utf-8") as handle:
+        json.dump(_thread_drawing(), handle)
+    frozen = {
+        "mode": "FAST",
+        "notes": ["M6 modeled as D5.0 tap drill"],
+        "operations": [{
+            "step": 1,
+            "tool": "nx_create_part",
+            "tool_args": {"path": "part.prt"},
+            "topology_changes": False,
+        }],
+    }
+    with open(frozen_path, "w", encoding="utf-8") as handle:
+        json.dump(frozen, handle)
+    code, result = _capture_json_command(
+        R._cmd_build,
+        SimpleNamespace(plan=frozen_path, out=executable_path, drawing=drawing_path),
+    )
+    assert code == 1
+    assert not os.path.exists(executable_path)
+    assert any("capability_violation" in error for error in result["capability_errors"])
+
+
+def test_gate_b_normal_drawing_path_still_builds_with_lineage(tmp_path=None):
+    import tempfile
+    from types import SimpleNamespace
+
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing_path = os.path.abspath(
+        os.path.join(PROJECT, "..", "..", "skills", "nx-agent", "examples", "example-output.json")
+    )
+    executable_path = os.path.join(directory, "executable.json")
+    code, result = _capture_json_command(
+        R._cmd_build,
+        SimpleNamespace(plan=FROZEN_PLAN, out=executable_path, drawing=drawing_path),
+    )
+    assert code == 0, result
+    with open(executable_path, encoding="utf-8") as handle:
+        executable = json.load(handle)
+    assert executable["design_guard"]["source_drawing"] == drawing_path
+    assert executable["design_guard"]["drawing_semantics_sha256"]
+    assert executable["design_guard"]["plan_geometry_sha256"]
+
+
+def test_failed_design_lineage_cannot_escape_by_output_rename(tmp_path=None):
+    import tempfile
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    history = R.RunHistory(os.path.join(directory, "history.json"))
+    plan = {"operations": [{
+        "step": 1,
+        "tool": "nx_extrude",
+        "tool_args": {"distance": 40, "start_offset": -20},
+        "topology_changes": True,
+    }]}
+    guard = R.make_design_guard({"features": []}, os.path.join(directory, "drawing.json"), plan)
+    history.record_start(
+        os.path.join(directory, "part.prt"), "normal", "plan.json", design_guard=guard
+    )
+    history.record_failed(os.path.join(directory, "part.prt"))
+    errors = R.normal_run_lineage_errors(0, guard, history)
+    assert any("requires --repair-attempt 1" in error for error in errors)
+    assert history.most_recent(os.path.join(directory, "part_v2.prt")) is None
+
+
+def test_repair_rejects_geometry_bearing_range_change():
+    drawing = {"features": []}
+    plan1 = {"operations": [{
+        "step": 1, "tool": "nx_extrude",
+        "tool_args": {"distance": 40, "start_offset": -20},
+        "topology_changes": True,
+    }]}
+    plan2 = {"operations": [{
+        "step": 1, "tool": "nx_extrude",
+        "tool_args": {"distance": 19, "start_offset": 1},
+        "topology_changes": True,
+    }]}
+    guard1 = R.make_design_guard(drawing, r"C:\ws\drawing.json", plan1)
+    guard2 = R.make_design_guard(drawing, r"C:\ws\drawing.json", plan2)
+    previous = {
+        "status": "failed",
+        "failed_step": 1,
+        "repair_attempt": 0,
+        "planned_part": r"C:\ws\part.prt",
+        "design_guard": guard1,
+    }
+    errors = R.repair_request_errors(
+        1, "benchmark", True, r"C:\ws\part.prt", previous, guard2
+    )
+    assert any("geometry-bearing plan fields" in error for error in errors)
+
+
 def _capture_json_command(command, args):
     import contextlib
     import io

@@ -192,5 +192,6 @@
   "dimension_closure": {
     "status": "closed",
     "basis": "required geometry has direct or deterministic provenance"
-  }
+  },
+  "relations": []
 }
