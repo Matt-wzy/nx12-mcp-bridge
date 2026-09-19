@@ -1,4 +1,4 @@
-# install-agent.ps1
+﻿# install-agent.ps1
 # 安装统一 NX Agent Skill + Plan Runner。
 
 [CmdletBinding()]
