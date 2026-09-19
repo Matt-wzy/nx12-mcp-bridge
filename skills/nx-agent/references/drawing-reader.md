@@ -220,6 +220,7 @@ DETAIL / SECTION 是局部几何高优先级证据。出现矛盾必须进入 `u
 
 关键规则：
 - direct source 只写一个 `target`；语义与 target 不兼容时 validator 直接失败；
+- direct 只用于图上尺寸线/引线/符号**直接绑定**的目标；由边距、中心距、相切、对称等关系计算出的值必须用 relation/derived，禁止伪装成 `center_position` / `position_dimension` 直接值；
 - `center_distance / center_spacing` 写 `between:[targetA,targetB]`，只能用于这两个 endpoint 的推导；
 - 从 overall 外形边到中心的尺寸写 `edge_offset` + `axis` + `from:min|max` + `targets`；机器按 centered bbox 反算，禁止把边距值直接当全局坐标；
 - tangent relation 写 `center / diameter / tangent / links`，由机器反算切点；
