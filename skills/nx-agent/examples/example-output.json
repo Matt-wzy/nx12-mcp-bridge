@@ -61,7 +61,8 @@
         ]
       },
       "count": 1,
-      "required_for_modeling": true
+      "required_for_modeling": true,
+      "axis": "Z"
     }
   ],
   "source_ledger": [
@@ -133,6 +134,12 @@
       "semantic": "feature_count",
       "value": 1,
       "target": "feature:F_BOSS.count"
+    },
+    {
+      "id": "S_HOLE_AXIS",
+      "semantic": "axis",
+      "value": "Z",
+      "target": "feature:F_HOLE.axis"
     },
     {
       "id": "S_HOLE_D",
