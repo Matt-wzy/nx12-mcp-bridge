@@ -105,7 +105,7 @@ def main() -> None:
                 "type": "through_hole",
                 "diameter": 20,
                 "axis": "Y",
-                "centerline": {"z": 40},
+                "centerline": {"x": 0, "z": 40},
                 "count": 1,
                 "required_for_modeling": True,
             },
@@ -124,7 +124,7 @@ def main() -> None:
                 "id": "F_CLAMP",
                 "type": "hole_group",
                 "axis": "X",
-                "centerline": {"z": 58},
+                "centerline": {"y": 0, "z": 58},
                 "count": 1,
                 "required_for_modeling": True,
             },
@@ -168,6 +168,12 @@ def main() -> None:
                 "semantic": "axis",
                 "value": "Y",
                 "target": "feature:F_MAIN.axis",
+            },
+            {
+                "id": "S_MAIN_X",
+                "semantic": "center_position",
+                "value": 0,
+                "target": "feature:F_MAIN.centerline.x",
             },
             {
                 "id": "S_MAIN_Z",
@@ -219,6 +225,12 @@ def main() -> None:
                 "semantic": "axis",
                 "value": "X",
                 "target": "feature:F_CLAMP.axis",
+            },
+            {
+                "id": "S_CLAMP_Y",
+                "semantic": "center_position",
+                "value": 0,
+                "target": "feature:F_CLAMP.centerline.y",
             },
             {
                 "id": "S_CLAMP_N",
