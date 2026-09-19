@@ -80,13 +80,16 @@ public static class NX_MCP_Loader
     {
         get
         {
-            try
+            string ws = null;
+            try { ws = Environment.GetEnvironmentVariable("NX_MCP_WORKSPACE"); } catch { }
+            if (string.IsNullOrEmpty(ws))
             {
-                string ws = Environment.GetEnvironmentVariable("NX_MCP_WORKSPACE");
-                if (!string.IsNullOrEmpty(ws)) return Path.Combine(ws, "nx_mcp_loader.log");
+                ws = Path.Combine(
+                    Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                    "NX_MCP_WORKSPACE");
             }
-            catch { }
-            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "nx_mcp_loader.log");
+            try { Directory.CreateDirectory(ws); } catch { }
+            return Path.Combine(ws, "nx_mcp_loader.log");
         }
     }
 
