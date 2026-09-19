@@ -146,6 +146,41 @@ def main() -> None:
     if not runner.check_drawing_json(bad_semantic):
         fail("drawing validator does not reject incompatible source semantic")
 
+    bad_feature_kind = json.loads(json.dumps(drawing_example))
+    for feature in bad_feature_kind["features"]:
+        if feature.get("id") == "F_HOLE":
+            feature["type"] = "boss"
+    if not runner.check_drawing_json(bad_feature_kind):
+        fail("drawing validator does not reject feature-kind drift")
+
+    bad_incomplete_slot = json.loads(json.dumps(drawing_example))
+    for feature in bad_incomplete_slot["features"]:
+        if feature.get("id") == "F_HOLE":
+            feature["type"] = "slot"
+    for source in bad_incomplete_slot["source_ledger"]:
+        if source.get("id") == "S_HOLE_KIND":
+            source["value"] = "slot"
+    if not runner.check_drawing_json(bad_incomplete_slot):
+        fail("drawing validator does not reject structurally incomplete slot")
+
+    bad_center_vector = json.loads(json.dumps(drawing_example))
+    for feature in bad_center_vector["features"]:
+        if feature.get("id") == "F_BOSS":
+            feature["position"]["center"] = [0]
+    for source in bad_center_vector["source_ledger"]:
+        if source.get("id") == "S_BOSS_C":
+            source["value"] = [0]
+    if not runner.check_drawing_json(bad_center_vector):
+        fail("drawing validator does not reject incomplete center vectors")
+
+    bad_rectangular = json.loads(json.dumps(pattern_fixture))
+    bad_rectangular["patterns"][0]["pattern_type"] = "rectangular"
+    for source in bad_rectangular["source_ledger"]:
+        if source.get("id") == "S_PATTERN_TYPE":
+            source["value"] = "rectangular"
+    if not runner.check_drawing_json(bad_rectangular):
+        fail("drawing validator does not reject incomplete rectangular patterns")
+
     geometry_fixture = {
         "overall_dimensions": {"length_x": 40, "width_y": 32, "height_z": 66},
         "coordinate_system": {"origin": "part_center_xy_bottom_z0"},
@@ -214,6 +249,12 @@ def main() -> None:
                 "target": "feature:F_MAIN.diameter",
             },
             {
+                "id": "S_MAIN_KIND",
+                "semantic": "feature_kind",
+                "value": "through_hole",
+                "target": "feature:F_MAIN.type",
+            },
+            {
                 "id": "S_MAIN_AXIS",
                 "semantic": "axis",
                 "value": "Y",
@@ -242,6 +283,12 @@ def main() -> None:
                 "semantic": "slot_width",
                 "value": 2,
                 "target": "feature:F_SLOT.width",
+            },
+            {
+                "id": "S_SLOT_KIND",
+                "semantic": "feature_kind",
+                "value": "slot",
+                "target": "feature:F_SLOT.type",
             },
             {
                 "id": "S_SLOT_WAX",
@@ -277,6 +324,12 @@ def main() -> None:
                 "target": "feature:F_CLAMP.axis",
             },
             {
+                "id": "S_CLAMP_KIND",
+                "semantic": "feature_kind",
+                "value": "hole_group",
+                "target": "feature:F_CLAMP.type",
+            },
+            {
                 "id": "S_CLAMP_Y",
                 "semantic": "center_position",
                 "value": 0,
@@ -305,6 +358,12 @@ def main() -> None:
                 "semantic": "diameter",
                 "value": 6.6,
                 "target": "feature:F_BASE_HOLES.diameter",
+            },
+            {
+                "id": "S_BASE_KIND",
+                "semantic": "feature_kind",
+                "value": "pattern",
+                "target": "feature:F_BASE_HOLES.type",
             },
             {
                 "id": "S_BASE_AXIS",
@@ -399,14 +458,26 @@ def main() -> None:
     if fixture_errors:
         fail(f"drawing geometry fixture fails Gate A validator: {fixture_errors[:5]}")
 
+    bad_alignment = json.loads(json.dumps(geometry_fixture))
+    bad_alignment["source_ledger"].append(
+        {
+            "id": "S_FALSE_ALIGNMENT",
+            "semantic": "alignment",
+            "links": [
+                "feature:F_MAIN.centerline.z",
+                "feature:F_CLAMP.centerline.z",
+            ],
+        }
+    )
+    if not runner.check_drawing_json(bad_alignment):
+        fail("drawing validator does not reject false alignment relations")
+
     bad_center_missing = json.loads(json.dumps(geometry_fixture))
     for feature in bad_center_missing["features"]:
         if feature.get("id") == "F_MAIN":
             feature["centerline"].pop("x", None)
     bad_center_missing["source_ledger"] = [
-        source
-        for source in bad_center_missing["source_ledger"]
-        if source.get("id") != "S_MAIN_X"
+        source for source in bad_center_missing["source_ledger"] if source.get("id") != "S_MAIN_X"
     ]
     if not runner.check_drawing_json(bad_center_missing):
         fail("drawing validator does not reject incomplete hole center coordinates")

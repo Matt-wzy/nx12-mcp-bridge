@@ -1390,6 +1390,7 @@ def check_plan(plan: dict, executable: bool = True) -> list[str]:
 # Gate A drawing JSON validator — deterministic, part-agnostic, no NX
 # --------------------------------------------------------------------------
 _DRAWING_HARD_KEYS = {
+    "type",
     "length",
     "length_x",
     "width",
@@ -1459,7 +1460,6 @@ _DRAWING_HARD_KEYS = {
 _DRAWING_META_KEYS = {
     "id",
     "name",
-    "type",
     "source_views",
     "confidence",
     "required_for_modeling",
@@ -1654,7 +1654,7 @@ def _drawing_direct_semantic_ok(data: dict, source: dict) -> bool:
     if semantic == "thread_spec":
         return leaf == "spec"
     if semantic == "feature_kind":
-        return leaf == "kind"
+        return leaf in {"type", "kind"}
     if semantic == "side":
         return leaf in {"side", "start_side"}
     if semantic == "through":
@@ -1857,6 +1857,21 @@ def _drawing_relation_ref_ok(
     if target_refs and not any(ref in links for ref in target_refs):
         return False, f"relation source {semantic!r} does not link a derived dependency"
 
+    if semantic in {"coincident", "alignment"}:
+        values: list[float] = []
+        if len(links) < 2:
+            return False, f"relation source {semantic!r} requires at least two links"
+        for link in links:
+            try:
+                value = _num(_drawing_path_get(data, link))
+            except KeyError:
+                return False, f"relation source {semantic!r} references a missing target"
+            if value is None:
+                return False, f"relation source {semantic!r} links must be numeric scalars"
+            values.append(value)
+        if any(abs(value - values[0]) > 1e-9 for value in values[1:]):
+            return False, f"relation source {semantic!r} does not match target geometry"
+
     if semantic in {"upper_tangent", "lower_tangent"}:
         center = source.get("center")
         diameter = source.get("diameter")
@@ -1965,7 +1980,7 @@ def _drawing_check_feature_bbox(
                         bbox,
                     )
         elif isinstance(center, list):
-            for axis, value in zip(("x", "y", "z"), center):
+            for axis, value in zip(("x", "y", "z"), center, strict=False):
                 _drawing_check_coord(
                     errors, f"feature {fid} position.center", axis, value, bbox
                 )
@@ -1981,7 +1996,7 @@ def _drawing_check_feature_bbox(
                             errors, label, axis, center.get(axis), bbox
                         )
             elif isinstance(center, list):
-                for axis, value in zip(("x", "y", "z"), center):
+                for axis, value in zip(("x", "y", "z"), center, strict=False):
                     _drawing_check_coord(errors, label, axis, value, bbox)
 
     for axis in ("x", "y", "z"):
@@ -2020,7 +2035,7 @@ def _drawing_check_profile_bbox(
                 _drawing_check_coord(errors, path, key[0], child, bbox)
                 continue
             if key in {"start", "end", "center"} and isinstance(child, list):
-                for axis, item in zip(("x", "y", "z"), child):
+                for axis, item in zip(("x", "y", "z"), child, strict=False):
                     _drawing_check_coord(errors, path, axis, item, bbox)
                 continue
             _drawing_check_profile_bbox(errors, child, bbox, path)
@@ -2051,6 +2066,40 @@ def _drawing_feature_coord(feature: dict, axis: str) -> Any:
 def _drawing_check_feature_structure(errors: list[str], feature: dict) -> None:
     fid = str(feature.get("id") or "?")
     feature_type = str(feature.get("type") or "").lower()
+    if not feature_type:
+        errors.append(f"feature {fid!r} requires a non-empty type")
+        return
+
+    position = feature.get("position")
+    if isinstance(position, dict) and isinstance(position.get("center"), list):
+        center = position["center"]
+        if len(center) not in {2, 3} or not all(_num(item) is not None for item in center):
+            errors.append(
+                f"feature {fid!r} position.center must contain 2 or 3 numeric coordinates"
+            )
+
+    explicit = feature.get("explicit_centers")
+    if isinstance(explicit, list):
+        for idx, center in enumerate(explicit):
+            if isinstance(center, list) and (
+                len(center) not in {2, 3} or not all(_num(item) is not None for item in center)
+            ):
+                errors.append(
+                    f"feature {fid!r} explicit_centers[{idx}] must contain 2 or 3 numeric coordinates"
+                )
+
+    if feature_type in {"slot", "slit"}:
+        width = _num(feature.get("width"))
+        width_axis = str(feature.get("width_axis") or "").upper()
+        through_axis = str(feature.get("through_axis") or "").upper()
+        if width is None or width <= 0:
+            errors.append(f"feature {fid!r} {feature_type} requires positive width")
+        if width_axis not in {"X", "Y", "Z"}:
+            errors.append(f"feature {fid!r} {feature_type} requires width_axis X/Y/Z")
+        if through_axis not in {"X", "Y", "Z"}:
+            errors.append(f"feature {fid!r} {feature_type} requires through_axis X/Y/Z")
+        if width_axis == through_axis and width_axis in {"X", "Y", "Z"}:
+            errors.append(f"feature {fid!r} {feature_type} width_axis and through_axis must differ")
     hole_like = "hole" in feature_type or feature_type == "coaxial_hole_group"
     if not hole_like:
         return
@@ -2060,10 +2109,16 @@ def _drawing_check_feature_structure(errors: list[str], feature: dict) -> None:
         errors.append(f"feature {fid!r} hole-like geometry requires axis X/Y/Z")
         return
 
-    explicit = feature.get("explicit_centers")
     count = _num(feature.get("count"))
     if isinstance(explicit, list) and count is not None and count > 1:
         return
+
+    if axis in {"X", "Y"} and isinstance(position, dict):
+        center = position.get("center")
+        if isinstance(center, list) and len(center) != 3:
+            errors.append(
+                f"feature {fid!r} axis {axis} requires a 3D center list or named center coordinates"
+            )
 
     needed = {
         "X": ("y", "z"),
@@ -2092,10 +2147,15 @@ def _drawing_check_count(errors: list[str], item: dict, label: str) -> None:
         errors.append(f"{label} explicit_centers {len(explicit)} != count {n_int}")
 
     count_x, count_y = _num(item.get("count_x")), _num(item.get("count_y"))
-    if item.get("pattern_type") == "rectangular" and count_x is not None and count_y is not None:
-        product = int(count_x) * int(count_y)
-        if product != n_int:
-            errors.append(f"{label} count_x*count_y {product} != count {n_int}")
+    if item.get("pattern_type") == "rectangular":
+        if count_x is None or count_y is None:
+            errors.append(f"{label} rectangular pattern requires count_x and count_y")
+        elif any(value <= 0 or int(value) != value for value in (count_x, count_y)):
+            errors.append(f"{label} count_x and count_y must be positive integers")
+        else:
+            product = int(count_x) * int(count_y)
+            if product != n_int:
+                errors.append(f"{label} count_x*count_y {product} != count {n_int}")
 
 
 def _drawing_check_symmetry(
@@ -2287,11 +2347,14 @@ def check_drawing_json(data: dict) -> list[str]:
                             b = _num(_drawing_path_get(data, between[1]))
                         except KeyError:
                             a, b = None, None
-                        if a is not None and b is not None:
-                            if abs(abs(a - b) - value) > 1e-9:
-                                errors.append(
-                                    f"source {sid!r} center distance does not match endpoints"
-                                )
+                        if (
+                            a is not None
+                            and b is not None
+                            and abs(abs(a - b) - value) > 1e-9
+                        ):
+                            errors.append(
+                                f"source {sid!r} center distance does not match endpoints"
+                            )
             elif semantic in {"upper_tangent", "lower_tangent"}:
                 center = source.get("center")
                 diameter = source.get("diameter")
@@ -2334,6 +2397,16 @@ def check_drawing_json(data: dict) -> list[str]:
                     relation_targets.add(tangent)
             elif semantic == "symmetry":
                 _drawing_check_symmetry(errors, source, features)
+            elif semantic in {"coincident", "alignment"}:
+                links = source.get("links")
+                if not isinstance(links, list) or not links:
+                    errors.append(f"source {sid!r} {semantic} requires links")
+                else:
+                    ok, reason = _drawing_relation_ref_ok(
+                        data, source, links[0], set(links[1:])
+                    )
+                    if not ok and reason:
+                        errors.append(f"source {sid!r}: {reason}")
             continue
 
         target = source.get("target")

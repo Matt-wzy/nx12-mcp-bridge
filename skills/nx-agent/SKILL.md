@@ -86,6 +86,7 @@ Gate A 判断的是**最低充分建模闭合**，不是“整张图所有文字
 - 能由图中**明确尺寸 + 明确拓扑关系**唯一计算出的值进入 `derived`，不进入 `unresolved`；
 - `required_for_modeling=false` 的粗糙度、普通工艺说明、非建模表格字段、无关 OCR 模糊项进入 `warnings` / soft unresolved，**不得阻塞 Gate A**；
 - 只有会改变最终三维实体的尺寸、位置、数量、方向、轮廓、贯穿/深度等关键项无法唯一确定时才 BLOCKED。
+- required feature 的顶层 `type` 也属于 HARD 几何语义，必须由 `feature_kind` source 绑定，不能作为 metadata 跳过。
 
 Gate A 失败时只向用户询问**真正 blocking 的最少问题**，不得把 non-blocking warning 一并当成澄清问题。
 
