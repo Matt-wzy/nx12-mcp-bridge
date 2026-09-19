@@ -1529,6 +1529,23 @@ def _drawing_target_feature_id(target: str) -> str | None:
     return feature_id or None
 
 
+def _drawing_is_center_target(target: str) -> bool:
+    leaf = target.split(".")[-1].lower()
+    return (
+        ".centerline." in target
+        or ".position.center" in target
+        or leaf in {
+            "center",
+            "centerline_x",
+            "centerline_y",
+            "centerline_z",
+            "hole_x",
+            "hole_y",
+            "hole_z",
+        }
+    )
+
+
 def _drawing_hard_paths(value: Any, prefix: str = "") -> set[str]:
     """Collect geometry-bearing leaf paths from one required feature/profile."""
     out: set[str] = set()
@@ -1605,6 +1622,8 @@ def _drawing_direct_semantic_ok(data: dict, source: dict) -> bool:
         )
     if semantic == "thread_spec":
         return leaf == "spec"
+    if semantic == "feature_kind":
+        return leaf == "kind"
     if semantic == "side":
         return leaf in {"side", "start_side"}
     if semantic == "through":
@@ -2113,6 +2132,10 @@ def check_drawing_json(data: dict) -> list[str]:
                 ):
                     errors.append(f"source {sid!r} requires between=[targetA,targetB]")
                 else:
+                    if not all(_drawing_is_center_target(target) for target in between):
+                        errors.append(
+                            f"source {sid!r} center distance endpoints must be center coordinates"
+                        )
                     for target in between:
                         try:
                             _drawing_path_get(data, target)
