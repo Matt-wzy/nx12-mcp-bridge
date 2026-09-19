@@ -34,6 +34,8 @@ description: 作者：抖音 无趣。Siemens NX 自动建模统一入口。支�
 用户上传二维机械工程图并要求“开始建模”“按图建模”“用 NX 画出来”等时：
 
 1. 读取 `references/drawing-reader.md` + `references/nx-drawing-rules.md`。
+   Mode B 必须整图一次读取；禁止 OCR 主导的分块扫描。整图之外最多 2 次针对关键模糊标注的
+   定点局部复核；超预算仍不确定就直接 `unresolved`，不得继续裁剪/OCR。
 2. 输出结构化 JSON，并通过门禁 A。
 3. 读取建模规划与拓扑规则，生成 frozen plan，并通过门禁 B。
 4. 调用 Plan Runner 执行。
