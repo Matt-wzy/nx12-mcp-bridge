@@ -328,6 +328,39 @@ def main() -> None:
     if not runner.check_drawing_json(bad_slot_source):
         fail("drawing validator does not reject center-distance reuse as slot bottom")
 
+    bad_center_endpoint = json.loads(json.dumps(geometry_fixture))
+    for source in bad_center_endpoint["source_ledger"]:
+        if source.get("id") == "S_E18":
+            source["between"] = [
+                "feature:F_MAIN.centerline.z",
+                "feature:F_SLOT.bottom_z",
+            ]
+    if not runner.check_drawing_json(bad_center_endpoint):
+        fail("drawing validator does not reject non-center endpoint for center_distance")
+
+    good_symmetry = json.loads(json.dumps(geometry_fixture))
+    good_symmetry["source_ledger"].append(
+        {
+            "id": "S_SYM_X",
+            "semantic": "symmetry",
+            "feature": "F_BASE_HOLES",
+            "axis": "X",
+            "about": 0,
+        }
+    )
+    if runner.check_drawing_json(good_symmetry):
+        fail("drawing validator rejects a valid explicit-center symmetry relation")
+
+    bad_symmetry = json.loads(json.dumps(good_symmetry))
+    for feature in bad_symmetry["features"]:
+        if feature.get("id") == "F_BASE_HOLES":
+            feature["explicit_centers"] = [[-10, 8], [14, 8]]
+    for source in bad_symmetry["source_ledger"]:
+        if source.get("id") == "S_BASE_C":
+            source["value"] = [[-10, 8], [14, 8]]
+    if not runner.check_drawing_json(bad_symmetry):
+        fail("drawing validator does not reject asymmetric centers")
+
     bad_bbox = json.loads(json.dumps(geometry_fixture))
     for feature in bad_bbox["features"]:
         if feature.get("id") == "F_BASE_HOLES":
