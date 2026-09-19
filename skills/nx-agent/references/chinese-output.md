@@ -63,7 +63,9 @@ B 阶段若因能力边界失败：
 - 明确写“失败阶段：建模规划”，不得进入 Runner；
 - 说明哪个 required feature 当前 32 个 certified tools 无法等价建模；
 - 禁止把 unsupported feature 描述成“已由普通孔/其它特征等价表达”；
-- 只有用户/输入明确提供并允许 geometry-preserving surrogate 后，才可重新规划。
+- 输入 surrogate 或机器参数化 resolver 都不可用时，必须等待输入补充后才可重新规划。
+
+使用机器 thread surrogate 成功时，最终结果必须列出 nominal diameter、pitch、pitch source、统一计算方法与 surrogate diameter，并明确未生成真实螺纹牙型。
 
 C 首次失败且不可修复：
 ```
@@ -116,4 +118,3 @@ C 修复后再次失败：
 - `required_for_modeling=false` 的粗糙度、普通工艺说明、非建模字段等只可作为简短 warning；不得混入“必须确认”的问题列表。
 - 能 deterministic derived 的尺寸直接使用，并可在需要时简短注明算式；不得要求用户再次确认已经唯一推导出的值。
 - Gate A PASS 且只有 soft warnings 时，继续 Planner，不得仅因 warning 停止。
-

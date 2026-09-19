@@ -1871,10 +1871,18 @@ def _valid_thread_surrogate(surrogate: Any) -> bool:
     )
 
 
-_THREAD_SURROGATE_RECIPES = {
-    # Deliberately small and machine-maintained. Recipes may replace only the
-    # unavailable thread form; placement and extent remain drawing semantics.
-    "M6": {"representation": "tap_drill", "diameter": 5.0},
+# ISO metric coarse-pitch metadata. This is standards input, not final modeling
+# geometry: every surrogate diameter is calculated by the same rule below.
+_ISO_METRIC_COARSE_PITCH_MM = {
+    1.0: 0.25, 1.2: 0.25, 1.4: 0.30, 1.6: 0.35, 1.8: 0.35,
+    2.0: 0.40, 2.2: 0.45, 2.5: 0.45, 3.0: 0.50, 3.5: 0.60,
+    4.0: 0.70, 4.5: 0.75, 5.0: 0.80, 6.0: 1.00, 7.0: 1.00,
+    8.0: 1.25, 10.0: 1.50, 12.0: 1.75, 14.0: 2.00,
+    16.0: 2.00, 18.0: 2.50, 20.0: 2.50, 22.0: 2.50,
+    24.0: 3.00, 27.0: 3.00, 30.0: 3.50, 33.0: 3.50,
+    36.0: 4.00, 39.0: 4.00, 42.0: 4.50, 45.0: 4.50,
+    48.0: 5.00, 52.0: 5.00, 56.0: 5.50, 60.0: 5.50,
+    64.0: 6.00,
 }
 
 
@@ -1888,18 +1896,44 @@ def _thread_spec(feature: dict) -> str | None:
     return None
 
 
-def _canonical_thread_recipe_key(spec: str | None) -> str | None:
+def _metric_number_text(value: float) -> str:
+    return f"{value:.12g}"
+
+
+def resolve_metric_thread_parameters(
+    spec: str | None,
+) -> tuple[dict | None, str | None]:
+    """Parse M designation and resolve pitch without producing model geometry."""
     if not isinstance(spec, str):
-        return None
+        return None, "thread designation is missing"
     compact = re.sub(r"\s+", "", spec.upper().replace("×", "X"))
     match = re.fullmatch(r"M(\d+(?:\.\d+)?)(?:X(\d+(?:\.\d+)?))?", compact)
     if not match:
-        return None
-    size = float(match.group(1))
-    pitch = float(match.group(2)) if match.group(2) is not None else None
-    if size == 6.0 and (pitch is None or pitch == 1.0):
-        return "M6"
-    return None
+        return None, f"unsupported metric thread designation {spec!r}"
+    nominal = float(match.group(1))
+    if nominal <= 0:
+        return None, f"invalid nominal diameter in thread designation {spec!r}"
+    if match.group(2) is not None:
+        pitch = float(match.group(2))
+        pitch_source = "drawing_explicit"
+    else:
+        pitch = _ISO_METRIC_COARSE_PITCH_MM.get(nominal)
+        pitch_source = "standard_default_coarse"
+        if pitch is None:
+            return None, (
+                f"no standard coarse-pitch metadata for nominal diameter {nominal:g}"
+            )
+    if pitch <= 0 or pitch >= nominal:
+        return None, f"invalid pitch in thread designation {spec!r}"
+    canonical = f"M{_metric_number_text(nominal)}"
+    if match.group(2) is not None:
+        canonical += f"x{_metric_number_text(pitch)}"
+    return {
+        "thread_spec": canonical,
+        "nominal_diameter": nominal,
+        "pitch": pitch,
+        "pitch_source": pitch_source,
+    }, None
 
 
 def resolve_thread_surrogates(drawing: dict) -> tuple[list[dict], list[str]]:
@@ -1919,37 +1953,50 @@ def resolve_thread_surrogates(drawing: dict) -> tuple[list[dict], list[str]]:
                     "input surrogate_geometry"
                 )
                 continue
+            parameters, _ = resolve_metric_thread_parameters(spec)
             item = copy.deepcopy(supplied)
+            input_diameter = item.pop("diameter")
             item.update({
                 "feature_id": fid,
                 "kind": "thread_surrogate",
                 "thread_spec": spec,
+                "surrogate_method": "drawing_input",
+                "surrogate_diameter": input_diameter,
                 "approximation": True,
                 "reason": "real thread capability unavailable",
                 "provenance": "drawing_input",
                 "supplemented_fields": [],
             })
+            if parameters is not None:
+                item.update({
+                    "nominal_diameter": parameters["nominal_diameter"],
+                    "pitch": parameters["pitch"],
+                    "pitch_source": parameters["pitch_source"],
+                })
             resolved.append(item)
             continue
 
-        key = _canonical_thread_recipe_key(spec)
-        recipe = _THREAD_SURROGATE_RECIPES.get(key or "")
-        if recipe is None:
+        parameters, parameter_error = resolve_metric_thread_parameters(spec)
+        if parameters is None:
             errors.append(
                 f"capability_violation: required threaded feature {fid!r} with "
-                f"spec {spec!r} has no deterministic surrogate recipe"
+                f"spec {spec!r} cannot use deterministic surrogate: {parameter_error}"
             )
             continue
+        surrogate_diameter = round(
+            parameters["nominal_diameter"] - parameters["pitch"], 12
+        )
         resolved.append({
             "feature_id": fid,
             "kind": "thread_surrogate",
-            "thread_spec": key,
-            "representation": recipe["representation"],
-            "diameter": recipe["diameter"],
+            **parameters,
+            "representation": "tap_drill",
+            "surrogate_method": "nominal_minus_pitch",
+            "surrogate_diameter": surrogate_diameter,
             "approximation": True,
             "reason": "real thread capability unavailable",
-            "provenance": "fixed_machine_recipe",
-            "supplemented_fields": ["representation", "diameter"],
+            "provenance": "parameterized_metric_resolver",
+            "supplemented_fields": ["representation", "surrogate_diameter"],
         })
     return resolved, errors
 
@@ -1977,7 +2024,7 @@ def thread_surrogate_plan_errors(plan: dict, expected: list[dict]) -> list[str]:
     for recipe in expected:
         fid = recipe.get("feature_id")
         recipe_hash = _json_sha256(recipe)
-        diameter = _num(recipe.get("diameter"))
+        diameter = _num(recipe.get("surrogate_diameter"))
         matching = []
         for op in plan.get("operations") or []:
             use = op.get("thread_surrogate_use")
@@ -2000,8 +2047,9 @@ def thread_approximations_from_guard(design_guard: Any) -> list[dict]:
     if not isinstance(design_guard, dict):
         return []
     fields = (
-        "feature_id", "kind", "thread_spec", "representation", "diameter",
-        "approximation", "reason", "provenance",
+        "feature_id", "kind", "thread_spec", "nominal_diameter", "pitch",
+        "pitch_source", "representation", "surrogate_method",
+        "surrogate_diameter", "approximation", "reason", "provenance",
     )
     return [
         {key: copy.deepcopy(item.get(key)) for key in fields if key in item}

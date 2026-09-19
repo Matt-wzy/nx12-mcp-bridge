@@ -867,25 +867,60 @@ def _thread_drawing(surrogate=None):
     return {"features": [feature]}
 
 
-def test_required_m6_without_input_surrogate_uses_fixed_recipe():
+def test_bare_m6_uses_standard_pitch_then_parameterized_formula():
     recipes, errors = R.resolve_thread_surrogates(_thread_drawing())
     assert errors == []
     assert recipes == [{
         "feature_id": "T1",
         "kind": "thread_surrogate",
         "thread_spec": "M6",
+        "nominal_diameter": 6.0,
+        "pitch": 1.0,
+        "pitch_source": "standard_default_coarse",
         "representation": "tap_drill",
-        "diameter": 5.0,
+        "surrogate_method": "nominal_minus_pitch",
+        "surrogate_diameter": 5.0,
         "approximation": True,
         "reason": "real thread capability unavailable",
-        "provenance": "fixed_machine_recipe",
-        "supplemented_fields": ["representation", "diameter"],
+        "provenance": "parameterized_metric_resolver",
+        "supplemented_fields": ["representation", "surrogate_diameter"],
     }]
     forbidden = {"axis", "center", "position", "depth", "range", "side", "count"}
     assert forbidden.isdisjoint(recipes[0])
+
+
+def test_explicit_m6_pitch_is_parsed_and_calculated():
     pitched = _thread_drawing()
     pitched["features"][0]["dimensions"]["thread_size"] = "M6×1.0"
-    assert R.resolve_thread_surrogates(pitched)[0][0]["thread_spec"] == "M6"
+    recipe = R.resolve_thread_surrogates(pitched)[0][0]
+    assert recipe["thread_spec"] == "M6x1"
+    assert recipe["nominal_diameter"] == 6.0
+    assert recipe["pitch"] == 1.0
+    assert recipe["pitch_source"] == "drawing_explicit"
+    assert recipe["surrogate_diameter"] == 5.0
+
+
+def test_different_metric_thread_uses_same_parameterized_path():
+    drawing = _thread_drawing()
+    drawing["features"][0]["dimensions"]["thread_size"] = "M8x1.25"
+    recipe = R.resolve_thread_surrogates(drawing)[0][0]
+    assert recipe["nominal_diameter"] == 8.0
+    assert recipe["pitch"] == 1.25
+    assert recipe["surrogate_method"] == "nominal_minus_pitch"
+    assert recipe["surrogate_diameter"] == 6.75
+    drawing["features"][0]["dimensions"]["thread_size"] = "M8"
+    bare_recipe = R.resolve_thread_surrogates(drawing)[0][0]
+    assert bare_recipe["pitch_source"] == "standard_default_coarse"
+    assert bare_recipe["pitch"] == 1.25
+    assert bare_recipe["surrogate_diameter"] == 6.75
+
+
+def test_runner_has_no_thread_size_to_final_diameter_mapping():
+    import inspect
+    source = inspect.getsource(R)
+    assert "_THREAD_SURROGATE_RECIPES" not in source
+    assert '"M6":' not in source
+    assert R._ISO_METRIC_COARSE_PITCH_MM[6.0] == 1.0
 
 
 def test_explicit_approved_thread_surrogate_is_allowed():
@@ -984,7 +1019,7 @@ def test_gate_b_blocks_planner_generated_m6_tap_drill(tmp_path=None):
                for error in result["capability_errors"])
 
 
-def test_gate_b_builds_m6_fixed_surrogate_with_machine_provenance(tmp_path=None):
+def test_gate_b_builds_m6_parameterized_surrogate_with_machine_provenance(tmp_path=None):
     import tempfile
     from types import SimpleNamespace
 
@@ -1012,20 +1047,47 @@ def test_gate_b_builds_m6_fixed_surrogate_with_machine_provenance(tmp_path=None)
         "feature_id": "T1",
         "kind": "thread_surrogate",
         "thread_spec": "M6",
+        "nominal_diameter": 6.0,
+        "pitch": 1.0,
+        "pitch_source": "standard_default_coarse",
         "representation": "tap_drill",
-        "diameter": 5.0,
+        "surrogate_method": "nominal_minus_pitch",
+        "surrogate_diameter": 5.0,
         "approximation": True,
         "reason": "real thread capability unavailable",
-        "provenance": "fixed_machine_recipe",
+        "provenance": "parameterized_metric_resolver",
     }]
 
 
 def test_unknown_thread_without_recipe_is_blocked():
     drawing = _thread_drawing()
-    drawing["features"][0]["dimensions"]["thread_size"] = "M7x1.0"
+    drawing["features"][0]["dimensions"]["thread_size"] = "UNC 1/4-20"
     recipes, errors = R.resolve_thread_surrogates(drawing)
     assert recipes == []
-    assert any("no deterministic surrogate recipe" in error for error in errors)
+    assert any("cannot use deterministic surrogate" in error for error in errors)
+
+
+def test_gate_b_rejects_planner_diameter_different_from_resolver(tmp_path=None):
+    import tempfile
+    from types import SimpleNamespace
+
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing_path = os.path.join(directory, "drawing.json")
+    frozen_path = os.path.join(directory, "frozen.json")
+    executable_path = os.path.join(directory, "executable.json")
+    drawing = _thread_drawing()
+    recipes, _ = R.resolve_thread_surrogates(drawing)
+    with open(drawing_path, "w", encoding="utf-8") as handle:
+        json.dump(drawing, handle)
+    with open(frozen_path, "w", encoding="utf-8") as handle:
+        json.dump(_thread_frozen_plan(recipes, diameter=4.9), handle)
+    code, result = _capture_json_command(
+        R._cmd_build,
+        SimpleNamespace(plan=frozen_path, out=executable_path, drawing=drawing_path),
+    )
+    assert code == 1
+    assert any("exact machine recipe provenance" in error
+               for error in result["capability_errors"])
 
 
 def test_thread_recipe_cannot_supply_missing_geometry():
@@ -1036,7 +1098,9 @@ def test_thread_recipe_cannot_supply_missing_geometry():
     del feature["dimensions"]["depth"]
     recipes, errors = R.resolve_thread_surrogates(drawing)
     assert errors == []
-    assert set(recipes[0]["supplemented_fields"]) == {"representation", "diameter"}
+    assert set(recipes[0]["supplemented_fields"]) == {
+        "representation", "surrogate_diameter"
+    }
     assert all(key not in recipes[0] for key in ("axis", "center", "depth", "range"))
 
 

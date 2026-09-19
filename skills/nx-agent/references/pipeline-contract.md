@@ -57,10 +57,10 @@ validator 失败立即停止，**不允许 Agent 自己覆盖错误，也不允�
 ```
 
 frozen plan 落盘前必须满足：
-- `capability_violations=0`；required feature 超出 certified tools 且没有输入明确提供的 geometry-preserving surrogate 时直接 B 失败；
+- `capability_violations=0`；required feature 超出 certified tools 时优先使用输入 surrogate，否则只允许机器参数化 resolver 的可追溯 approximation；两者都不可用时直接 B 失败；
 - Reader/结构化输入中的 HARD geometry field 与 `derived.target` 原样保留，禁止跨 feature 复用 source；
 - pattern 总实例数与源 `count` 完全一致，禁止因 symmetry/mirror 再次乘倍；
-- unsupported threaded feature 不得被删除或替换成普通 through/clearance hole。
+- unsupported threaded feature 不得被删除或替换成普通 through/clearance hole；metric thread surrogate 必须来自标准 pitch metadata + `nominal_diameter - pitch`，禁止 thread-size → 最终孔径映射。
 
 上述预检或 runner build/check 任一失败即 B 失败。B 阶段失败**不进入自修复**，禁止修改 frozen plan 后自动重跑。
 

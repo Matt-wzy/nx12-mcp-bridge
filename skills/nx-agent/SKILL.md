@@ -100,7 +100,7 @@ Gate A 失败时只向用户询问**真正 blocking 的最少问题**，不得�
 - executable plan 存在且非空
 
 frozen plan 首次落盘前必须完成静态自检。B 阶段 build/check 失败直接结束，禁止现场补丁后继续。
-required threaded feature 优先使用输入明确提供并批准交付的 `surrogate_geometry`。没有输入 surrogate 时，`validate-drawing` 返回本地确定性 thread surrogate recipe，Planner 必须原样携带 recipe 与哈希 provenance，Gate B 重新计算并核对后才允许执行；Planner 禁止自行推导底孔直径。recipe 只能补 thread representation/diameter，不能补 axis、center、count、depth/range、side 或 ownership。未知 thread spec 没有 recipe 时返回 capability violation。使用 surrogate 的最终报告必须列入 `approximations`，不得描述为真实螺纹牙型。
+required threaded feature 优先使用输入明确提供并批准交付的 `surrogate_geometry`。没有输入 surrogate 时，`validate-drawing` 用通用 metric designation parser 取得 nominal diameter/pitch（bare M designation 的 pitch 来自独立标准粗牙 metadata），再统一按 `nominal_diameter - pitch` 计算 tap-drill surrogate；禁止 thread-size → 最终孔径映射。Planner 必须原样携带 resolver 结果与哈希 provenance，Gate B 重新计算并核对后才允许执行；Planner 禁止自行推导底孔直径。resolver 只能补 thread representation/surrogate diameter，不能补 axis、center、count、depth/range、side 或 ownership。无法解析或没有标准 pitch metadata 时返回 capability violation。使用 surrogate 的最终报告必须列入 `approximations`，不得描述为真实螺纹牙型。
 
 ## 5. 阶段 C 与受控自动修复
 
@@ -141,4 +141,4 @@ required threaded feature 优先使用输入明确提供并批准交付的 `surr
 只使用仓库当前 32 个 certified tools。禁止为了完成任务自行新增工具或修改 NX_MCP / Loader。
 
 当前不建议或不支持：Sweep、Loft、真实螺纹、渐开线/斜齿轮、任意倾斜工作平面、复杂自由曲面。
-能力边界不能靠改变几何语义绕过：例如真实螺纹不支持时，禁止把 threaded hole 删除或改成普通通孔/间隙孔。只有输入明确给出允许使用的几何替代体及其实际尺寸时才可建模该替代体；否则在 B 阶段 fail-closed。
+能力边界不能靠改变几何语义绕过：例如真实螺纹不支持时，禁止把 threaded hole 删除或改成普通通孔/间隙孔。输入明确给出的 surrogate 优先；否则只允许机器参数化 metric resolver 用标准 pitch metadata 与统一公式产生近似表示，并在报告中披露。无法解析或设计几何未闭合时在 B 阶段 fail-closed。

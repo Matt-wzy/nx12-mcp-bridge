@@ -148,8 +148,8 @@
 - frozen plan 发布前必须检查：同一 `coaxial_hole_group` 展开的所有 member operation 的非轴向中心坐标完全一致；若不一致，B 阶段前直接判为规划错误。
 - **Chamfer 不得由参数名拼接生成**：只有 Reader 已输出具有明确 target edge/edge semantics 的 chamfer feature，Planner 才能创建 Chamfer operation。孤立参数 `C=2`、表格字段 C 或没有边绑定的数值不得被 Planner 转写成“C2 倒角”。
 - **能力边界不得通过几何替代偷偷绕过**：当前 32 个 certified tools 不支持真实螺纹。输入中的 `threaded_hole` / 螺纹 member 必须保留其 feature 语义，禁止删除、改成普通通孔/间隙孔，或用同轴组中的其它 through-hole/counterbore member 代替。
-- 只有输入本身明确提供了一个几何等价且可执行的 `surrogate_geometry`（包含实际直径、深度、轴向起止范围，并明确允许用它作为本次交付实体）时，Planner 才能按该 surrogate 建模；**仅有 `M6`、`M8` 等公称螺纹规格不足以自行推导替代圆柱直径。**
-- 若 required feature 超出 certified tools 能力且没有上述明确 surrogate，记录 `capability_violation` 并在 frozen plan 落盘前停止；不得进入 Runner，也不得把结果状态写成成功。
+- 输入本身明确提供几何等价且可执行的 `surrogate_geometry` 时优先按输入执行。否则只能消费 `validate-drawing` 的机器 resolver 结果：通用 metric parser 解析 nominal diameter/pitch，bare designation 由标准粗牙 metadata 提供 pitch，tap-drill surrogate 统一按 `nominal_diameter - pitch` 计算。Planner 禁止维护 thread-size → 最终孔径表，也禁止自行计算或改写 surrogate diameter。
+- resolver 只替代当前工具无法表达的 thread 牙型；axis、center、depth、axial range、count、side、ownership 仍必须来自 Gate A drawing / deterministic relation。无法解析 thread spec、没有标准 pitch metadata 或这些设计几何未闭合时记录 `capability_violation` / ambiguity 并停止。
 - **圆角 / 倒角一律放最后**：完成主体几何 → 完成孔 → 完成 Boolean →
   重新 `nx_list_edges` 选边 → 操作 → 再次 `nx_list_edges` → 下一组。
 

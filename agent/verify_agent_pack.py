@@ -662,9 +662,10 @@ def main() -> None:
             fail(f"principal-plane planning contract missing: {token}")
     for token in (
         "没有真实螺纹建模工具",
-        "不能自动等同于任意普通孔直径",
-        "`surrogate_geometry`",
-        "Planner 必须 fail-closed",
+        "机器参数化 resolver",
+        "标准粗牙 metadata",
+        "nominal_diameter - pitch",
+        "禁止 thread-size → 最终孔径硬编码",
     ):
         if token not in plane_rules:
             fail(f"certified thread capability regression: missing {token}")
@@ -739,7 +740,8 @@ def main() -> None:
         "不得进入 Runner",
         "无法等价建模",
         "禁止把 unsupported feature 描述成“已由普通孔/其它特征等价表达”",
-        "geometry-preserving surrogate",
+        "机器参数化 resolver",
+        "未生成真实螺纹牙型",
     ):
         if token not in output_rules:
             fail(f"Gate B capability user-output regression: missing {token}")
@@ -884,7 +886,9 @@ def main() -> None:
         "能力边界不得通过几何替代偷偷绕过",
         "禁止删除、改成普通通孔/间隙孔",
         "`surrogate_geometry`",
-        "公称螺纹规格不足以自行推导替代圆柱直径",
+        "标准粗牙 metadata",
+        "nominal_diameter - pitch",
+        "禁止维护 thread-size → 最终孔径表",
         "`capability_violation`",
     ):
         if token not in planner_rules:
