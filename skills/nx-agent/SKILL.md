@@ -34,8 +34,8 @@ description: 作者：抖音 无趣。Siemens NX 自动建模统一入口。支�
 用户上传二维机械工程图并要求“开始建模”“按图建模”“用 NX 画出来”等时：
 
 1. 读取 `references/drawing-reader.md` + `references/nx-drawing-rules.md`。正常路径**不读取 examples**；只有 validator 报 schema 错误时才查看 `examples/example-output.json`。
-2. 输出结构化 drawing JSON 后，直接读取 `%NX_MCP_WORKSPACE%\nx-mcp-plan-runner\runtime-config.json`，禁止扫描目录；用其中 `python_exe` 执行同目录 `runner.py validate-drawing <drawing.json>`。
-3. 只有 validate-drawing exit code=0 且 `source_ownership.status="pass"` 才通过门禁 A。
+2. 输出结构化 drawing JSON 后，按“运行时与路径”的固定规则只解析一次 `runtime-config.json`，禁止扫描目录；用其中 `python_exe` 执行同目录 `runner.py validate-drawing <drawing.json>`。
+3. 只有 validate-drawing exit code=0，且返回 `source_ownership.status="pass"` 与 `coordinate_sanity.status="pass"`，才通过门禁 A。
 4. 读取建模规划与拓扑规则，生成 frozen plan，并通过门禁 B。
 5. 调用 Plan Runner 执行。
 6. 总控规则见 `references/pipeline-contract.md`；用户输出规范见 `references/chinese-output.md`。
@@ -50,7 +50,12 @@ description: 作者：抖音 无趣。Siemens NX 自动建模统一入口。支�
 
 ## 2. 运行时与路径
 
-安装器会在 Plan Runner 目录生成 `runtime-config.json`。执行 Runner 前优先读取其中：
+安装器会在 Plan Runner 目录生成 `runtime-config.json`。路径只允许按以下顺序解析一次：
+
+1. 若环境变量 `NX_MCP_WORKSPACE` 存在：使用其值下的 `nx-mcp-plan-runner/runtime-config.json`；
+2. 否则使用用户主目录下 `NX_MCP_WORKSPACE/nx-mcp-plan-runner/runtime-config.json`。
+
+禁止递归搜索 Runner、Python、仓库或 Skill 目录。读取成功后使用其中：
 
 - `python_exe`
 - `workspace_root`
@@ -72,12 +77,10 @@ description: 作者：抖音 无趣。Siemens NX 自动建模统一入口。支�
 Gate A 判断的是**最低充分建模闭合**，不是“整张图所有文字/工艺信息都必须 100% 解释”。
 
 同时满足以下条件才通过：
-- 本地 `runner.py validate-drawing <drawing.json>` exit code=0，且返回 `source_ownership.status="pass"`；
-- `blocking_unresolved = 0`，即 `unresolved` 中没有 `required_for_modeling=true` 的项目；
-- `dimension_conflicts = 0`；
-- `coordinate_sanity.status = "pass"`；
-- `dimension_closure.status = "closed"`；
-- 存在 `overall_dimensions`、`coordinate_system`、`features`。
+- 本地 `runner.py validate-drawing <drawing.json>` exit code=0；
+- validator 返回 `source_ownership.status="pass"`；
+- validator 返回 `coordinate_sanity.status="pass"`；
+- `blocking_unresolved = 0`、`dimension_conflicts = 0`、`dimension_closure.status = "closed"`。
 
 其中：
 - 能由图中**明确尺寸 + 明确拓扑关系**唯一计算出的值进入 `derived`，不进入 `unresolved`；
