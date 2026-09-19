@@ -1333,6 +1333,32 @@ def check_plan(plan: dict, executable: bool = True) -> list[str]:
                 if path[0] not in bound_names:
                     errors.append(f"step {step}: unresolved {v!r}")
 
+        # Selection-consuming params must use the format-specific reference syntax.
+        # A bare semantic string such as "base_plate_vertical_edges" cannot be
+        # resolved by build/runtime and must fail statically.
+        selection_params = {
+            "nx_edge_blend": ("edge_indices",),
+            "nx_chamfer": ("edge_indices",),
+            "nx_shell": ("remove_face_index",),
+        }
+        for param in selection_params.get(tool, ()):
+            if param not in args:
+                continue
+            value = args[param]
+            if isinstance(value, str):
+                if executable:
+                    if not value.startswith("$selection."):
+                        errors.append(
+                            f"step {step}: executable {param} string must be a "
+                            f"$selection reference, got {value!r}"
+                        )
+                else:
+                    if not re.fullmatch(r"<step\d+[^>]*>", value):
+                        errors.append(
+                            f"step {step}: frozen {param} string must be a "
+                            f"<stepN ...> selection placeholder, got {value!r}"
+                        )
+
         # param validation (after adaptation)
         a = dict(args)
         if tool == "nx_sketch_rectangle":
