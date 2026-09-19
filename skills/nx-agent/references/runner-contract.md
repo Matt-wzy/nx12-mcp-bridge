@@ -85,7 +85,11 @@ Planner 直接写对角点 `{x,y}` 即可，无需自行换算。
 
 ### 7.1 principal-plane sketch / extrude 语义
 
-该语义属于 Loader 冻结契约，Planner 可直接依赖：
+该语义属于 Loader 冻结契约，Planner 可直接依赖。NX 2506 下 Loader 必须用
+**显式固定朝向 plane + AxisReference + SketchOrigin + ExistingPlane +
+SpecifyPoint** 创建非 XY 草图；仅设置 `PlaneReference` 会发生 XZ/YZ 静默回退
+到 Z=0 的已知缺陷，因此该完整 builder 配置属于实现门禁。
+
 
 - `plane="XY"`：局部 `{x,y}`→全局 `{X,Y}`，`reverse=false` 挤出 +Z；
 - `plane="XZ"`：局部 `{x,y}`→全局 `{X,Z}`，`reverse=false` 挤出 +Y；
