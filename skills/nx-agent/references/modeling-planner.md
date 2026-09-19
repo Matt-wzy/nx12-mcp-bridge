@@ -121,6 +121,9 @@
   确认 remove face → `nx_shell`。禁止猜 face index。
 - **Pattern/Mirror 类特征**：先创建单个，再 pattern / mirror 生成全部，
   然后**一次性 Unite**（一个 `nx_unite` 传入全部 tool bodies）。
+- **Pattern count 是不可变输入**：Reader/文字输入给出的 `count=N` 是最终总实例数。Planner 选择 linear / rectangular / circular / explicit centers 只是执行方式，绝不能因为对称、mirror 或二维排列再次翻倍。
+- frozen plan 发布前必须反算最终实例总数：`explicit_centers.length`、`count_x*count_y` 或 pattern `count` 必须与源 `count` 完全一致；不一致时 B 阶段失败，禁止自动把 2 个扩成 4 个或把 4 个缩成 2 个。
+- 只有输入明确声明二维矩形阵列时才能生成 rectangular pattern；若输入只是总数 + 对称中心关系，按 explicit centers / 单向 pattern 保持原数量。
 - **所有孔（hole / counterbore / countersink）**放在最后一次大 Boolean 之后、
   圆角倒角之前，集中完成。
 - **工程图方向字段必须原样消费，禁止 Planner 二次猜轴**：
@@ -139,9 +142,14 @@
   禁止把孔中心或槽宽坐标换算后仍沿错误轴执行。
 - **同轴复合孔 centerline 是不可变输入**：Drawing Reader 输出 `type:"coaxial_hole_group"` 时，Planner 可以为了当前工具能力把 members 展开成多个建模 operation，但所有 operation 必须继承组的同一 `axis` 与横向 `centerline`；只允许成员自己的直径、深度、轴向起止侧/范围不同。禁止 Planner 把某个 member 重新绑定到主孔中心、高度或其它邻近几何。
 - **Reader 全局坐标不得由 Planner 静默重解释**：工程图模式进入 Planner 前，`coordinate_sanity.status` 必须为 `pass`。若 overall bbox 与 profile/feature/pattern 坐标矛盾，或中心距/对称反算失败，Planner 必须停止并回报 A 阶段输入不一致；禁止 Planner 自己平移、居中、取绝对值、改正负号或“看起来合理”地修正坐标。
+- **Reader 字段语义与 source ownership 不可重解释**：Planner 必须逐字段原样消费 Reader 已闭合的 HARD 几何。`slot.width`、`slot.bottom/termination`、孔 centerline、diameter/depth、pattern count/type 等不得从其它 feature 的尺寸重新计算或覆盖；`derived.target` 只允许写入它声明的目标字段，禁止跨 feature 复用。
+- 若 Planner 发现 Reader 的两个字段共享了互相冲突的 source，或某 operation 需要一个 Reader 未提供/未闭合的几何字段，必须停止并回报输入/规划错误；禁止临时“借用”邻近尺寸补齐。
 - 同轴组成员若需要分别从轴线两侧加工，Planner 必须从 Reader 给出的 side / axial range 生成；这些字段缺失且会改变实体时停止规划，禁止“一个放中心高、一个放 E 派生高”式二次猜测。
 - frozen plan 发布前必须检查：同一 `coaxial_hole_group` 展开的所有 member operation 的非轴向中心坐标完全一致；若不一致，B 阶段前直接判为规划错误。
 - **Chamfer 不得由参数名拼接生成**：只有 Reader 已输出具有明确 target edge/edge semantics 的 chamfer feature，Planner 才能创建 Chamfer operation。孤立参数 `C=2`、表格字段 C 或没有边绑定的数值不得被 Planner 转写成“C2 倒角”。
+- **能力边界不得通过几何替代偷偷绕过**：当前 32 个 certified tools 不支持真实螺纹。输入中的 `threaded_hole` / 螺纹 member 必须保留其 feature 语义，禁止删除、改成普通通孔/间隙孔，或用同轴组中的其它 through-hole/counterbore member 代替。
+- 只有输入本身明确提供了一个几何等价且可执行的 `surrogate_geometry`（包含实际直径、深度、轴向起止范围，并明确允许用它作为本次交付实体）时，Planner 才能按该 surrogate 建模；**仅有 `M6`、`M8` 等公称螺纹规格不足以自行推导替代圆柱直径。**
+- 若 required feature 超出 certified tools 能力且没有上述明确 surrogate，记录 `capability_violation` 并在 frozen plan 落盘前停止；不得进入 Runner，也不得把结果状态写成成功。
 - **圆角 / 倒角一律放最后**：完成主体几何 → 完成孔 → 完成 Boolean →
   重新 `nx_list_edges` 选边 → 操作 → 再次 `nx_list_edges` → 下一组。
 
