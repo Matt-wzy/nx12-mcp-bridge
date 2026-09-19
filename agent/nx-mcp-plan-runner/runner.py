@@ -1574,11 +1574,26 @@ def _drawing_hard_paths(value: Any, prefix: str = "") -> set[str]:
                 if child and all(isinstance(item, dict) for item in child):
                     for idx, item in enumerate(child):
                         out.update(_drawing_hard_paths(item, f"{path}.{idx}"))
+                elif key == "explicit_centers":
+                    for idx, item in enumerate(child):
+                        if isinstance(item, list):
+                            for coord_idx, _ in enumerate(item):
+                                out.add(f"{path}.{idx}.{coord_idx}")
+                        elif isinstance(item, dict):
+                            out.update(_drawing_hard_paths(item, f"{path}.{idx}"))
+                        else:
+                            out.add(f"{path}.{idx}")
                 elif key in _DRAWING_HARD_KEYS:
                     out.add(path)
             elif key in _DRAWING_HARD_KEYS:
                 out.add(path)
     return out
+
+
+def _drawing_target_covered(target: str, covered: set[str]) -> bool:
+    if target in covered:
+        return True
+    return any(target.startswith(f"{ancestor}.") for ancestor in covered)
 
 
 def _drawing_equal(a: Any, b: Any, tol: float = 1e-9) -> bool:
@@ -2436,7 +2451,7 @@ def check_drawing_json(data: dict) -> list[str]:
             )
         for path in sorted(hard_paths):
             target = f"feature:{fid}.{path}"
-            if target not in covered_targets:
+            if not _drawing_target_covered(target, covered_targets):
                 errors.append(f"required geometry field lacks evidence: {target}")
 
     overall = data.get("overall_dimensions")
@@ -2451,7 +2466,9 @@ def check_drawing_json(data: dict) -> list[str]:
     if isinstance(profile, dict):
         for path in sorted(_drawing_hard_paths(profile)):
             target = f"profile.{path}"
-            if target not in direct_targets and target not in derived_targets:
+            if not _drawing_target_covered(
+                target, direct_targets | derived_targets | relation_targets
+            ):
                 errors.append(f"profile geometry lacks evidence: {target}")
 
     for feature in features.values():
@@ -2481,7 +2498,9 @@ def check_drawing_json(data: dict) -> list[str]:
             _drawing_check_count(errors, pattern, f"patterns[{idx}]")
             for path in sorted(_drawing_hard_paths(pattern)):
                 target = f"patterns.{idx}.{path}"
-                if target not in direct_targets and target not in derived_targets:
+                if not _drawing_target_covered(
+                    target, direct_targets | derived_targets | relation_targets
+                ):
                     errors.append(f"pattern geometry lacks evidence: {target}")
 
     unresolved = data.get("unresolved")
