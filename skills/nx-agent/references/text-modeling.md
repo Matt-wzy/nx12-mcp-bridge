@@ -78,8 +78,9 @@ Runner 固定为：
 - 只使用 `certified-tool-contract.json` 中的 32 个工具；`tool_args` 只含真实参数。
 - frozen plan 顶层使用 `skill / mode / part / coordinate_system / operations /
   final_validation / fallbacks`；operation 至少含 `step / tool / tool_args /
-  topology_changes`。逻辑对象名写裸名，`result_bindings / selection_binding / retry`
-  由 Runner build 生成。
+  topology_changes`。逻辑对象名写裸名。**禁止手写** `result_bindings` /
+  `selection_binding` / `retry` / `$reference`；这些全部由 Runner build 生成。
+  frozen check/build 对混入 executable 字段的 plan 必须 fail-closed。
 - edge/face 选择只写 `selection_criteria`；`expectation` 只做判定。
 - 任何 Boolean / Hole / Pattern / Mirror / Blend / Chamfer 等拓扑变化后，
   旧 edge/face index 立即失效；需要继续选边/面时必须重新 list。
