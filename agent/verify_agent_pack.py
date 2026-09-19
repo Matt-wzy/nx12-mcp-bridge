@@ -246,6 +246,23 @@ def main() -> None:
     if "frozen check/build 对混入 executable 字段的 plan 必须 fail-closed" not in text_fast:
         fail("text-mode frozen/executable boundary rule missing")
 
+    for token in (
+        "executable edge_indices string must be a $selection reference",
+        "frozen edge_indices string must be a <stepN",
+    ):
+        if token not in runner_source:
+            fail(f"Runner selection-consumer reference regression: missing {token}")
+
+    for token in (
+        "test_frozen_check_rejects_bare_selection_consumer_name",
+        "test_executable_check_rejects_unresolved_selection_consumer_name",
+    ):
+        if token not in plan_tests:
+            fail(f"Runner selection-consumer test missing: {token}")
+
+    if "<stepN ...>" not in text_fast or "禁止写裸语义名" not in text_fast:
+        fail("text-mode selection consumer placeholder rule missing")
+
     pipeline_contract = (SKILL / "references" / "pipeline-contract.md").read_text(encoding="utf-8")
     if "纯计划表达错误" not in pipeline_contract or "result_bindings" not in pipeline_contract:
         fail("pipeline contract does not allow safe one-shot repair of binding-only plan errors")
