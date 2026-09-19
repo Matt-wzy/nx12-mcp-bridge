@@ -91,7 +91,7 @@ Gate A 判断的是**最低充分建模闭合**，不是“整张图所有文字
 Gate A 失败时只向用户询问**真正 blocking 的最少问题**，不得把 non-blocking warning 一并当成澄清问题。
 
 ### 门禁 B
-- capability_violations = 0；任何 required feature 超出 32 个 certified tools 且没有输入明确提供的 geometry-preserving surrogate 时，B 阶段直接失败
+- capability_violations = 0；required feature 超出 32 个 certified tools 时，优先使用 drawing 明确提供的 surrogate；否则仅允许使用本地机器维护、可唯一映射的 deterministic surrogate recipe；两者都不存在时 B 阶段失败
 - feature source/count preservation 通过：Reader 已闭合的 HARD 字段、derived.target、pattern 总 count 不得被 Planner 改写
 - runner build/check 通过
 - unresolved reference = 0
@@ -100,7 +100,7 @@ Gate A 失败时只向用户询问**真正 blocking 的最少问题**，不得�
 - executable plan 存在且非空
 
 frozen plan 首次落盘前必须完成静态自检。B 阶段 build/check 失败直接结束，禁止现场补丁后继续。
-required threaded feature 没有输入明确提供并批准交付的 `surrogate_geometry` 时，机器 Gate B 必须返回 capability violation；Planner 不得生成标准底孔或其它替代圆柱。
+required threaded feature 优先使用输入明确提供并批准交付的 `surrogate_geometry`。没有输入 surrogate 时，`validate-drawing` 返回本地确定性 thread surrogate recipe，Planner 必须原样携带 recipe 与哈希 provenance，Gate B 重新计算并核对后才允许执行；Planner 禁止自行推导底孔直径。recipe 只能补 thread representation/diameter，不能补 axis、center、count、depth/range、side 或 ownership。未知 thread spec 没有 recipe 时返回 capability violation。使用 surrogate 的最终报告必须列入 `approximations`，不得描述为真实螺纹牙型。
 
 ## 5. 阶段 C 与受控自动修复
 

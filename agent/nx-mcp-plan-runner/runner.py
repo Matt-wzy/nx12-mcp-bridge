@@ -1806,15 +1806,23 @@ def plan_geometry_projection(plan: dict) -> list[dict]:
     return projection
 
 
-def make_design_guard(drawing: dict, drawing_path: str, plan: dict) -> dict:
+def make_design_guard(
+    drawing: dict,
+    drawing_path: str,
+    plan: dict,
+    thread_surrogates: list[dict] | None = None,
+) -> dict:
     drawing_projection = drawing_semantic_projection(drawing)
     plan_projection = plan_geometry_projection(plan)
+    surrogates = copy.deepcopy(thread_surrogates or [])
     return {
         "source_drawing": os.path.abspath(drawing_path),
         "drawing_semantics": drawing_projection,
         "drawing_semantics_sha256": _json_sha256(drawing_projection),
         "plan_geometry": plan_projection,
         "plan_geometry_sha256": _json_sha256(plan_projection),
+        "thread_surrogates": surrogates,
+        "thread_surrogates_sha256": _json_sha256(surrogates),
     }
 
 
@@ -1844,6 +1852,7 @@ def _valid_thread_surrogate(surrogate: Any) -> bool:
         return False
     diameter = _num(surrogate.get("diameter"))
     depth = _num(surrogate.get("depth"))
+    representation = surrogate.get("representation")
     axial_range = surrogate.get("axis_range", surrogate.get("range"))
     has_range = (
         isinstance(axial_range, list)
@@ -1854,26 +1863,160 @@ def _valid_thread_surrogate(surrogate: Any) -> bool:
         for key in ("start_offset", "end_offset")
     )
     approved = surrogate.get("approved_for_delivery") is True
-    return bool(diameter and diameter > 0 and depth and depth > 0 and has_range and approved)
+    return bool(
+        diameter and diameter > 0
+        and depth and depth > 0
+        and isinstance(representation, str) and representation
+        and has_range and approved
+    )
 
 
-def drawing_thread_capability_errors(drawing: dict) -> list[str]:
-    errors = []
+_THREAD_SURROGATE_RECIPES = {
+    # Deliberately small and machine-maintained. Recipes may replace only the
+    # unavailable thread form; placement and extent remain drawing semantics.
+    "M6": {"representation": "tap_drill", "diameter": 5.0},
+}
+
+
+def _thread_spec(feature: dict) -> str | None:
+    dimensions = feature.get("dimensions")
+    dimensions = dimensions if isinstance(dimensions, dict) else {}
+    for key in ("thread_spec", "thread_size", "spec"):
+        value = feature.get(key, dimensions.get(key))
+        if value is not None and str(value).strip():
+            return str(value).strip()
+    return None
+
+
+def _canonical_thread_recipe_key(spec: str | None) -> str | None:
+    if not isinstance(spec, str):
+        return None
+    compact = re.sub(r"\s+", "", spec.upper().replace("×", "X"))
+    match = re.fullmatch(r"M(\d+(?:\.\d+)?)(?:X(\d+(?:\.\d+)?))?", compact)
+    if not match:
+        return None
+    size = float(match.group(1))
+    pitch = float(match.group(2)) if match.group(2) is not None else None
+    if size == 6.0 and (pitch is None or pitch == 1.0):
+        return "M6"
+    return None
+
+
+def resolve_thread_surrogates(drawing: dict) -> tuple[list[dict], list[str]]:
+    """Resolve thread-form substitutes without inventing placement or extent."""
+    resolved: list[dict] = []
+    errors: list[str] = []
     for index, feature in enumerate(_thread_features(drawing.get("features") or [])):
         if feature.get("required_for_modeling") is False:
             continue
-        if not _valid_thread_surrogate(feature.get("surrogate_geometry")):
-            fid = feature.get("id") or f"thread[{index}]"
+        fid = str(feature.get("id") or f"thread[{index}]")
+        spec = _thread_spec(feature)
+        supplied = feature.get("surrogate_geometry")
+        if supplied is not None:
+            if not _valid_thread_surrogate(supplied):
+                errors.append(
+                    f"capability_violation: threaded feature {fid!r} has an invalid "
+                    "input surrogate_geometry"
+                )
+                continue
+            item = copy.deepcopy(supplied)
+            item.update({
+                "feature_id": fid,
+                "kind": "thread_surrogate",
+                "thread_spec": spec,
+                "approximation": True,
+                "reason": "real thread capability unavailable",
+                "provenance": "drawing_input",
+                "supplemented_fields": [],
+            })
+            resolved.append(item)
+            continue
+
+        key = _canonical_thread_recipe_key(spec)
+        recipe = _THREAD_SURROGATE_RECIPES.get(key or "")
+        if recipe is None:
             errors.append(
-                f"capability_violation: required threaded feature {fid!r} has no "
-                "explicit approved geometry-preserving surrogate"
+                f"capability_violation: required threaded feature {fid!r} with "
+                f"spec {spec!r} has no deterministic surrogate recipe"
+            )
+            continue
+        resolved.append({
+            "feature_id": fid,
+            "kind": "thread_surrogate",
+            "thread_spec": key,
+            "representation": recipe["representation"],
+            "diameter": recipe["diameter"],
+            "approximation": True,
+            "reason": "real thread capability unavailable",
+            "provenance": "fixed_machine_recipe",
+            "supplemented_fields": ["representation", "diameter"],
+        })
+    return resolved, errors
+
+
+def drawing_thread_capability_errors(drawing: dict) -> list[str]:
+    return resolve_thread_surrogates(drawing)[1]
+
+
+def thread_surrogate_plan_errors(plan: dict, expected: list[dict]) -> list[str]:
+    """Require frozen plans to consume the exact machine result by provenance."""
+    errors: list[str] = []
+    declared = plan.get("thread_surrogates") or []
+    has_use_marker = any(
+        isinstance(op, dict) and isinstance(op.get("thread_surrogate_use"), dict)
+        for op in plan.get("operations") or []
+    )
+    if not expected and has_use_marker:
+        errors.append("plan declares thread surrogate use absent from drawing")
+    if _canonical_semantic_value(declared) != _canonical_semantic_value(expected):
+        errors.append(
+            "thread surrogate recipe provenance missing or differs from machine result"
+        )
+        return errors
+
+    for recipe in expected:
+        fid = recipe.get("feature_id")
+        recipe_hash = _json_sha256(recipe)
+        diameter = _num(recipe.get("diameter"))
+        matching = []
+        for op in plan.get("operations") or []:
+            use = op.get("thread_surrogate_use")
+            if not isinstance(use, dict):
+                continue
+            if use.get("feature_id") != fid or use.get("recipe_sha256") != recipe_hash:
+                continue
+            args = op.get("tool_args") or {}
+            if diameter is not None and _num(args.get("diameter")) == diameter:
+                matching.append(op)
+        if not matching:
+            errors.append(
+                f"thread surrogate for feature {fid!r} is not consumed by an "
+                "operation with exact machine recipe provenance"
             )
     return errors
 
 
+def thread_approximations_from_guard(design_guard: Any) -> list[dict]:
+    if not isinstance(design_guard, dict):
+        return []
+    fields = (
+        "feature_id", "kind", "thread_spec", "representation", "diameter",
+        "approximation", "reason", "provenance",
+    )
+    return [
+        {key: copy.deepcopy(item.get(key)) for key in fields if key in item}
+        for item in design_guard.get("thread_surrogates") or []
+        if isinstance(item, dict) and item.get("approximation") is True
+    ]
+
+
 def _plan_mentions_thread(plan: dict) -> bool:
     pattern = re.compile(r"(?:\bM\d+(?:\.\d+)?\b|thread|tap drill|底孔|螺纹)", re.I)
-    for value in _walk({"notes": plan.get("notes"), "operations": plan.get("operations")}):
+    for value in _walk({
+        "notes": plan.get("notes"),
+        "operations": plan.get("operations"),
+        "thread_surrogates": plan.get("thread_surrogates"),
+    }):
         if isinstance(value, str) and pattern.search(value):
             return True
     return False
@@ -3133,6 +3276,7 @@ def _cmd_validate_drawing(args: argparse.Namespace) -> int:
             normalization_errors.append(f"cannot persist normalized drawing: {exc}")
     errors = list(normalization_errors)
     errors.extend(check_drawing_json(drawing))
+    thread_surrogates, thread_surrogate_errors = resolve_thread_surrogates(drawing)
     result = {
         "drawing": args.drawing,
         "normalization": {
@@ -3143,6 +3287,8 @@ def _cmd_validate_drawing(args: argparse.Namespace) -> int:
         },
         "source_ownership": {"status": "pass" if not errors else "fail"},
         "coordinate_sanity": {"status": "pass" if not errors else "fail"},
+        "thread_surrogates": thread_surrogates,
+        "thread_surrogate_errors": thread_surrogate_errors,
         "errors": errors,
         "ok": not errors,
     }
@@ -3331,6 +3477,7 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     report["repair_attempt"] = int(args.repair_attempt)
     report["repair_source_report"] = args.repair_report
     report["design_guard"] = design_guard if isinstance(design_guard, dict) else None
+    report["approximations"] = thread_approximations_from_guard(design_guard)
     timed(report)
     print("===REPORT===")
     print(json.dumps(report, ensure_ascii=False, indent=2))
@@ -3350,7 +3497,9 @@ def _cmd_check(args: argparse.Namespace) -> int:
             _load_drawing(drawing_path)
         )
         errs.extend(normalization_errors)
-        errs.extend(drawing_thread_capability_errors(drawing))
+        thread_surrogates, capability_errors = resolve_thread_surrogates(drawing)
+        errs.extend(capability_errors)
+        errs.extend(thread_surrogate_plan_errors(plan, thread_surrogates))
     elif _plan_mentions_thread(plan):
         errs.append("thread-capability provenance missing; use --drawing")
     result = {
@@ -3370,13 +3519,16 @@ def _cmd_build(args: argparse.Namespace) -> int:
     plan = _load_plan(args.plan)
     drawing_path = getattr(args, "drawing", None)
     drawing = None
+    thread_surrogates: list[dict] = []
     capability_errors: list[str] = []
     if drawing_path:
         drawing, normalization_errors, _ = normalize_drawing_schema(
             _load_drawing(drawing_path)
         )
         capability_errors.extend(normalization_errors)
-        capability_errors.extend(drawing_thread_capability_errors(drawing))
+        thread_surrogates, resolution_errors = resolve_thread_surrogates(drawing)
+        capability_errors.extend(resolution_errors)
+        capability_errors.extend(thread_surrogate_plan_errors(plan, thread_surrogates))
     elif _plan_mentions_thread(plan):
         capability_errors.append(
             "thread-capability provenance missing; build Mode B with --drawing"
@@ -3405,7 +3557,9 @@ def _cmd_build(args: argparse.Namespace) -> int:
 
     exe = build_executable_plan(plan)
     if drawing is not None and drawing_path:
-        exe["design_guard"] = make_design_guard(drawing, drawing_path, exe)
+        exe["design_guard"] = make_design_guard(
+            drawing, drawing_path, exe, thread_surrogates=thread_surrogates
+        )
     errs = check_plan(exe, executable=True)
     if not errs:
         with open(args.out, "w", encoding="utf-8") as f:

@@ -64,12 +64,12 @@ python runner.py build <frozen-plan.json> <out.json> [--drawing <drawing.json>]
 python runner.py test  #（等价：运行 tests/test_plan_resolution.py）
 ```
 
-- `validate-drawing`：纯本地 Gate A 结构/证据校验；同一次调用先执行严格 schema-only normalization，并用 geometry-semantic projection 证明归一化前后语义一致；检查 source ownership、derived target、required geometry evidence 与 count conservation，不触 NX。normalizer 不会把 null/unresolved 补成几何值。
+- `validate-drawing`：纯本地 Gate A 结构/证据校验；同一次调用先执行严格 schema-only normalization，并用 geometry-semantic projection 证明归一化前后语义一致；检查 source ownership、derived target、required geometry evidence 与 count conservation，不触 NX。normalizer 不会把 null/unresolved 补成几何值。输出同时列出机器解析的 `thread_surrogates`（仅 representation/diameter）供 Planner 原样消费，不会补 placement/extent。
 - `run`：静态校验 → Loader ping → **preflight 安全检查** → 顺序执行全部
   operation → 输出 JSON 报告（per-step 日志 + 汇总 + 分阶段计时）。
 - `check`：不触 NX 的静态检查（工具合法性、参数合法性、引用可解析、占位符
   清零、selection criteria 语法）。
-- `build`：冻结 → 可执行转换（无 NX）。Mode B 必须传 `--drawing`，以执行 required thread capability fail-closed，并把 drawing/plan 语义指纹写入 executable 供 repair lineage 校验。
+- `build`：冻结 → 可执行转换（无 NX）。Mode B 必须传 `--drawing`；required thread 优先使用 drawing 输入 surrogate，否则只允许消费 `validate-drawing` 返回的本地 deterministic surrogate recipe。Gate B 会重新计算并核对 recipe/operation provenance，未知 spec 或 Planner 自行推导会失败。drawing/plan 语义指纹与 approximation 明细写入 executable，供 repair lineage 与最终报告校验。
 
 ### 命令内性能计时
 

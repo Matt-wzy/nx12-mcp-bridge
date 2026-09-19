@@ -858,6 +858,8 @@ def _thread_drawing(surrogate=None):
         "id": "T1",
         "type": "tapped_hole",
         "dimensions": {"thread_size": "M6", "depth": 12},
+        "axis": "X",
+        "position": {"center": [0, 0, 58]},
         "required_for_modeling": True,
     }
     if surrogate is not None:
@@ -865,19 +867,97 @@ def _thread_drawing(surrogate=None):
     return {"features": [feature]}
 
 
-def test_required_m6_without_surrogate_is_capability_violation():
-    errors = R.drawing_thread_capability_errors(_thread_drawing())
-    assert any("capability_violation" in error for error in errors)
+def test_required_m6_without_input_surrogate_uses_fixed_recipe():
+    recipes, errors = R.resolve_thread_surrogates(_thread_drawing())
+    assert errors == []
+    assert recipes == [{
+        "feature_id": "T1",
+        "kind": "thread_surrogate",
+        "thread_spec": "M6",
+        "representation": "tap_drill",
+        "diameter": 5.0,
+        "approximation": True,
+        "reason": "real thread capability unavailable",
+        "provenance": "fixed_machine_recipe",
+        "supplemented_fields": ["representation", "diameter"],
+    }]
+    forbidden = {"axis", "center", "position", "depth", "range", "side", "count"}
+    assert forbidden.isdisjoint(recipes[0])
+    pitched = _thread_drawing()
+    pitched["features"][0]["dimensions"]["thread_size"] = "M6×1.0"
+    assert R.resolve_thread_surrogates(pitched)[0][0]["thread_spec"] == "M6"
 
 
 def test_explicit_approved_thread_surrogate_is_allowed():
     drawing = _thread_drawing({
+        "representation": "input_cylindrical_surrogate",
         "diameter": 5.0,
         "depth": 12,
         "axis_range": [-20, -8],
         "approved_for_delivery": True,
     })
-    assert R.drawing_thread_capability_errors(drawing) == []
+    recipes, errors = R.resolve_thread_surrogates(drawing)
+    assert errors == []
+    assert recipes[0]["provenance"] == "drawing_input"
+
+
+def _thread_frozen_plan(recipes, include_provenance=True, diameter=5.0):
+    hole = {
+        "step": 6,
+        "tool": "nx_hole",
+        "target": "body_main",
+        "tool_args": {
+            "body_id": "body_main",
+            "center": {"x": 0, "y": 0},
+            "diameter": diameter,
+            "depth": 12,
+            "start_offset": 0,
+        },
+        "topology_changes": True,
+    }
+    if include_provenance:
+        hole["thread_surrogate_use"] = {
+            "feature_id": "T1",
+            "recipe_sha256": R._json_sha256(recipes[0]),
+        }
+    return {
+        "mode": "FAST",
+        "thread_surrogates": recipes,
+        "operations": [
+            {
+                "step": 1, "tool": "nx_create_part",
+                "tool_args": {"path": "part.prt", "units": "mm"},
+                "topology_changes": False,
+            },
+            {
+                "step": 2, "tool": "nx_create_sketch", "target": "-",
+                "tool_args": {"plane": "YZ"}, "topology_changes": False,
+            },
+            {
+                "step": 3, "tool": "nx_sketch_rectangle", "target": "sketch_base",
+                "tool_args": {
+                    "sketch_id": "sketch_base",
+                    "corner1": {"x": -10, "y": -10},
+                    "corner2": {"x": 10, "y": 10},
+                },
+                "topology_changes": False,
+            },
+            {
+                "step": 4, "tool": "nx_finish_sketch", "target": "sketch_base",
+                "tool_args": {"sketch_id": "sketch_base"},
+                "topology_changes": False,
+            },
+            {
+                "step": 5, "tool": "nx_extrude", "target": "sketch_base",
+                "tool_args": {
+                    "sketch_id": "sketch_base", "distance": 40,
+                    "start_offset": -20, "reverse": False, "operation": "create",
+                },
+                "topology_changes": True,
+            },
+            hole,
+        ],
+    }
 
 
 def test_gate_b_blocks_planner_generated_m6_tap_drill(tmp_path=None):
@@ -890,16 +970,8 @@ def test_gate_b_blocks_planner_generated_m6_tap_drill(tmp_path=None):
     executable_path = os.path.join(directory, "executable.json")
     with open(drawing_path, "w", encoding="utf-8") as handle:
         json.dump(_thread_drawing(), handle)
-    frozen = {
-        "mode": "FAST",
-        "notes": ["M6 modeled as D5.0 tap drill"],
-        "operations": [{
-            "step": 1,
-            "tool": "nx_create_part",
-            "tool_args": {"path": "part.prt"},
-            "topology_changes": False,
-        }],
-    }
+    recipes, _ = R.resolve_thread_surrogates(_thread_drawing())
+    frozen = _thread_frozen_plan(recipes, include_provenance=False)
     with open(frozen_path, "w", encoding="utf-8") as handle:
         json.dump(frozen, handle)
     code, result = _capture_json_command(
@@ -908,7 +980,64 @@ def test_gate_b_blocks_planner_generated_m6_tap_drill(tmp_path=None):
     )
     assert code == 1
     assert not os.path.exists(executable_path)
-    assert any("capability_violation" in error for error in result["capability_errors"])
+    assert any("exact machine recipe provenance" in error
+               for error in result["capability_errors"])
+
+
+def test_gate_b_builds_m6_fixed_surrogate_with_machine_provenance(tmp_path=None):
+    import tempfile
+    from types import SimpleNamespace
+
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing_path = os.path.join(directory, "drawing.json")
+    frozen_path = os.path.join(directory, "frozen.json")
+    executable_path = os.path.join(directory, "executable.json")
+    drawing = _thread_drawing()
+    recipes, errors = R.resolve_thread_surrogates(drawing)
+    assert errors == []
+    with open(drawing_path, "w", encoding="utf-8") as handle:
+        json.dump(drawing, handle)
+    with open(frozen_path, "w", encoding="utf-8") as handle:
+        json.dump(_thread_frozen_plan(recipes), handle)
+    code, result = _capture_json_command(
+        R._cmd_build,
+        SimpleNamespace(plan=frozen_path, out=executable_path, drawing=drawing_path),
+    )
+    assert code == 0, result
+    with open(executable_path, encoding="utf-8") as handle:
+        executable = json.load(handle)
+    assert executable["design_guard"]["thread_surrogates"] == recipes
+    approximations = R.thread_approximations_from_guard(executable["design_guard"])
+    assert approximations == [{
+        "feature_id": "T1",
+        "kind": "thread_surrogate",
+        "thread_spec": "M6",
+        "representation": "tap_drill",
+        "diameter": 5.0,
+        "approximation": True,
+        "reason": "real thread capability unavailable",
+        "provenance": "fixed_machine_recipe",
+    }]
+
+
+def test_unknown_thread_without_recipe_is_blocked():
+    drawing = _thread_drawing()
+    drawing["features"][0]["dimensions"]["thread_size"] = "M7x1.0"
+    recipes, errors = R.resolve_thread_surrogates(drawing)
+    assert recipes == []
+    assert any("no deterministic surrogate recipe" in error for error in errors)
+
+
+def test_thread_recipe_cannot_supply_missing_geometry():
+    drawing = _thread_drawing()
+    feature = drawing["features"][0]
+    del feature["axis"]
+    del feature["position"]
+    del feature["dimensions"]["depth"]
+    recipes, errors = R.resolve_thread_surrogates(drawing)
+    assert errors == []
+    assert set(recipes[0]["supplemented_fields"]) == {"representation", "diameter"}
+    assert all(key not in recipes[0] for key in ("axis", "center", "depth", "range"))
 
 
 def test_gate_b_normal_drawing_path_still_builds_with_lineage(tmp_path=None):
