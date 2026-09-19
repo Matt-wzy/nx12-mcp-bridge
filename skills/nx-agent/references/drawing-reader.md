@@ -15,16 +15,14 @@
 
 ## 2. 读取流程
 
-必须按以下顺序执行，禁止把“成员先定全局坐标、之后再归组”作为正常流程：
+必须按以下顺序执行；association 和 ownership 完成前只保存 view-local 证据，不提前写全局坐标：
 
-1. 先观察整张图，识别主视图、俯视图、侧视图、剖视图、局部放大图。
-2. 第一轮尽可能读取所有会影响三维建模的尺寸、中心线、投影对应与符号；此时只记录**视图内原始证据**和来源，不给可能属于复合特征的成员各自猜全局 centerline。
-3. 先做 **feature association**：用中心线、同心圆、投影对应、引线归属、尺寸链等证据，把跨视图重复表达或同一加工轴上的候选成员关联成同一个 feature / composite group。
-4. association 完成后，才在**组级别**求 axis、centerline、数量、位置尺寸及 derived 值；同组成员继承组级位置，不得各自重新求一个不同 centerline。
-5. 把组级几何一次性转换到固定全局坐标系 `part_center_xy_bottom_z0`。
-6. 执行强制坐标 sanity/back-check：总体 bbox、特征中心、对称关系、中心距/节距必须能从输出坐标反算回图纸明确尺寸。
-7. 只用图中明确数值与确定性关系进行尺寸闭合。
-8. 通过上述检查后再输出结构化 JSON 并执行 Gate A。
+1. **视图坐标**：识别 Front / Side / Top / Section / Detail，为每个视图确定 plane、normal 及 view-local 轴与全局轴的对应。
+2. **Feature association**：用投影对齐、中心线、同心圆、轮廓类型、直径/规格和引线指向，把同一 feature 在不同视图中的圆形、隐藏矩形或隐藏平行线关联起来；先归组，后求组级 axis / centerline。
+3. **Dimension ownership**：沿 witness line、extension line、leader、arrow endpoint、centerline endpoint 与 feature boundary endpoint 绑定尺寸。禁止以文字距离、数字邻近或数值“看起来合理”代替端点证据。
+4. **Relation / derived**：只用已绑定尺寸和明确的对称、相切、共线、中心距等关系闭合几何；同组成员继承组级位置。
+5. **Global conversion**：association、ownership 和 relation 完成后，再把 view-local 几何一次性转换到 `part_center_xy_bottom_z0`；center coordinate 与沿轴方向的 start/end/range 必须分开。
+6. **Back-check 与输出**：从全局坐标反算总体 bbox、中心距、偏置、轮廓对齐和数量；一致后才生成 drawing JSON 并执行 Gate A。
 
 ## 3. 必须提取
 
@@ -45,7 +43,7 @@
 4. 禁止忽略 DETAIL / SECTION 后根据主视图外观猜局部结构。
 5. 禁止额外生成 HTML、bbox 标注图、重绘图或制造质量报告。
 
-## 5. 固定坐标系与正投影视图方向
+## 5. 视图方向与最终坐标系
 
 ```json
 {
@@ -59,7 +57,7 @@
 
 XY 原点为零件整体外形中心，Z=0 为零件底面，+X 向右、+Y 为俯视图向上、+Z 向上。禁止把原点留给下游猜测。
 
-在该固定坐标系下，标准正投影视图与全局轴固定对应：
+先确定以下标准正投影视图映射，但只用于解释 view-local 证据；全局坐标值必须等 association 与 ownership 完成后再写入：
 - 正视图 / Front：位于 **XZ** 平面，视图法向轴为 **Y**；
 - 侧视图 / Side：位于 **YZ** 平面，视图法向轴为 **X**；
 - 俯视图 / Top：位于 **XY** 平面，视图法向轴为 **Z**。
@@ -68,38 +66,25 @@ XY 原点为零件整体外形中心，Z=0 为零件底面，+X 向右、+Y 为�
 
 方向读取硬规则：
 1. 某孔/沉孔/圆柱特征在一个已确定方向的正投影视图中显示为圆时，孔轴/圆柱轴 = 该视图法向轴；若其它视图明确表达不同轴向则进入 `unresolved`/conflict，不得自行选择。
-2. 槽/开缝/切口在某视图中显示为两条平行轮廓线时，两线间的明确尺寸只定义该视图平面内的 **width_axis**；**不能由这两条线直接推断 through_axis**。
-3. 对 slot/cut 必须分别记录 `width_axis` 与 `through_axis`。若贯穿方向会改变三维结果而图纸不能唯一确定，必须 `unresolved`。
-4. DETAIL / 局部放大图若明确由某母视图引出，则继承母视图的平面/法向；若无法确认母视图方向，不得只凭局部图朝向推断全局轴。
+2. 同一孔在其它正交视图中的隐藏矩形/隐藏平行线是轴向投影候选，不能把该视图 normal 当成孔轴；必须先与圆形投影按中心线、投影位置、直径/规格和 feature identity 关联。
+3. 槽/开缝/切口在某视图中显示为两条平行轮廓线时，两线间的明确尺寸只定义该视图平面内的 **width_axis**；不能由这两条线直接推断 through_axis。
+4. 对 slot/cut 必须分别记录 `width_axis` 与 `through_axis`。若贯穿方向会改变三维结果而图纸不能唯一确定，必须 `unresolved`。
+5. DETAIL / 局部放大图若明确由某母视图引出，则继承母视图的平面/法向；若无法确认母视图方向，不得只凭局部图朝向推断全局轴。
 
 ## 6. 尺寸归属与特征语义
 
-- **明确箭头/引线优先绑定其实际指向的几何特征。** 同一区域出现其它孤立数值、表格字段或邻近标注时，禁止因为“位置接近”就覆盖明确箭头标注。
+- 尺寸 ownership 只由 witness/extension line、leader、arrow endpoint、centerline endpoint 或 feature boundary endpoint 建立；同一区域的孤立数值、表格字段或邻近标注不能作为替代证据。
 - **HARD 几何字段一旦由明确证据绑定，其语义归属锁定。** 一个尺寸/标注默认只能作为一个几何字段的 source；只有图纸明确表达同一尺寸同时约束多个字段时才允许共享。禁止把已经属于 A 特征的位置尺寸，后续重新解释成 B 特征的宽度、深度、终止面或中心位置。
-- 对开缝/槽：直接跨两侧边界的线性尺寸才可作为 `width`；例如两条槽边之间明确标注 `2`，则槽宽就是 2。附近未通过尺寸线/引线绑定到该槽的 `1.6` 不得替代它；**一旦 `slot.width` 已由明确槽边尺寸绑定，后续任何其它数值都不得覆盖。**
+- 对开缝/槽，只有端点分别落在两侧边界的尺寸才可作为 `width`；附近未绑定到槽边的数值不得替代，已绑定的 `slot.width` 不得被其它标注覆盖。
 - `depth` / `bottom` / `termination` 只能来自明确的深度语义（如 `深12` / `DEPTH 12`）、剖视图中明确的起止面、明确的相切/共线终止关系，或其它能够唯一限定终止面的标注。**普通线性位置尺寸不得因为数值合适就被改解释成 slot/cut depth 或 bottom。**
-- 因此像某两条孔轴之间的中心距参数，只能用于它明确绑定的轴线位置；除非图纸明确把它同时绑定到槽终止面，否则不得把该中心距拿去生成 `slot.depth` / `slot.bottom_z`。
+- 从一条中心线到另一条中心线的尺寸属于 center position/distance；除非端点同时明确绑定槽的 top/bottom，否则不得生成 `slot.depth` / `slot.bottom`。相同数值在不同位置重复出现时，必须分别按各自端点绑定，不能跨 feature 复用语义。
 - `derived` 必须写明 `target`，表示推导结果实际约束哪个 feature field；同一个 derived 值不得在没有额外图纸证据时跨 feature 复用。
 - 尺寸证据写入 `source_ledger` 时必须选择固定 `semantic`；例如两条轴线间距必须写 `center_distance/center_spacing`，槽两边界间宽度写 `slot_width`，数量写 `feature_count`。禁止把关系尺寸降级成泛化 `feature_dimension` 来绕过机器语义检查。
 - 孔类 feature 必须输出 `axis`；slot/cut 必须输出 `width_axis`、`through_axis`（若非贯穿则再输出有明确证据的 `depth`）。任何会改变三维结果的方向字段不能唯一确定时，Gate A 不得 closed。
 - **同轴复合孔必须先做 association，再求全局 centerline**：通孔、沉孔、盲孔、螺纹孔等若在不同视图中由共中心线、同心圆、正投影对应、共同引线/尺寸链等明确证据指向同一加工轴，先建立一个候选 `coaxial_hole_group`；**禁止先给每个候选 member 分别赋全局 Z/Y/X，再根据已经猜出的坐标决定是否归组**。
 - association 阶段只比较图纸证据，不要求成员已经拥有最终全局坐标。归组完成后才统一求组级 `axis` 与 `centerline`，再让所有 member 继承。成员可以有不同直径、深度、轴向起止侧或加工语义，但不能拥有不同的非轴向中心坐标。
 - 同轴归组的证据必须来自中心线、同心圆、跨视图投影对应、明确中心距链或等价确定性关系；**仅仅 axis 相同、数值接近或位于同一区域不足以归组**。证据不足且归组与否会改变实体时，进入 blocking unresolved。
-- 对同轴组，位置尺寸（例如两条轴线之间的 `E`）绑定到**组 centerline**，不能只绑定到其中一个 member 后再给其它 member 另猜中心高度。若某参考轴中心高为 40、目标组与其明确中心距为 18，则目标组中心高通过确定性关系得到 58；同组所有 member 继承这一中心线。
-- 推荐结构：
-  ```json
-  {
-    "type": "coaxial_hole_group",
-    "axis": "X",
-    "centerline": {"y": -8, "z": 58},
-    "members": [
-      {"kind": "threaded_hole", "spec": "M6", "depth": 12, "side": "one_side"},
-      {"kind": "through_hole", "diameter": 6.6, "side": "opposite_side"},
-      {"kind": "counterbore", "diameter": 11, "depth": 6.5, "side": "opposite_side"}
-    ]
-  }
-  ```
-  `side` / 轴向起止范围若会改变实体且无法由图纸唯一确定，仍属于 HARD unresolved；不得用示例中的 side 文本代替真实方向。
+- 对同轴组，两条轴线之间的位置尺寸绑定到**组 centerline**，不能只绑定到一个 member 后再为其它 member 猜中心位置；所有 member 继承同一非轴向中心坐标。`side` / 轴向起止范围若会改变实体且无法由图纸唯一确定，仍属于 HARD unresolved。
 - **倒角必须有明确边绑定**：只有图中实际出现并通过尺寸线/引线/局部细节绑定到某条边的 `C2`、`C2×45°` 等，才可输出 chamfer feature。参数表中的字段名 `C` 与数值 `2`（即 `C=2`）不能仅因拼起来像 “C2” 就自动解释为 2 mm 倒角。
 
 ## 7. 最低充分建模闭合：HARD / DERIVED / SOFT
@@ -125,9 +110,9 @@ XY 原点为零件整体外形中心，Z=0 为零件底面，+X 向右、+Y 为�
 - 跨 feature 推导必须有关系证据：中心距/节距 source 本身提供关系，或在 `relation_refs` 引用明确的 tangent/coincident/alignment source；
 - 视为已闭合，不进入 `unresolved`。
 
-允许示例：
-- 已知中心高 `H=40` 和明确中心距 `E=18` → 另一轴线高度 `Z=40+18=58`；
-- 已知总高 66、主孔中心高 40、主孔 Ø20，且图形明确开缝止于主孔上切点 → 深度 `66-(40+10)=16`。
+允许形式：
+- 已知参考中心高 `H` 和明确中心距 `E` → 目标轴线高度可由 `H±E` 唯一计算；
+- 已知总高、孔中心高、孔径，且图形明确开缝终止于孔的相切点 → 槽深可由这些已绑定量唯一计算。
 
 禁止把以下情况伪装成 derived：
 - 需要像素比例；
@@ -175,7 +160,7 @@ DETAIL / SECTION 是局部几何高优先级证据。出现矛盾必须进入 `u
 
 ## 9. Profile-First 复杂轮廓
 
-如果图纸表达一个连续外轮廓，禁止用“矩形 + 圆”等包络图元替代真实轮廓。JSON 必须提供足以唯一重建的 `profile.segments`：直线端点、圆弧圆心/半径/角度、圆角 R、斜边角度及参考方向、相切/连接关系。任一轮廓段不能唯一确定时，加入 `unresolved`。
+如果图纸表达一个连续外轮廓，禁止用“矩形 + 圆”等包络图元替代真实轮廓。JSON 必须提供足以唯一重建的 `profile.segments`：直线端点、圆弧圆心/半径/角度、圆角 R、斜边角度及参考方向、相切/连接关系。正交视图明确显示左对齐、右对齐、偏置或其它非中心结构时必须保留该投影关系；不得因整体 bbox 对称而默认把局部 profile 居中。任一轮廓段不能唯一确定时，加入 `unresolved`。
 
 ## 10. Pattern / 数量语义
 
