@@ -426,6 +426,34 @@ def test_build_executable_plan_resolves_all_references():
     assert save and save[0].get("retry", {}).get("max", 0) >= 1
 
 
+def test_frozen_check_rejects_executable_only_fields():
+    plan = {"mode": "FAST", "operations": [{
+        "step": 1,
+        "tool": "nx_list_edges",
+        "tool_args": {"body_id": "body_main"},
+        "selection_criteria": {"linear_only": True},
+        "result_bindings": {"edges": "selected_edges"},
+        "selection_binding": "sel_1",
+        "retry": {"max": 1, "if_error_contains": ["x"]},
+        "topology_changes": False,
+    }]}
+    errs = R.check_plan(plan, executable=False)
+    assert any("result_bindings" in e for e in errs)
+    assert any("selection_binding" in e for e in errs)
+    assert any("retry" in e for e in errs)
+
+
+def test_frozen_check_rejects_dollar_references():
+    plan = {"mode": "FAST", "operations": [{
+        "step": 1,
+        "tool": "nx_list_edges",
+        "tool_args": {"body_id": "$body_main"},
+        "topology_changes": False,
+    }]}
+    errs = R.check_plan(plan, executable=False)
+    assert any("executable reference" in e for e in errs)
+
+
 def test_build_is_idempotent_shape():
     with open(FROZEN_PLAN, encoding="utf-8") as f:
         plan = json.load(f)
