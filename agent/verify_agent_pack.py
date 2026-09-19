@@ -247,8 +247,9 @@ def main() -> None:
         fail("text-mode frozen/executable boundary rule missing")
 
     for token in (
-        "executable edge_indices string must be a $selection reference",
-        "frozen edge_indices string must be a <stepN",
+        "Selection-consuming params must use the format-specific reference syntax.",
+        'value.startswith("$selection.")',
+        're.fullmatch(r"<step\\d+[^>]*>", value)',
     ):
         if token not in runner_source:
             fail(f"Runner selection-consumer reference regression: missing {token}")
