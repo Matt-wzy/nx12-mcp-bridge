@@ -1473,6 +1473,7 @@ _DRAWING_META_KEYS = {
 _DRAWING_RELATION_SEMANTICS = {
     "center_distance",
     "center_spacing",
+    "edge_offset",
     "symmetry",
     "upper_tangent",
     "lower_tangent",
@@ -1546,6 +1547,7 @@ def _drawing_is_center_target(target: str) -> bool:
     return (
         ".centerline." in target
         or ".position.center" in target
+        or ".explicit_centers." in target
         or leaf in {
             "center",
             "centerline_x",
@@ -1632,6 +1634,8 @@ def _drawing_direct_semantic_ok(data: dict, source: dict) -> bool:
                 "hole_z",
             }
         )
+    if semantic == "position_dimension":
+        return leaf in {"x", "y", "z", "top_z", "bottom_z", "start_z", "end_z"}
     if semantic == "thread_spec":
         return leaf == "spec"
     if semantic == "feature_kind":
@@ -2185,6 +2189,53 @@ def check_drawing_json(data: dict) -> list[str]:
         if semantic in _DRAWING_RELATION_SEMANTICS:
             if "target" in source:
                 errors.append(f"relation source {sid!r} must not use direct target")
+            if semantic == "edge_offset":
+                targets = source.get("targets")
+                axis = str(source.get("axis") or "").lower()
+                side = str(source.get("from") or "").lower()
+                value = _drawing_source_value(source)
+                if (
+                    not isinstance(targets, list)
+                    or not targets
+                    or not all(isinstance(item, str) and item for item in targets)
+                    or axis not in {"x", "y", "z"}
+                    or side not in {"min", "max"}
+                    or value is None
+                ):
+                    errors.append(
+                        f"source {sid!r} edge_offset requires targets/axis/from/value"
+                    )
+                else:
+                    bbox = _drawing_overall_bbox(data)
+                    if bbox is None:
+                        errors.append(
+                            f"source {sid!r} edge_offset requires valid overall dimensions"
+                        )
+                    else:
+                        lx, ly, hz = bbox
+                        bounds = {
+                            "x": (-lx / 2.0, lx / 2.0),
+                            "y": (-ly / 2.0, ly / 2.0),
+                            "z": (0.0, hz),
+                        }
+                        lo, hi = bounds[axis]
+                        expected = lo + value if side == "min" else hi - value
+                        for target in targets:
+                            try:
+                                actual = _num(_drawing_path_get(data, target))
+                            except KeyError:
+                                actual = None
+                            if actual is None:
+                                errors.append(
+                                    f"source {sid!r} edge_offset target {target!r} is missing"
+                                )
+                                continue
+                            if abs(actual - expected) > 1e-9:
+                                errors.append(
+                                    f"source {sid!r} edge_offset does not match {target!r}"
+                                )
+                            relation_targets.add(target)
+                continue
             if semantic in {"center_distance", "center_spacing"}:
                 between = source.get("between")
                 if (
