@@ -80,14 +80,18 @@
 - 普通位置尺寸（如某轴线间距、中心高、参数 `E`）不得自动改解释为槽深；没有深度证据就保持原始尺寸语义。
 - directional feature 输出要求：hole/counterbore/countersink → `axis`；slot/cut → `width_axis` + `through_axis`，非贯穿时才另给有证据的 `depth`。
 
-## 8. 尺寸闭合检查
+## 8. 最低充分建模闭合
 
-- 仅基于图上已标注数值进行一致性校验，例如：
-  - 总高 = 底板厚度 + 凸台高度
-  - 总宽 = 2 × 孔中心距 + 分布圆直径
-  - 沉孔数量 = 通孔数量
-- 允许的结论：`closed`（自洽）、`incomplete`（标注不足）、`conflict`（矛盾）。
-- **禁止自行补尺寸来闭合**；不闭合不影响已确认特征的输出。
+- Gate A 只阻塞**会改变最终三维实体**的不确定项。
+- 每个 unresolved 必须标 `required_for_modeling: true|false`：
+  - `true`：尺寸/位置/数量/轴向/轮廓/贯穿或真实 depth 等关键几何；
+  - `false`：粗糙度、普通制造说明、非建模字段、与实体无关的 OCR 模糊项。
+- 能由明确尺寸和明确拓扑关系唯一算出的值进入 `derived`，必须保存确定性算式与来源，例如 `40+18=58`；derived 视为已闭合。
+- 禁止使用像素比例、经验猜测或多解关系做 derived。
+- `dimension_closure=closed` 的条件：blocking unresolved=0 且 dimension conflict=0；**不要求 warning/soft unresolved=0**。
+- 规格表不要求逐字段完全解释；只核对最终建模真正使用的字段。
+- Gate A BLOCKED 时只询问 blocking unresolved，不得把 soft warning 一并抛给用户。
+- **禁止自行补尺寸来闭合**。
 
 ## 9. 重复尺寸跨视图合并规则
 
