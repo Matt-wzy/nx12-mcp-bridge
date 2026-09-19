@@ -137,6 +137,7 @@ def main() -> None:
         if "全局 XY 原点" not in text or "diameter/2" not in text:
             fail(f"centroid_radius global-origin semantics missing in {rule_file.name}")
 
+    output_rules = (SKILL / "references" / "chinese-output.md").read_text(encoding="utf-8")
     if 'report.status == "success"' not in output_rules:
         fail("user-visible success is not bound to Runner report status")
 
@@ -212,7 +213,6 @@ def main() -> None:
     drawing_reader = (SKILL / "references" / "drawing-reader.md").read_text(encoding="utf-8")
     drawing_rules = (SKILL / "references" / "nx-drawing-rules.md").read_text(encoding="utf-8")
     pipeline_contract = (SKILL / "references" / "pipeline-contract.md").read_text(encoding="utf-8")
-    output_rules = (SKILL / "references" / "chinese-output.md").read_text(encoding="utf-8")
     for token in (
         "HARD / DERIVED / SOFT",
         "required_for_modeling=true",
