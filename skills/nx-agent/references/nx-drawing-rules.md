@@ -86,7 +86,7 @@
 - 普通位置尺寸（如某轴线间距、中心高、参数 `E`）不得自动改解释为槽深/槽底；已经绑定到孔轴 centerline 的尺寸不得再跨 feature 复用成 slot 终止尺寸。
 - derived 必须绑定明确 `target`；没有额外图纸证据时禁止一个 derived 结果跨 feature 复用。
 - directional feature 输出要求：hole/counterbore/countersink → `axis`；slot/cut → `width_axis` + `through_axis`，非贯穿时才另给有证据的 `depth`。
-- source semantic 使用固定类别：槽宽=`slot_width`，两轴中心距=`center_distance/center_spacing`，数量=`feature_count`，孔径=`diameter`，中心坐标=`center_position`；关系尺寸禁止降级成泛化 `feature_dimension`。
+- source semantic 使用固定类别：槽宽=`slot_width`，两轴中心距=`center_distance/center_spacing`，外形边到中心=`edge_offset`，数量=`feature_count`，孔径=`diameter`，中心坐标=`center_position`；关系尺寸禁止降级成泛化 `feature_dimension`。
 
 ### 7.1 同轴复合孔归组
 
