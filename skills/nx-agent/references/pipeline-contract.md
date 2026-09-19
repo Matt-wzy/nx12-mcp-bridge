@@ -48,10 +48,16 @@ A 失败立即停止，**不允许自动修复**。
 
 正常路径：
 ```text
-结构化输入 → FAST plan → 发布前静态自检 → frozen plan → runner build → runner check → executable plan
+结构化输入 → 语义/数量/能力预检 → FAST plan → 发布前静态自检 → frozen plan → runner build → runner check → executable plan
 ```
 
-runner build/check 任一失败即 B 失败。B 阶段失败**不进入自修复**，禁止修改 frozen plan 后自动重跑。
+frozen plan 落盘前必须满足：
+- `capability_violations=0`；required feature 超出 certified tools 且没有输入明确提供的 geometry-preserving surrogate 时直接 B 失败；
+- Reader/结构化输入中的 HARD geometry field 与 `derived.target` 原样保留，禁止跨 feature 复用 source；
+- pattern 总实例数与源 `count` 完全一致，禁止因 symmetry/mirror 再次乘倍；
+- unsupported threaded feature 不得被删除或替换成普通 through/clearance hole。
+
+上述预检或 runner build/check 任一失败即 B 失败。B 阶段失败**不进入自修复**，禁止修改 frozen plan 后自动重跑。
 
 ## 5. 阶段 C：Plan Runner
 Runner 路径：
