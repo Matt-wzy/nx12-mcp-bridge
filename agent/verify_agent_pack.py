@@ -137,7 +137,6 @@ def main() -> None:
         if "全局 XY 原点" not in text or "diameter/2" not in text:
             fail(f"centroid_radius global-origin semantics missing in {rule_file.name}")
 
-    output_rules = (SKILL / "references" / "chinese-output.md").read_text(encoding="utf-8")
     if 'report.status == "success"' not in output_rules:
         fail("user-visible success is not bound to Runner report status")
 
@@ -209,6 +208,50 @@ def main() -> None:
     ):
         if token not in drawing_rules:
             fail(f"quick drawing rules regression: missing {token}")
+
+    drawing_reader = (SKILL / "references" / "drawing-reader.md").read_text(encoding="utf-8")
+    drawing_rules = (SKILL / "references" / "nx-drawing-rules.md").read_text(encoding="utf-8")
+    pipeline_contract = (SKILL / "references" / "pipeline-contract.md").read_text(encoding="utf-8")
+    output_rules = (SKILL / "references" / "chinese-output.md").read_text(encoding="utf-8")
+    for token in (
+        "HARD / DERIVED / SOFT",
+        "required_for_modeling=true",
+        "required_for_modeling=false",
+        "source_dimensions",
+        "blocking_unresolved",
+        "规格表字段不要求“逐字段解释完成”才能建模",
+    ):
+        if token not in drawing_reader:
+            fail(f"drawing minimum-closure regression: missing {token}")
+    for token in (
+        "每个 unresolved 必须标",
+        "40+18=58",
+        "不要求 warning/soft unresolved=0",
+        "只询问 blocking unresolved",
+    ):
+        if token not in drawing_rules:
+            fail(f"quick drawing minimum-closure regression: missing {token}")
+    for token in (
+        "blocking_unresolved=0",
+        "dimension_conflicts=0",
+        "required_for_modeling=false",
+    ):
+        if token not in pipeline_contract:
+            fail(f"pipeline Gate A minimum-closure regression: missing {token}")
+    for token in (
+        "只列出 `required_for_modeling=true`",
+        "最少问题",
+        "继续 Planner",
+    ):
+        if token not in output_rules:
+            fail(f"Gate A user-output regression: missing {token}")
+    for token in (
+        "blocking_unresolved = 0",
+        "dimension_conflicts = 0",
+        "最低充分建模闭合",
+    ):
+        if token not in top:
+            fail(f"top-level Gate A minimum-closure regression: missing {token}")
 
     text_fast = (SKILL / "references" / "text-modeling.md").read_text(encoding="utf-8")
     for token in (
@@ -305,7 +348,6 @@ def main() -> None:
     if "<stepN ...>" not in text_fast or "禁止写裸语义名" not in text_fast:
         fail("text-mode selection consumer placeholder rule missing")
 
-    pipeline_contract = (SKILL / "references" / "pipeline-contract.md").read_text(encoding="utf-8")
     if "纯计划表达错误" not in pipeline_contract or "result_bindings" not in pipeline_contract:
         fail("pipeline contract does not allow safe one-shot repair of binding-only plan errors")
 
