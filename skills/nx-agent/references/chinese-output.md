@@ -59,6 +59,12 @@ A/B 失败：
 失败原因：……
 ```
 
+B 阶段若因能力边界失败：
+- 明确写“失败阶段：建模规划”，不得进入 Runner；
+- 说明哪个 required feature 当前 32 个 certified tools 无法等价建模；
+- 禁止把 unsupported feature 描述成“已由普通孔/其它特征等价表达”；
+- 只有用户/输入明确提供并允许 geometry-preserving surrogate 后，才可重新规划。
+
 C 首次失败且不可修复：
 ```
 状态：失败
