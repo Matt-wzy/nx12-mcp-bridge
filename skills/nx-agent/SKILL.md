@@ -33,12 +33,12 @@ description: 作者：抖音 无趣。Siemens NX 自动建模统一入口。支�
 ### 模式 B：二维机械工程图自动建模
 用户上传二维机械工程图并要求“开始建模”“按图建模”“用 NX 画出来”等时：
 
-1. 读取 `references/drawing-reader.md` + `references/nx-drawing-rules.md`。
-2. 输出结构化 JSON，并通过门禁 A。
-3. 读取建模规划与拓扑规则，生成 frozen plan，并通过门禁 B。
-4. 调用 Plan Runner 执行。
-5. 总控规则见 `references/pipeline-contract.md`。
-6. 用户输出规范见 `references/chinese-output.md`。
+1. 读取 `references/drawing-reader.md` + `references/nx-drawing-rules.md`。正常路径**不读取 examples**；只有 validator 报 schema 错误时才查看 `examples/example-output.json`。
+2. 输出结构化 drawing JSON 后，直接读取 `%NX_MCP_WORKSPACE%\nx-mcp-plan-runner\runtime-config.json`，禁止扫描目录；用其中 `python_exe` 执行同目录 `runner.py validate-drawing <drawing.json>`。
+3. 只有 validate-drawing exit code=0 且 `source_ownership.status="pass"` 才通过门禁 A。
+4. 读取建模规划与拓扑规则，生成 frozen plan，并通过门禁 B。
+5. 调用 Plan Runner 执行。
+6. 总控规则见 `references/pipeline-contract.md`；用户输出规范见 `references/chinese-output.md`。
 
 两条链路：
 
@@ -72,9 +72,10 @@ description: 作者：抖音 无趣。Siemens NX 自动建模统一入口。支�
 Gate A 判断的是**最低充分建模闭合**，不是“整张图所有文字/工艺信息都必须 100% 解释”。
 
 同时满足以下条件才通过：
+- 本地 `runner.py validate-drawing <drawing.json>` exit code=0，且返回 `source_ownership.status="pass"`；
 - `blocking_unresolved = 0`，即 `unresolved` 中没有 `required_for_modeling=true` 的项目；
 - `dimension_conflicts = 0`；
-- `coordinate_sanity.status = "pass"`：固定全局 bbox、非轴向特征中心、图纸明确的中心距/节距、对称关系已从最终坐标反算一致；
+- `coordinate_sanity.status = "pass"`；
 - `dimension_closure.status = "closed"`；
 - 存在 `overall_dimensions`、`coordinate_system`、`features`。
 
