@@ -559,6 +559,10 @@ class NXTransport:
         self._ensure()
         return bool(self._bridge.ping())
 
+    def ping_error(self) -> str | None:
+        self._ensure()
+        return getattr(self._bridge, "last_ping_error", None)
+
     def resolve_path(self, path: str) -> str:
         self._ensure()
         return str(self._ws.resolve(path))
@@ -1372,8 +1376,12 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         return 1
     transport = NXTransport(workspace_root=args.workspace)
     if not transport.ping():
+        detail = transport.ping_error()
+        error = "loader health check failed"
+        if detail:
+            error += ": " + detail
         print(json.dumps({"status": "failed", "failed_step": None,
-                          "errors": ["loader pipe not reachable"]}, ensure_ascii=False))
+                          "errors": [error]}, ensure_ascii=False))
         return 1
 
     planned_for_repair = derive_planned_part(plan, transport)
