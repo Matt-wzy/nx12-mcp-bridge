@@ -20,6 +20,7 @@
   },
   "features": [
     {
+      "id": "F_BASE",
       "name": "底板",
       "type": "base_plate",
       "dimensions": {
@@ -27,7 +28,6 @@
         "width": 60,
         "thickness": 10
       },
-      "position": {},
       "count": 1,
       "source_views": [
         "俯视图",
@@ -37,6 +37,7 @@
       "required_for_modeling": true
     },
     {
+      "id": "F_BOSS",
       "name": "中央凸台",
       "type": "boss",
       "dimensions": {
@@ -58,6 +59,7 @@
       "required_for_modeling": true
     },
     {
+      "id": "F_HOLE",
       "name": "中心通孔",
       "type": "through_hole",
       "dimensions": {
@@ -78,14 +80,122 @@
       "required_for_modeling": true
     }
   ],
+  "source_ledger": [
+    {
+      "id": "S_BASE_L",
+      "semantic": "linear_dimension",
+      "value": 80,
+      "targets": [
+        "feature:F_BASE.dimensions.length"
+      ]
+    },
+    {
+      "id": "S_BASE_W",
+      "semantic": "linear_dimension",
+      "value": 60,
+      "targets": [
+        "feature:F_BASE.dimensions.width"
+      ]
+    },
+    {
+      "id": "S_BASE_T",
+      "semantic": "linear_dimension",
+      "value": 10,
+      "targets": [
+        "feature:F_BASE.dimensions.thickness"
+      ]
+    },
+    {
+      "id": "S_BASE_N",
+      "semantic": "feature_count",
+      "value": 1,
+      "targets": [
+        "feature:F_BASE.count"
+      ]
+    },
+    {
+      "id": "S_BOSS_D",
+      "semantic": "diameter",
+      "value": 40,
+      "targets": [
+        "feature:F_BOSS.dimensions.diameter"
+      ]
+    },
+    {
+      "id": "S_BOSS_H",
+      "semantic": "linear_dimension",
+      "value": 15,
+      "targets": [
+        "feature:F_BOSS.dimensions.height"
+      ]
+    },
+    {
+      "id": "S_BOSS_C",
+      "semantic": "center_relation",
+      "value": [
+        0,
+        0
+      ],
+      "targets": [
+        "feature:F_BOSS.position.center"
+      ]
+    },
+    {
+      "id": "S_BOSS_N",
+      "semantic": "feature_count",
+      "value": 1,
+      "targets": [
+        "feature:F_BOSS.count"
+      ]
+    },
+    {
+      "id": "S_HOLE_D",
+      "semantic": "diameter",
+      "value": 20,
+      "targets": [
+        "feature:F_HOLE.dimensions.diameter"
+      ]
+    },
+    {
+      "id": "S_HOLE_C",
+      "semantic": "center_relation",
+      "value": [
+        0,
+        0
+      ],
+      "targets": [
+        "feature:F_HOLE.position.center"
+      ]
+    },
+    {
+      "id": "S_HOLE_N",
+      "semantic": "feature_count",
+      "value": 1,
+      "targets": [
+        "feature:F_HOLE.count"
+      ]
+    }
+  ],
+  "source_ownership": {
+    "schema_version": 1
+  },
+  "derived": [],
   "patterns": [],
   "symmetry": [
     "凸台与中心孔同心，并与底板中心重合"
   ],
   "unresolved": [],
+  "dimension_conflicts": [],
+  "coordinate_sanity": {
+    "status": "pass",
+    "checks": [
+      "overall bbox: X=-40..40, Y=-30..30, Z=0..25",
+      "全部特征中心位于 overall bbox 内"
+    ]
+  },
   "dimension_closure": {
     "status": "closed",
-    "basis": "仅使用图上已标注数值",
+    "basis": "所有 required geometry 均有 source_ledger 直接证据或 deterministic derived",
     "checks": [
       "总高 25 = 10 + 15 ✓"
     ]
