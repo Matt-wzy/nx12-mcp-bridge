@@ -192,14 +192,15 @@ def main() -> None:
 
     drawing_reader = (SKILL / "references" / "drawing-reader.md").read_text(encoding="utf-8")
     drawing_rules = (SKILL / "references" / "nx-drawing-rules.md").read_text(encoding="utf-8")
-    for token in ("最多 2 个", "禁止 OCR 驱动的逐区扫描", "宁可 BLOCKED"):
+    for token in ("Fast Gate A", "默认 0 次", "最多 **1 次**", "禁止 OCR 驱动的逐区扫描", "宁可 BLOCKED"):
         if token not in drawing_reader:
             fail(f"drawing-reader bounded image analysis rule missing: {token}")
-    for token in ("最多 **2 次**", "禁止 OCR 主导读图", "立即 `unresolved`"):
+    for token in ("默认 **0 次**", "最多允许 **1 次**", "规格表/参数表", "禁止 OCR 主导读图", "立即 `unresolved`"):
         if token not in drawing_rules:
             fail(f"nx-drawing-rules bounded image analysis rule missing: {token}")
-    if "整图之外最多 2 次" not in top or "不得继续裁剪/OCR" not in top:
-        fail("SKILL Mode B bounded image analysis rule missing")
+    for token in ("Fast Gate A", "默认 0 次局部复核", "最多 1 次", "禁止为 Planner 再读原图"):
+        if token not in top:
+            fail(f"SKILL Mode B Fast Gate A rule missing: {token}")
 
     text_fast = (SKILL / "references" / "text-modeling.md").read_text(encoding="utf-8")
     for token in (
