@@ -274,6 +274,33 @@ def main() -> None:
                 "value": [[-12, 8], [12, 8]],
                 "target": "feature:F_BASE_HOLES.explicit_centers",
             },
+            {
+                "id": "S_BASE_XSPAN",
+                "semantic": "center_spacing",
+                "value": 24,
+                "between": [
+                    "feature:F_BASE_HOLES.explicit_centers.0.0",
+                    "feature:F_BASE_HOLES.explicit_centers.1.0",
+                ],
+            },
+            {
+                "id": "S_BASE_YOFF",
+                "semantic": "edge_offset",
+                "value": 24,
+                "axis": "Y",
+                "from": "min",
+                "targets": [
+                    "feature:F_BASE_HOLES.explicit_centers.0.1",
+                    "feature:F_BASE_HOLES.explicit_centers.1.1",
+                ],
+            },
+            {
+                "id": "S_BASE_SYM",
+                "semantic": "symmetry",
+                "feature": "F_BASE_HOLES",
+                "axis": "X",
+                "about": 0,
+            },
         ],
         "derived": [
             {
@@ -362,20 +389,7 @@ def main() -> None:
     if not runner.check_drawing_json(bad_center_endpoint):
         fail("drawing validator does not reject non-center endpoint for center_distance")
 
-    good_symmetry = json.loads(json.dumps(geometry_fixture))
-    good_symmetry["source_ledger"].append(
-        {
-            "id": "S_SYM_X",
-            "semantic": "symmetry",
-            "feature": "F_BASE_HOLES",
-            "axis": "X",
-            "about": 0,
-        }
-    )
-    if runner.check_drawing_json(good_symmetry):
-        fail("drawing validator rejects a valid explicit-center symmetry relation")
-
-    bad_symmetry = json.loads(json.dumps(good_symmetry))
+    bad_symmetry = json.loads(json.dumps(geometry_fixture))
     for feature in bad_symmetry["features"]:
         if feature.get("id") == "F_BASE_HOLES":
             feature["explicit_centers"] = [[-10, 8], [14, 8]]
