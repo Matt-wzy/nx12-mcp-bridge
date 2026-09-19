@@ -23,6 +23,10 @@ if ([string]::IsNullOrWhiteSpace($Workspace)) {
 New-Item -ItemType Directory -Force -Path $Workspace | Out-Null
 $Workspace = (Resolve-Path $Workspace).Path
 
+# 让后续启动的 NX/Loader 与 Agent/Runner 使用同一个工作区。
+$env:NX_MCP_WORKSPACE = $Workspace
+[Environment]::SetEnvironmentVariable("NX_MCP_WORKSPACE", $Workspace, "User")
+
 if (-not $PythonExe) {
     $repoPy = Join-Path $RepoRoot ".venv\Scripts\python.exe"
     if (Test-Path $repoPy) { $PythonExe = $repoPy }
