@@ -192,6 +192,19 @@ def main() -> None:
 
     text_fast = (SKILL / "references" / "text-modeling.md").read_text(encoding="utf-8")
     for token in (
+        "建议参数闭合检查",
+        "d >= r + R",
+        "方位文字与坐标一致",
+    ):
+        if token not in text_fast:
+            fail(f"text-mode clarification geometry guard missing: {token}")
+
+    planner_rules = (SKILL / "references" / "modeling-planner.md").read_text(encoding="utf-8")
+    for token in ("澄清建议的几何一致性", "d >= r + R", "方位描述与坐标范围必须一致"):
+        if token not in planner_rules:
+            fail(f"Planner clarification geometry guard missing: {token}")
+
+    for token in (
         "正常一次通过路径只需要本文件",
         "禁止递归搜索 runtime-config",
         "正常新零件任务**不主动读取**",
