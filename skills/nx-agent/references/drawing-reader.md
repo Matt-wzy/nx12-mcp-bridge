@@ -215,12 +215,13 @@ DETAIL / SECTION 是局部几何高优先级证据。出现矛盾必须进入 `u
 ```
 
 `source_ledger` 使用机器可判定的语义，不允许自由定义“可绑定目标”：
-- direct：`overall_dimension / profile_dimension / feature_dimension / feature_count / diameter / radius / slot_width / depth / thickness / axis / center_position / thread_spec / feature_kind / side / through / pattern_dimension`；
-- relation：`center_distance / center_spacing / symmetry / upper_tangent / lower_tangent / coincident / alignment`。
+- direct：`overall_dimension / profile_dimension / feature_dimension / feature_count / diameter / radius / slot_width / depth / thickness / axis / center_position / position_dimension / thread_spec / feature_kind / side / through / pattern_dimension`；
+- relation：`center_distance / center_spacing / edge_offset / symmetry / upper_tangent / lower_tangent / coincident / alignment`。
 
 关键规则：
 - direct source 只写一个 `target`；语义与 target 不兼容时 validator 直接失败；
 - `center_distance / center_spacing` 写 `between:[targetA,targetB]`，只能用于这两个 endpoint 的推导；
+- 从 overall 外形边到中心的尺寸写 `edge_offset` + `axis` + `from:min|max` + `targets`；机器按 centered bbox 反算，禁止把边距值直接当全局坐标；
 - tangent relation 写 `center / diameter / tangent / links`，由机器反算切点；
 - derived 用 `expr`；跨 feature 且没有关系证据时 validator 失败；
 - `N×` 数量、overall bbox、feature center、profile range、对称关系均由 validator 自己计算，不采信 Agent 自写 pass 状态。
