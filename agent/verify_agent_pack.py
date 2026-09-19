@@ -156,6 +156,25 @@ def main() -> None:
         if token not in loader_source:
             fail(f"principal-plane Loader regression: missing {token}")
 
+    for token in (
+        "NXOpen.Part work = _session.Parts.Work;",
+        '"<unsaved-active-part>"',
+        'return ErrJson("status failed: " + e.Message);',
+        '"NX_MCP_WORKSPACE"',
+        '"nx_mcp_loader.log"',
+    ):
+        if token not in loader_source:
+            fail(f"Loader stale-part/workspace regression: missing {token}")
+
+    loader_bridge_source = (ROOT / "src" / "nx_mcp" / "loader_bridge.py").read_text(encoding="utf-8")
+    for token in ("last_ping_error", "loader status returned ok=false"):
+        if token not in loader_bridge_source:
+            fail(f"Loader ping diagnostic regression: missing {token}")
+
+    install_agent = (ROOT / "install-agent.ps1").read_text(encoding="utf-8")
+    if 'SetEnvironmentVariable("NX_MCP_WORKSPACE", $Workspace, "User")' not in install_agent:
+        fail("install-agent.ps1 does not persist NX_MCP_WORKSPACE for Loader")
+
     plane_rules = (SKILL / "references" / "nx-mcp-rules.md").read_text(encoding="utf-8")
     for token in ("XY→+Z", "XZ→+Y", "YZ→+X", 'nx_extrude(operation="subtract")'):
         if token not in plane_rules:
@@ -190,6 +209,13 @@ def main() -> None:
     ):
         if token not in runner_source:
             fail(f"Runner timing regression: missing {token}")
+
+    if "loader health check failed" not in runner_source or "ping_error()" not in runner_source:
+        fail("Runner Loader health-check diagnostics regression")
+
+    plan_tests = (RUNNER / "tests" / "test_plan_resolution.py").read_text(encoding="utf-8")
+    if "test_transport_ping_error_passthrough" not in plan_tests:
+        fail("Runner Loader ping diagnostic test missing")
 
     timing_tests = (RUNNER / "tests" / "test_bbox_report.py").read_text(encoding="utf-8")
     if "test_timing_bucket_separates_postprocess_from_validation" not in timing_tests:
