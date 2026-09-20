@@ -222,6 +222,22 @@ Loader 日志固定写入 `NX_MCP_WORKSPACE\nx_mcp_loader.log`；安装器会持
 
 Runner 只做 repair 门禁与安全 preflight，不自行修改 plan。
 
+### 10.1 Workspace active task（临时 containment）
+
+Runner 在 `runtime-config.workspace_root` 根目录维护
+`.mode-b-active-task.json`，它不位于 drawing 子目录或 `.mode-b-tasks` 内。
+第一次 `validate-drawing --new-task` 创建 task manifest 与该 registry；只要 lifecycle
+不是 `completed`，同一 workspace 再次 `--new-task` 都不得创建新 task，后续 schema
+retry / build / run / repair 必须继续使用 registry 记录的 `task_root`。若原 task
+manifest 被删除，Runner 按 lineage tamper 直接阻塞，不能以当前 drawing 重铸 baseline。
+
+只有 Runner 正常执行成功才把 registry 标记为 `completed`，允许下一次新任务覆盖为新的
+active task。Gate A BLOCK、Runner failure 与 repair pending 均继续占用 active task。
+由于当前没有可信宿主 request scope，确需在失败后开始真正的新用户任务时，只能由
+用户/运维在 Agent 流程之外清理 registry，或换用新的 clean workspace；Runner 不提供
+Agent 可调用的 reset / force-new / clear-active 命令。这是临时 containment，不是最终的
+host identity 方案。
+
 ## 11. 当前路径与版本
 
 - Runner 路径：`<runtime-config.workspace_root>\nx-mcp-plan-runner\runner.py`
