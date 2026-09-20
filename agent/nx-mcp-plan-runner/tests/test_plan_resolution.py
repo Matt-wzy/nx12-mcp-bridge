@@ -1530,17 +1530,171 @@ def test_run_cannot_escape_failed_task_with_fresh_history_path(tmp_path=None):
     assert any("attempt-0 modeling failure" in error for error in result["errors"])
 
 
-def test_new_mode_b_task_allows_fresh_attempt_zero_for_same_drawing(tmp_path=None):
+def test_mode_b_new_task_creates_workspace_active_registry_and_blocks_second(tmp_path=None):
     import tempfile
     directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
     drawing = _thread_drawing()
     path = os.path.join(directory, "drawing.json")
-    first_path, first = R.create_mode_b_task(drawing, path)
-    R.record_mode_b_attempt(first_path, first, 0, "failed")
-    second_path, second = R.create_mode_b_task(drawing, path)
-    assert first["mode_b_task_id"] != second["mode_b_task_id"]
-    assert first_path != second_path
-    assert R.mode_b_task_attempt_errors(second, 0) == []
+    first_path, first = R.create_mode_b_task_with_registry(
+        drawing, path, directory
+    )
+    registry_path = R.mode_b_active_registry_path(directory)
+    registry = R.load_mode_b_active_registry(directory)
+    assert os.path.dirname(registry_path) == os.path.abspath(directory)
+    assert registry["mode_b_task_id"] == first["mode_b_task_id"]
+    assert registry["task_root"] == os.path.abspath(first_path)
+    assert registry["initial_geometry_sha256"] == first["initial_geometry_sha256"]
+    assert registry["lifecycle_state"] == "active"
+    try:
+        R.create_mode_b_task_with_registry(drawing, path, directory)
+        assert False, "second --new-task equivalent must be blocked"
+    except R.PlanError as exc:
+        assert "unfinished Mode B task" in str(exc)
+    manifests = os.listdir(os.path.dirname(first_path))
+    assert manifests == [os.path.basename(first_path)]
+
+
+def test_mode_b_deleted_task_manifest_blocks_new_baseline(tmp_path=None):
+    import shutil
+    import tempfile
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing = _thread_drawing()
+    path = os.path.join(directory, "drawing.json")
+    task_path, state = R.create_mode_b_task_with_registry(drawing, path, directory)
+    shutil.rmtree(os.path.dirname(task_path))
+    assert os.path.isfile(R.mode_b_active_registry_path(directory))
+    try:
+        R.create_mode_b_task_with_registry(drawing, path, directory)
+        assert False, "deleted task root must not permit a replacement baseline"
+    except R.PlanError as exc:
+        assert "lineage missing/task manifest tampered" in str(exc)
+    registry = R.load_mode_b_active_registry(directory)
+    assert registry["mode_b_task_id"] == state["mode_b_task_id"]
+    assert not os.path.exists(os.path.dirname(task_path))
+
+
+def test_mode_b_changed_drawing_and_paths_cannot_bypass_active_task(tmp_path=None):
+    import tempfile
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing = _thread_drawing()
+    original = os.path.join(directory, "drawing.json")
+    _, first = R.create_mode_b_task_with_registry(drawing, original, directory)
+    changed = json.loads(json.dumps(drawing))
+    changed["features"][0]["dimensions"]["depth"] = 99
+    for candidate in (
+        original,
+        os.path.join(directory, "renamed-drawing.json"),
+        os.path.join(directory, "other", "drawing.json"),
+    ):
+        try:
+            R.create_mode_b_task_with_registry(changed, candidate, directory)
+            assert False, "drawing/output/history path changes must not reset lineage"
+        except R.PlanError as exc:
+            assert "--new-task is blocked" in str(exc)
+    registry = R.load_mode_b_active_registry(directory)
+    assert registry["mode_b_task_id"] == first["mode_b_task_id"]
+
+
+def test_mode_b_schema_retry_reuses_workspace_active_task(tmp_path=None):
+    import tempfile
+    from types import SimpleNamespace
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    source = os.path.abspath(os.path.join(
+        PROJECT, "..", "..", "skills", "nx-agent", "examples",
+        "example-output.json",
+    ))
+    drawing = os.path.join(directory, "drawing.json")
+    with open(source, encoding="utf-8") as source_handle:
+        with open(drawing, "w", encoding="utf-8") as target_handle:
+            target_handle.write(source_handle.read())
+    first_code, first = _capture_json_command(
+        R._cmd_validate_drawing,
+        SimpleNamespace(
+            drawing=drawing, new_task=True, task_root=None,
+            workspace_root=directory,
+        ),
+    )
+    assert first_code == 0
+    task_root = first["mode_b_task"]["task_root"]
+    retry_code, retry = _capture_json_command(
+        R._cmd_validate_drawing,
+        SimpleNamespace(
+            drawing=drawing, new_task=False, task_root=task_root,
+            workspace_root=directory,
+        ),
+    )
+    assert retry_code == 0
+    assert retry["mode_b_task"]["mode_b_task_id"] == (
+        first["mode_b_task"]["mode_b_task_id"]
+    )
+    assert retry["mode_b_task"]["task_root"] == task_root
+
+
+def test_mode_b_gate_a_block_and_runner_failure_keep_registry_active(tmp_path=None):
+    import tempfile
+    from types import SimpleNamespace
+    root = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    blocked_workspace = os.path.join(root, "blocked")
+    os.makedirs(blocked_workspace, exist_ok=True)
+    drawing_path = os.path.join(blocked_workspace, "invalid.json")
+    with open(drawing_path, "w", encoding="utf-8") as handle:
+        json.dump({"features": []}, handle)
+    code, _ = _capture_json_command(
+        R._cmd_validate_drawing,
+        SimpleNamespace(
+            drawing=drawing_path, new_task=True, task_root=None,
+            workspace_root=blocked_workspace,
+        ),
+    )
+    assert code == 1
+    blocked = R.load_mode_b_active_registry(blocked_workspace)
+    assert blocked["lifecycle_state"] == "gate_a_blocked"
+    assert R._mode_b_registry_is_active(blocked)
+
+    failed_workspace = os.path.join(root, "failed")
+    os.makedirs(failed_workspace, exist_ok=True)
+    task_path, state = R.create_mode_b_task_with_registry(
+        _thread_drawing(), os.path.join(failed_workspace, "drawing.json"),
+        failed_workspace,
+    )
+    R.record_mode_b_attempt(task_path, state, 0, "failed", {"failed_step": 7})
+    failed = R.load_mode_b_active_registry(failed_workspace)
+    assert failed["lifecycle_state"] == "repair_pending"
+    assert R._mode_b_registry_is_active(failed)
+
+
+def test_mode_b_success_completes_registry_and_allows_next_task(tmp_path=None):
+    import tempfile
+    directory = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    drawing = _thread_drawing()
+    first_path, first = R.create_mode_b_task_with_registry(
+        drawing, os.path.join(directory, "drawing.json"), directory
+    )
+    R.record_mode_b_attempt(first_path, first, 0, "success")
+    completed = R.load_mode_b_active_registry(directory)
+    assert completed["lifecycle_state"] == "completed"
+    assert completed["completed_at_utc"]
+    second_path, second = R.create_mode_b_task_with_registry(
+        drawing, os.path.join(directory, "next-drawing.json"), directory
+    )
+    assert second["mode_b_task_id"] != first["mode_b_task_id"]
+    assert second_path != first_path
+    assert R.load_mode_b_active_registry(directory)["lifecycle_state"] == "active"
+
+
+def test_mode_b_new_workspace_has_independent_active_task(tmp_path=None):
+    import tempfile
+    root = str(tmp_path) if tmp_path is not None else tempfile.mkdtemp()
+    workspaces = [os.path.join(root, "one"), os.path.join(root, "two")]
+    tasks = []
+    for workspace in workspaces:
+        os.makedirs(workspace, exist_ok=True)
+        _, state = R.create_mode_b_task_with_registry(
+            _thread_drawing(), os.path.join(workspace, "drawing.json"), workspace
+        )
+        tasks.append(state["mode_b_task_id"])
+    assert tasks[0] != tasks[1]
+    assert all(os.path.isfile(R.mode_b_active_registry_path(path)) for path in workspaces)
 
 
 def test_axial_range_order_has_same_canonical_design_hash():
@@ -1727,6 +1881,7 @@ def test_validate_build_check_return_independent_timing(tmp_path=None):
                 drawing=drawing,
                 new_task=index == 0,
                 task_root=task_root,
+                workspace_root=directory,
             ),
         )
         assert exit_code == 0
@@ -1771,7 +1926,10 @@ def test_timing_failure_does_not_change_validate_result():
         R.time.perf_counter_ns = lambda: (_ for _ in ()).throw(RuntimeError("clock failed"))
         exit_code, result = _capture_json_command(
             R._cmd_validate_drawing,
-            SimpleNamespace(drawing=drawing, new_task=True, task_root=None),
+            SimpleNamespace(
+                drawing=drawing, new_task=True, task_root=None,
+                workspace_root=directory,
+            ),
         )
     finally:
         R.time.perf_counter_ns = original

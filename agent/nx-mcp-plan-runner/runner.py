@@ -1856,6 +1856,8 @@ def _json_sha256(value: Any) -> str:
 
 
 _MODE_B_TASK_SCHEMA_VERSION = 1
+_MODE_B_ACTIVE_REGISTRY_SCHEMA_VERSION = 1
+_MODE_B_ACTIVE_REGISTRY_FILENAME = ".mode-b-active-task.json"
 
 
 def _write_json_atomic(path: str, value: dict) -> None:
@@ -1867,7 +1869,158 @@ def _write_json_atomic(path: str, value: dict) -> None:
     os.replace(temp_path, path)
 
 
-def create_mode_b_task(drawing: dict, drawing_path: str) -> tuple[str, dict]:
+def mode_b_workspace_root(
+    drawing_path: str, workspace_root: str | None = None,
+) -> str:
+    """Resolve the Runner-owned workspace root without adding a CLI identity input."""
+    configured = workspace_root
+    if not configured:
+        configured = str(load_runtime_config().get("workspace_root") or "")
+    if not configured:
+        configured = str(os.environ.get("NX_MCP_WORKSPACE") or "")
+    if not configured:
+        # Test/development fallback. Installed Mode B always has runtime-config.
+        configured = os.path.dirname(os.path.abspath(drawing_path))
+    return os.path.abspath(configured)
+
+
+def mode_b_active_registry_path(workspace_root: str) -> str:
+    return os.path.join(
+        os.path.abspath(workspace_root), _MODE_B_ACTIVE_REGISTRY_FILENAME
+    )
+
+
+def load_mode_b_active_registry(workspace_root: str) -> dict | None:
+    path = mode_b_active_registry_path(workspace_root)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8-sig") as handle:
+            registry = json.load(handle)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise PlanError(f"Mode B active-task registry is unreadable/tampered: {exc}")
+    if not isinstance(registry, dict):
+        raise PlanError("Mode B active-task registry must be a JSON object")
+    if registry.get("schema_version") != _MODE_B_ACTIVE_REGISTRY_SCHEMA_VERSION:
+        raise PlanError("unsupported Mode B active-task registry schema")
+    if not registry.get("mode_b_task_id") or not registry.get("task_root"):
+        raise PlanError("Mode B active-task registry has no authoritative task identity")
+    recorded_workspace = os.path.abspath(str(registry.get("workspace_root") or ""))
+    if recorded_workspace != os.path.abspath(workspace_root):
+        raise PlanError("Mode B active-task registry workspace mismatch")
+    return registry
+
+
+def _mode_b_registry_is_active(registry: dict) -> bool:
+    return str(registry.get("lifecycle_state") or "active") != "completed"
+
+
+def _mode_b_registry_record(
+    task_path: str,
+    state: dict,
+    workspace_root: str,
+    drawing_path: str,
+    lifecycle_state: str,
+) -> dict:
+    gate_a = state.get("gate_a")
+    return {
+        "schema_version": _MODE_B_ACTIVE_REGISTRY_SCHEMA_VERSION,
+        "mode_b_task_id": state.get("mode_b_task_id"),
+        "task_root": os.path.abspath(task_path),
+        "workspace_root": os.path.abspath(workspace_root),
+        "created_at_utc": state.get("created_at_utc") or _now_iso(),
+        "lifecycle_state": lifecycle_state,
+        "initial_geometry_sha256": state.get("initial_geometry_sha256"),
+        "gate_a_geometry_sha256": (
+            gate_a.get("gate_a_geometry_sha256")
+            if isinstance(gate_a, dict) else None
+        ),
+        "drawing_path": os.path.abspath(drawing_path),
+    }
+
+
+def create_mode_b_task_with_registry(
+    drawing: dict, drawing_path: str, workspace_root: str,
+) -> tuple[str, dict]:
+    """Create one active Mode B root, refusing to mint over unfinished lineage."""
+    workspace_root = os.path.abspath(workspace_root)
+    registry_path = mode_b_active_registry_path(workspace_root)
+    registry = load_mode_b_active_registry(workspace_root)
+    if isinstance(registry, dict) and _mode_b_registry_is_active(registry):
+        authoritative_root = os.path.abspath(str(registry["task_root"]))
+        if not os.path.isfile(authoritative_root):
+            raise PlanError(
+                "Mode B lineage missing/task manifest tampered; active registry "
+                f"still owns task {registry['mode_b_task_id']} at {authoritative_root}; "
+                "--new-task is blocked"
+            )
+        raise PlanError(
+            "an unfinished Mode B task is already active in this workspace; "
+            f"continue with --task-root {authoritative_root}; --new-task is blocked"
+        )
+    task_path, state = create_mode_b_task(
+        drawing, drawing_path, workspace_root=workspace_root
+    )
+    active = _mode_b_registry_record(
+        task_path, state, workspace_root, drawing_path, "active"
+    )
+    _write_json_atomic(registry_path, active)
+    return task_path, state
+
+
+def update_mode_b_active_registry(
+    task_path: str, state: dict, lifecycle_state: str,
+) -> None:
+    """Advance only the registry that owns this task; missing records fail closed."""
+    workspace_root = str(state.get("workspace_root") or "")
+    if not workspace_root:
+        return  # legacy/direct unit tasks created before workspace containment
+    registry = load_mode_b_active_registry(workspace_root)
+    if not isinstance(registry, dict):
+        raise PlanError("Mode B active-task registry is missing")
+    if (
+        registry.get("mode_b_task_id") != state.get("mode_b_task_id")
+        or os.path.abspath(str(registry.get("task_root") or ""))
+        != os.path.abspath(task_path)
+    ):
+        raise PlanError("Mode B active-task registry lineage mismatch")
+    updated = _mode_b_registry_record(
+        task_path,
+        state,
+        workspace_root,
+        str(state.get("original_drawing_path") or registry.get("drawing_path") or ""),
+        lifecycle_state,
+    )
+    if lifecycle_state == "completed":
+        updated["completed_at_utc"] = _now_iso()
+    _write_json_atomic(mode_b_active_registry_path(workspace_root), updated)
+
+
+def require_mode_b_active_registry(
+    task_path: str, state: dict, workspace_root: str,
+) -> None:
+    """Require a workspace-aware task to remain owned by its active registry."""
+    recorded_workspace = str(state.get("workspace_root") or "")
+    if not recorded_workspace:
+        return  # compatibility for task manifests created before containment
+    if os.path.abspath(recorded_workspace) != os.path.abspath(workspace_root):
+        raise PlanError("Mode B task root belongs to a different workspace")
+    registry = load_mode_b_active_registry(workspace_root)
+    if not isinstance(registry, dict):
+        raise PlanError("Mode B active-task registry is missing")
+    if (
+        registry.get("mode_b_task_id") != state.get("mode_b_task_id")
+        or os.path.abspath(str(registry.get("task_root") or ""))
+        != os.path.abspath(task_path)
+    ):
+        raise PlanError("Mode B active-task registry lineage mismatch")
+    if not _mode_b_registry_is_active(registry):
+        raise PlanError("Mode B task is already completed")
+
+
+def create_mode_b_task(
+    drawing: dict, drawing_path: str, workspace_root: str | None = None,
+) -> tuple[str, dict]:
     """Create the Runner-owned identity for one explicit Mode B interpretation."""
     task_id = str(uuid.uuid4())
     task_dir = os.path.join(os.path.dirname(os.path.abspath(drawing_path)), ".mode-b-tasks")
@@ -1883,6 +2036,8 @@ def create_mode_b_task(drawing: dict, drawing_path: str) -> tuple[str, dict]:
         "gate_a": None,
         "attempts": [],
     }
+    if workspace_root:
+        state["workspace_root"] = os.path.abspath(workspace_root)
     _write_json_atomic(task_path, state)
     return task_path, state
 
@@ -1964,6 +2119,13 @@ def record_mode_b_attempt(
         "planned_part": report.get("planned_part") if isinstance(report, dict) else None,
     })
     _write_json_atomic(task_path, state)
+    if status == "success":
+        lifecycle_state = "completed"
+    elif int(attempt) == 0:
+        lifecycle_state = "repair_pending"
+    else:
+        lifecycle_state = "failed"
+    update_mode_b_active_registry(task_path, state, lifecycle_state)
 
 
 def mode_b_task_attempt_errors(state: dict, repair_attempt: int) -> list[str]:
@@ -4041,6 +4203,9 @@ def _load_drawing(path: str) -> dict:
 def _cmd_validate_drawing(args: argparse.Namespace) -> int:
     timing_state = _begin_command_timing("A4_VALIDATE", args.drawing)
     original = _load_drawing(args.drawing)
+    workspace_root = mode_b_workspace_root(
+        args.drawing, getattr(args, "workspace_root", None)
+    )
     task_path = getattr(args, "task_root", None)
     new_task = bool(getattr(args, "new_task", False))
     task_state = None
@@ -4049,10 +4214,13 @@ def _cmd_validate_drawing(args: argparse.Namespace) -> int:
         if new_task and task_path:
             raise PlanError("--new-task and --task-root are mutually exclusive")
         if new_task:
-            task_path, task_state = create_mode_b_task(original, args.drawing)
+            task_path, task_state = create_mode_b_task_with_registry(
+                original, args.drawing, workspace_root
+            )
         elif task_path:
             task_path = os.path.abspath(task_path)
             task_state = load_mode_b_task(task_path)
+            require_mode_b_active_registry(task_path, task_state, workspace_root)
             task_errors.extend(mode_b_task_drawing_errors(task_state, original))
         else:
             raise PlanError(
@@ -4079,6 +4247,15 @@ def _cmd_validate_drawing(args: argparse.Namespace) -> int:
     if not errors and isinstance(task_state, dict) and task_path:
         try:
             freeze_mode_b_gate_a(task_state, task_path, drawing)
+        except (OSError, PlanError) as exc:
+            errors.append(str(exc))
+    if isinstance(task_state, dict) and task_path:
+        try:
+            update_mode_b_active_registry(
+                task_path,
+                task_state,
+                "gate_a_passed" if not errors else "gate_a_blocked",
+            )
         except (OSError, PlanError) as exc:
             errors.append(str(exc))
     result = {
