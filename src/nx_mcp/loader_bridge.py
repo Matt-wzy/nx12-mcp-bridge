@@ -73,6 +73,56 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
         return "nx_undo"
     if method == "nx_release":
         return "nx_release"
+    # ---- drafting (2D drawing) -------------------------------------------
+    # Backed by the C# Loader commands added on top of CAD-Agent-Hub's proven
+    # sequences; see loader/NX_MCP_Loader.cs (CreateDrawingSheet / CreateProjectedView).
+    # Tokenised protocol: sheet name / view name must not contain spaces.
+    if method == "nx_create_drawing_sheet":
+        scale = params.get("scale_numerator", params.get("scale", 1.0))
+        return "nx_create_drawing_sheet %s %s %s %s %s" % (
+            params.get("name", "MCP_SHEET_1"),
+            params.get("size", "A4"),
+            params.get("projection", "first"),
+            _fmt(scale),
+            params.get("model_view", "Top"),
+        )
+    if method == "nx_create_projected_view":
+        if "position" in params:
+            x, y = _p2(params, "position")
+        else:
+            x, y = params.get("x"), params.get("y")
+        parent = str(params.get("parent_view_id") or params.get("parent_view") or "")
+        name = str(params.get("name") or params.get("view_name") or "")
+        cmd = "nx_create_projected_view %s %s" % (_fmt(x), _fmt(y))
+        # parent is positional; supply "0" (first view) when only a name was given
+        if name and not parent:
+            parent = "0"
+        if parent:
+            cmd += " " + parent
+            if name:
+                cmd += " " + name
+        return cmd
+    if method in ("nx_list_drawing_sheets", "nx_list_drafting_views"):
+        return method
+    # ---- drafting: view update + dimension annotation ------------
+    if method == "nx_update_views":
+        return "nx_update_views"
+    if method == "nx_create_dimension":
+        if "position" in params:
+            x, y = _p2(params, "position")
+        else:
+            x = params.get("pos_x")
+            y = params.get("pos_y")
+        return "nx_create_dimension %s %s %s %s %s %s %s %s %s %s" % (
+            str(params.get("view_id", "")),
+            str(params.get("body_id", "")),
+            int(params["first_edge_index"]), int(params["second_edge_index"]),
+            _fmt(x), _fmt(y),
+            params.get("measurement", "horizontal"),
+            _fmt(params.get("upper_tolerance", 0.1)),
+            _fmt(params.get("lower_tolerance", -0.1)),
+            params.get("dim_name", "MCP_DIMENSION"),
+        )
     if method == "nx_create_sketch":
         return "nx_create_sketch " + params.get("plane", "XY")
     if method == "nx_sketch_line":
@@ -358,6 +408,24 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
         )
         kind: ObjectKind = "body" if method in ("nx_hole", "nx_counterbore_hole", "nx_countersink_hole", "nx_shell", "nx_edge_blend", "nx_chamfer", "nx_revolve", "nx_mirror") else "sketch"
         return {"status": "success", "object": _ref(kind, obj_id, part_id), "message": msg}
+    # Drafting lists: ObjectRef.kind is a restricted literal (part/sketch/curve/
+    # feature/body) and cannot carry "sheet"/"view", so surface the items inside
+    # the message instead of returning them as objects.
+    if method in ("nx_list_drawing_sheets", "nx_list_drafting_views"):
+        items = resp.get("sheets")
+        if items is None:
+            items = resp.get("views")
+        items = items or []
+        detail = ", ".join(str(i) for i in items) if items else "none"
+        return {"status": "success", "message": "%s [%s]" % (msg, detail)}
+    if method == "nx_update_views":
+        return {"status": "success", "message": msg}
+    if method == "nx_create_dimension":
+        return {
+            "status": "success",
+            "dimension": resp.get("dimension"),
+            "message": msg,
+        }
     return {"status": "success", "message": msg}
 
 

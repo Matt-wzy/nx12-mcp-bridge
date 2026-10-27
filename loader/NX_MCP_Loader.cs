@@ -53,6 +53,8 @@ using System.Windows.Forms;
 using NXOpen;
 using NXOpen.Features;
 using NXOpen.GeometricUtilities;
+using NXOpen.Drawings;
+using NXOpen.Annotations;
 
 public static class NX_MCP_Loader
 {
@@ -323,6 +325,22 @@ public static class NX_MCP_Loader
                 return CircularPattern(parts);
             case "nx_fit_view":
                 return FitView();
+            // ---- drafting (2D drawing) ---------------------------------
+            // Ported from CAD-Agent-Hub's proven NXOpen sequences; every call
+            // below was verified present in the NX 12 NXOpen.xml member list.
+            case "nx_create_drawing_sheet":
+                return CreateDrawingSheet(parts);
+            case "nx_create_projected_view":
+                return CreateProjectedView(parts);
+            case "nx_list_drawing_sheets":
+                return ListDrawingSheets(parts);
+            case "nx_list_drafting_views":
+                return ListDraftingViews(parts);
+            // ---- drafting: view update + dimension annotation ------------
+            case "nx_update_views":
+                return UpdateViewsCmd();
+            case "nx_create_dimension":
+                return CreateDimension(parts);
             case "nx_export_step":
                 return ExportStep(parts);
             case "nx_open_part":
@@ -364,7 +382,7 @@ public static class NX_MCP_Loader
                 if (_part != null || _partPath != null) ResetTaskState();
                 _part = null;
                 _partPath = null;
-                return "{\"ok\":true,\"ready\":true,\"loader\":\"nx_mcp_loader\",\"nx\":\"2506\"," +
+                return "{\"ok\":true,\"ready\":true,\"loader\":\"nx_mcp_loader\",\"nx\":\"" + Esc(NxVersion()) + "\"," +
                        "\"part\":\"\",\"sketches\":0,\"bodies\":0}";
             }
 
@@ -379,7 +397,7 @@ public static class NX_MCP_Loader
                 ? "<unsaved-active-part>"
                 : fullPath;
 
-            return "{\"ok\":true,\"ready\":true,\"loader\":\"nx_mcp_loader\",\"nx\":\"2506\"," +
+            return "{\"ok\":true,\"ready\":true,\"loader\":\"nx_mcp_loader\",\"nx\":\"" + Esc(NxVersion()) + "\"," +
                    "\"part\":\"" + Esc(partName) + "\",\"sketches\":" + _sketches.Count +
                    ",\"bodies\":" + _bodies.Count + "}";
         }
@@ -388,6 +406,414 @@ public static class NX_MCP_Loader
             Log("status ERR: " + e.Message);
             return ErrJson("status failed: " + e.Message);
         }
+    }
+
+    /// <summary>
+    /// [NX12 port] Report the ACTUAL running NX version instead of the hardcoded
+    /// "2506" marketing string the upstream project compiled in. Upstream only ever
+    /// validated on NX 2506, so clients would otherwise be told the wrong version.
+    /// GetEnvironmentVariableValue exists since NX7.5.0, so it is safe on NX 12.
+    /// </summary>
+    private static string NxVersion()
+    {
+        try
+        {
+            if (_session != null)
+            {
+                string v = _session.GetEnvironmentVariableValue("UGII_VERSION");
+                if (!string.IsNullOrEmpty(v)) return v.Trim();
+            }
+        }
+        catch { }
+        try
+        {
+            string v2 = Environment.GetEnvironmentVariable("UGII_VERSION");
+            if (!string.IsNullOrEmpty(v2)) return v2.Trim();
+        }
+        catch { }
+        return "unknown";
+    }
+
+    // ---- drafting (2D drawing) ---------------------------------------
+    // Ported from CAD-Agent-Hub (MCP/UG/nx_remote_ops.py :: _op_create_drawing_sheet
+    // / _op_create_projected_view). Those sequences were validated by that project;
+    // the exact members were then confirmed against the NX 12 NXOpen.xml.
+    // Every NXOpen call is guarded so a failure returns JSON instead of killing NX.
+
+    private static DrawingSheet CurrentSheet()
+    {
+        if (_part == null) throw new Exception("no active part; run nx_create_part first");
+        DrawingSheet s = _part.DrawingSheets.CurrentDrawingSheet;
+        if (s == null) throw new Exception("no drawing sheet is currently open");
+        return s;
+    }
+
+    private static DrawingSheet.StandardSheetSize ParseSheetSize(string token)
+    {
+        switch (token.Trim().ToUpperInvariant())
+        {
+            case "A0": return DrawingSheet.StandardSheetSize.A0;
+            case "A1": return DrawingSheet.StandardSheetSize.A1;
+            case "A2": return DrawingSheet.StandardSheetSize.A2;
+            case "A3": return DrawingSheet.StandardSheetSize.A3;
+            case "A4": return DrawingSheet.StandardSheetSize.A4;
+            default: throw new Exception("size must be A0/A1/A2/A3/A4, got '" + token + "'");
+        }
+    }
+
+    // nx_create_drawing_sheet <name> [size] [first|third] [scale] [model_view]
+    private static string CreateDrawingSheet(string[] parts)
+    {
+        if (parts.Length < 2)
+            return ErrJson("usage: nx_create_drawing_sheet <name> [A0..A4] [first|third] [scale] [model_view]");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+
+            string name = parts[1];
+            string sizeToken = parts.Length > 2 ? parts[2] : "A4";
+            DrawingSheet.StandardSheetSize size = ParseSheetSize(sizeToken);
+
+            string projToken = parts.Length > 3 ? parts[3].Trim().ToLowerInvariant() : "first";
+            DrawingSheet.ProjectionAngleType proj =
+                (projToken == "third") ? DrawingSheet.ProjectionAngleType.ThirdAngle
+                                       : DrawingSheet.ProjectionAngleType.FirstAngle;
+            if (projToken != "first" && projToken != "third")
+                return ErrJson("projection must be 'first' or 'third'");
+
+            double numerator = parts.Length > 4 ? D(parts[4]) : 1.0;
+            if (numerator <= 0) return ErrJson("scale must be > 0");
+            double denominator = 1.0;
+
+            // [NX12 port] DrawingSheetCollection.InsertSheet is deprecated exactly in
+            // NX12.0.0; use the recommended DraftingDrawingSheetCollection instead.
+            // The InsertSheet signatures are identical, so this is a drop-in swap.
+            DrawingSheet sheet = _part.DraftingDrawingSheets.InsertSheet(name, size, numerator, denominator, proj);
+            sheet.Open();
+
+            // Place a base view at roughly the left-of-centre of the sheet, mirroring
+            // what CAD-Agent-Hub does with an explicit A4 coordinate.
+            string baseNote = "";
+            try
+            {
+                string mvName = parts.Length > 5 ? parts[5].Trim() : "Top";
+                ModelingView mv;
+                try { mv = _part.ModelingViews.FindObject(mvName); }
+                catch { mv = _part.ModelingViews.WorkView; }
+
+                double sx, sy;
+                try { sx = sheet.Length; sy = sheet.Height; }
+                catch { sx = 297.0; sy = 210.0; }
+                if (sx <= 0 || sy <= 0) { sx = 297.0; sy = 210.0; }
+
+                DraftingView bv = sheet.SheetDraftingViews.CreateBaseView(
+                    mv, new Point3d(sx * 0.42, sy * 0.5, 0.0), numerator / denominator, false);
+                try { baseNote = " base=" + bv.JournalIdentifier; } catch { }
+            }
+            catch (Exception e2)
+            {
+                baseNote = " base_view_failed: " + e2.Message;
+            }
+
+            int count = 0;
+            try { count = sheet.GetDraftingViews().Length; } catch { }
+
+            try { ForceUpdateSheet(sheet); } catch { }
+
+            return OkJson("sheet", sheet.Name, "created size=" + sizeToken.ToUpperInvariant()
+                + " views=" + count + baseNote);
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_drawing_sheet failed: " + e.Message);
+        }
+    }
+
+    // nx_create_projected_view <x> <y> [parent_view_id] [view_name]
+    private static string CreateProjectedView(string[] parts)
+    {
+        if (parts.Length < 3)
+            return ErrJson("usage: nx_create_projected_view <x> <y> [parent_view_id] [view_name]");
+        try
+        {
+            DrawingSheet sheet = CurrentSheet();
+            DraftingView[] views = sheet.GetDraftingViews();
+            if (views == null || views.Length == 0) return ErrJson("sheet has no drafting views");
+
+            string token = parts.Length > 3 ? parts[3].Trim() : "";
+            DraftingView parent = views[0];
+            if (!string.IsNullOrEmpty(token))
+            {
+                bool found = false;
+                for (int i = 0; i < views.Length; i++)
+                {
+                    string nm = ""; try { nm = views[i].Name; } catch { }
+                    string ji = ""; try { ji = views[i].JournalIdentifier; } catch { }
+                    if (token == i.ToString() || token == nm || token == ji)
+                    {
+                        parent = views[i];
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) return ErrJson("parent_view_id did not match a drafting view: " + token);
+            }
+
+            double x = D(parts[1]);
+            double y = D(parts[2]);
+            DraftingView pv = sheet.SheetDraftingViews.CreateProjectedView(parent, new Point3d(x, y, 0.0));
+
+            if (parts.Length > 4 && !string.IsNullOrEmpty(parts[4].Trim()))
+            {
+                try { pv.SetName(parts[4].Trim()); } catch { }
+            }
+            try { ForceUpdateSheet(sheet); } catch { }
+
+            string id = ""; try { id = pv.JournalIdentifier; } catch { }
+            int count = 0;
+            try { count = sheet.GetDraftingViews().Length; } catch { }
+            return OkJson("view", id, "projected view created views=" + count);
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_projected_view failed: " + e.Message);
+        }
+    }
+
+    // nx_list_drawing_sheets
+    private static string ListDrawingSheets(string[] parts)
+    {
+        try
+        {
+            if (_part == null) return ErrJson("no active part");
+            var names = new List<string>();
+            foreach (DrawingSheet s in _part.DrawingSheets.ToArray())
+            {
+                string ji = ""; try { ji = s.JournalIdentifier; } catch { }
+                names.Add(s.Name + " (" + ji + ")");
+            }
+            return OkJsonList("sheets", names, "found " + names.Count + " sheet(s)");
+        }
+        catch (Exception e)
+        {
+            return ErrJson("list_drawing_sheets failed: " + e.Message);
+        }
+    }
+
+    // nx_list_drafting_views
+    private static string ListDraftingViews(string[] parts)
+    {
+        try
+        {
+            DrawingSheet sheet = CurrentSheet();
+            var ids = new List<string>();
+            foreach (DraftingView v in sheet.GetDraftingViews())
+            {
+                string nm = ""; try { nm = v.Name; } catch { }
+                string ji = ""; try { ji = v.JournalIdentifier; } catch { }
+                ids.Add(ji + "|" + nm);
+            }
+            return OkJsonList("views", ids, "found " + ids.Count + " view(s)");
+        }
+        catch (Exception e)
+        {
+            return ErrJson("list_drafting_views failed: " + e.Message);
+        }
+    }
+
+    // nx_update_views  — force every drafting view on the current sheet to a
+    // fully-up-to-date state. Previously CreateProjectedView only called
+    // RefreshCurrentSheet(), which leaves the views flagged out-of-date (the
+    // "clock" icon in the Part Navigator). A real update is what clears it.
+    private static string UpdateViewsCmd()
+    {
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part");
+            DrawingSheet sheet = CurrentSheet();
+            ForceUpdateSheet(sheet);
+            int n = 0;
+            try { n = sheet.GetDraftingViews().Length; } catch { }
+            return OkJson("updated", n.ToString(), "updated " + n + " view(s) on sheet " + sheet.Name);
+        }
+        catch (Exception e)
+        {
+            return ErrJson("update_views failed: " + e.Message);
+        }
+    }
+
+    // Performs a genuine view update (not just a sheet refresh) and then
+    // refreshes the sheet. Used after every drafting operation so the Part
+    // Navigator never shows an out-of-date / clock status.
+    private static void ForceUpdateSheet(DrawingSheet sheet)
+    {
+        Session.UndoMarkId mark = _session.SetUndoMark(Session.MarkVisibility.Invisible, "MCP Force Update Views");
+        foreach (DraftingView v in sheet.GetDraftingViews())
+        {
+            try { v.Update(); }
+            catch (Exception e) { Log("view update warn: " + e.Message); }
+        }
+        try { _session.UpdateManager.DoUpdate(mark); } catch { }
+        try { _part.DrawingSheets.RefreshCurrentSheet(); } catch { }
+    }
+
+    private static DraftingView ResolveView(DrawingSheet sheet, string token)
+    {
+        DraftingView[] views = sheet.GetDraftingViews();
+        if (views == null || views.Length == 0) throw new Exception("sheet has no drafting views");
+        if (string.IsNullOrEmpty(token)) return views[0];
+        foreach (DraftingView v in views)
+        {
+            string nm = ""; try { nm = v.Name; } catch { }
+            string ji = ""; try { ji = v.JournalIdentifier; } catch { }
+            string tg = ""; try { tg = v.Tag.ToString(); } catch { }
+            if (token == nm || token == ji || token == tg) return v;
+        }
+        Log("ResolveView: '" + token + "' did not match; using first view " + views[0].Name);
+        return views[0];
+    }
+
+    // Returns a pick point that lies on the geometry (midpoint of an edge, the
+    // coordinate of a point). Used as the dimension associativity PickPoint so
+    // the dimension stays associative to real model geometry.
+    private static Point3d MidpointOfObject(NXOpen.TaggedObject obj)
+    {
+        try
+        {
+            NXOpen.Edge e = obj as NXOpen.Edge;
+            if (e != null)
+            {
+                Point3d s, en;
+                e.GetVertices(out s, out en);
+                return new Point3d((s.X + en.X) / 2.0, (s.Y + en.Y) / 2.0, (s.Z + en.Z) / 2.0);
+            }
+            NXOpen.Point pt = obj as NXOpen.Point;
+            if (pt != null)
+            {
+                Point3d c;
+                try { c = pt.Coordinates; return c; } catch { }
+            }
+        }
+        catch (Exception e) { Log("MidpointOfObject warn: " + e.Message); }
+        return new Point3d(0.0, 0.0, 0.0);
+    }
+
+    // nx_create_dimension <view_id> <body_id> <first_edge_index> <second_edge_index>
+    //   <pos_x> <pos_y> [measurement=horizontal|vertical|parallel] [upper=0.1] [lower=-0.1] [dim_name]
+    // Creates an associative linear dimension between two model edges (selected
+    // by their 0-based index from nx_list_edges, on the given body) inside the
+    // specified drafting view, then applies a bilateral (two-line) tolerance.
+    // Default tolerance is ±0.1 mm, matching the user's "标注尺寸公差±0.1".
+    private static string CreateDimension(string[] parts)
+    {
+        if (parts.Length < 7)
+            return ErrJson("usage: nx_create_dimension <view_id> <body_id> <first_edge_index> <second_edge_index> <pos_x> <pos_y> [horizontal|vertical|parallel] [upper=0.1] [lower=-0.1] [dim_name]");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+
+            DrawingSheet sheet = CurrentSheet();
+            DraftingView view = ResolveView(sheet, parts[1].Trim());
+
+            Body body = ResolveBody(parts[2].Trim());
+            Edge[] edges = body.GetEdges();
+            int ei1 = int.Parse(parts[3], CultureInfo.InvariantCulture);
+            int ei2 = int.Parse(parts[4], CultureInfo.InvariantCulture);
+            if (ei1 < 0 || ei1 >= edges.Length) return ErrJson("first_edge_index out of range: " + ei1 + " (have " + edges.Length + ")");
+            if (ei2 < 0 || ei2 >= edges.Length) return ErrJson("second_edge_index out of range: " + ei2 + " (have " + edges.Length + ")");
+            Edge e1 = edges[ei1];
+            Edge e2 = edges[ei2];
+
+            double posx = D(parts[5]);
+            double posy = D(parts[6]);
+
+            string measurement = (parts.Length > 7 && !string.IsNullOrEmpty(parts[7].Trim()))
+                ? parts[7].Trim().ToLowerInvariant() : "horizontal";
+            double upper = (parts.Length > 8 && !string.IsNullOrEmpty(parts[8].Trim())) ? D(parts[8]) : 0.1;
+            double lower = (parts.Length > 9 && !string.IsNullOrEmpty(parts[9].Trim())) ? D(parts[9]) : -0.1;
+            string dimName = (parts.Length > 10 && !string.IsNullOrEmpty(parts[10].Trim()))
+                ? parts[10].Trim() : "MCP_DIMENSION";
+
+            NXOpen.Annotations.DimensionData ddd = _part.Annotations.NewDimensionData();
+            NXOpen.Annotations.Associativity a1 = _part.Annotations.NewAssociativity();
+            NXOpen.Annotations.Associativity a2 = _part.Annotations.NewAssociativity();
+
+            a1.FirstObject = e1;
+            a1.SecondObject = null;
+            a1.ObjectView = view;
+            a1.PickPoint = MidpointOfObject(e1);
+            a1.PointOption = NXOpen.Annotations.AssociativityPointOption.OnCurve;
+            a1.LineOption = NXOpen.Annotations.AssociativityLineOption.None;
+
+            a2.FirstObject = e2;
+            a2.SecondObject = null;
+            a2.ObjectView = view;
+            a2.PickPoint = MidpointOfObject(e2);
+            a2.PointOption = NXOpen.Annotations.AssociativityPointOption.OnCurve;
+            a2.LineOption = NXOpen.Annotations.AssociativityLineOption.None;
+
+            ddd.SetAssociativity(1, new NXOpen.Annotations.Associativity[] { a1 });
+            ddd.SetAssociativity(2, new NXOpen.Annotations.Associativity[] { a2 });
+
+            Point3d origin = new Point3d(posx, posy, 0.0);
+            NXOpen.Annotations.Dimension dim;
+            switch (measurement)
+            {
+                case "vertical":
+                    dim = _part.Dimensions.CreateVerticalDimension(ddd, origin);
+                    break;
+                case "parallel":
+                    dim = _part.Dimensions.CreateParallelDimension(ddd, origin);
+                    break;
+                default:
+                    dim = _part.Dimensions.CreateHorizontalDimension(ddd, origin);
+                    break;
+            }
+            try { dim.SetName(dimName); } catch { }
+
+            // Apply bilateral (two-line) tolerance. Best-effort: if the
+            // dimension type does not support linear tolerance we skip it.
+            try
+            {
+                NXOpen.Annotations.ILinearTolerance ltObj = (NXOpen.Annotations.ILinearTolerance)dim;
+                NXOpen.Annotations.LinearTolerance lt = ltObj.GetTolerance();
+                lt.ToleranceType = NXOpen.Annotations.ToleranceType.BilateralTwoLines;
+                lt.SetUpperToleranceMm(new NXOpen.Annotations.Value(upper, null, 0));
+                lt.SetLowerToleranceMm(new NXOpen.Annotations.Value(lower, null, 0));
+                ltObj.SetTolerance(lt);
+            }
+            catch (Exception et) { Log("tolerance warn: " + et.Message); }
+
+            try { ForceUpdateSheet(sheet); } catch { }
+
+            string jid = ""; try { jid = dim.JournalIdentifier; } catch { }
+            double computed = 0.0; try { computed = dim.ComputedSize; } catch { }
+            return OkJson("dimension", jid,
+                "created " + measurement + " dim name=" + dimName
+                + " value=" + F(computed) + " tol=+" + F(upper) + "/" + F(lower));
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_dimension failed: " + e.Message);
+        }
+    }
+
+    // Resolves a body by its MCP id (from _bodies) or falls back to the first
+    // solid body in the work part — matching the fallback used by nx_list_edges.
+    private static Body ResolveBody(string id)
+    {
+        if (!string.IsNullOrEmpty(id))
+        {
+            Body b;
+            if (_bodies.TryGetValue(id, out b)) return b;
+        }
+        Body[] all = _part.Bodies.ToArray();
+        foreach (Body b in all) if (b.IsSolidBody) return b;
+        if (all.Length > 0) return all[0];
+        throw new Exception("no body in work part");
     }
 
     private static string CreatePart(string[] parts)
@@ -727,7 +1153,11 @@ public static class NX_MCP_Loader
             datumPlane = _part.Datums.CreateFixedDatumPlane(origin, m);
             mb.MirrorBodyList.SetArray(new Body[] { body });
             mb.Plane.SetValue(datumPlane, null, new Point3d(0.0, 0.0, 0.0));
-            mb.DeleteSourceBody = false;
+            // [NX12 port] MirrorBodyBuilder.DeleteSourceBody does NOT exist in NX 12
+            // (the member list in NXOpen.xml for NX 12 has no such property; it was
+            // introduced in a later release). NX 12's Mirror Body keeps the source
+            // body by default, which already matches the intended `false` semantics.
+            // mb.DeleteSourceBody = false;
             mb.CommitFeature();
         }
         catch (Exception e)
@@ -1136,7 +1566,10 @@ public static class NX_MCP_Loader
 
         var coll = _part.ScCollectors.CreateCollector();
         var faceRule = _part.ScRuleFactory.CreateRuleFaceDumb(new Face[] { faces[removeIdx] });
-        coll.AddRules(new SelectionIntentRule[] { faceRule });
+        // [NX12 port] NX 12 ScCollector has no AddRules(). Use the functionally
+        // equivalent ReplaceRules(rules, createRulesWoUpdate) instead.
+        // ReplaceRules has existed since NX4.0.0, so it is safe on NX 12.
+        coll.ReplaceRules(new SelectionIntentRule[] { faceRule }, false);
 
         var sb = _part.Features.CreateShellBuilder(null);
         try
