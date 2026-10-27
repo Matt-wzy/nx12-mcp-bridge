@@ -606,7 +606,7 @@ public static class NX_MCP_Loader
     {
         try
         {
-            DrawingSheet sheet = CurrentSheet();
+            DrawingSheet sheet = GetSheetToUse();
             var ids = new List<string>();
             foreach (DraftingView v in sheet.GetDraftingViews())
             {
@@ -634,7 +634,7 @@ public static class NX_MCP_Loader
         {
             _session = Session.GetSession();
             if (_part == null) return ErrJson("no active part");
-            DrawingSheet sheet = CurrentSheet();
+            DrawingSheet sheet = GetSheetToUse();
             ForceUpdateSheet(sheet);
             int n = 0;
             try { n = sheet.GetDraftingViews().Length; } catch { }
@@ -708,6 +708,64 @@ public static class NX_MCP_Loader
     // by their 0-based index from nx_list_edges, on the given body) inside the
     // specified drafting view, then applies a bilateral (two-line) tolerance.
     // Default tolerance is ±0.1 mm, matching the user's "标注尺寸公差±0.1".
+    // Returns a usable drawing sheet: the current one if set, otherwise the
+    // first sheet that has drafting views (and opens it so it becomes current).
+    private static DrawingSheet GetSheetToUse()
+    {
+        DrawingSheet s = null;
+        try { s = _part.DrawingSheets.CurrentDrawingSheet; } catch { }
+        if (s != null) return s;
+        foreach (DrawingSheet sh in _part.DrawingSheets)
+        {
+            try { if (sh.GetDraftingViews().Length > 0) { sh.Open(); return sh; } } catch { }
+        }
+        throw new Exception("no drawing sheet available");
+    }
+
+    // Resolves a drafting view by token across ALL sheets (not just the current
+    // one) and returns its owning sheet, so dimensioning works even when no
+    // sheet is flagged "current" in the session.
+    private static DraftingView ResolveViewAnySheet(string token, out DrawingSheet sheet)
+    {
+        sheet = null;
+        try
+        {
+            DrawingSheet cur = _part.DrawingSheets.CurrentDrawingSheet;
+            if (cur != null)
+            {
+                DraftingView v = TryResolveInSheet(cur, token);
+                if (v != null) { sheet = cur; return v; }
+            }
+        }
+        catch { }
+        foreach (DrawingSheet sh in _part.DrawingSheets)
+        {
+            DraftingView v = TryResolveInSheet(sh, token);
+            if (v != null) { sheet = sh; return v; }
+        }
+        foreach (DrawingSheet sh in _part.DrawingSheets)
+        {
+            DraftingView[] vs = sh.GetDraftingViews();
+            if (vs != null && vs.Length > 0) { sheet = sh; return vs[0]; }
+        }
+        throw new Exception("no drafting view found (token=" + token + ")");
+    }
+
+    private static DraftingView TryResolveInSheet(DrawingSheet sheet, string token)
+    {
+        DraftingView[] views = sheet.GetDraftingViews();
+        if (views == null || views.Length == 0) return null;
+        if (string.IsNullOrEmpty(token)) return views[0];
+        foreach (DraftingView v in views)
+        {
+            string nm = ""; try { nm = v.Name; } catch { }
+            string ji = ""; try { ji = v.JournalIdentifier; } catch { }
+            string tg = ""; try { tg = v.Tag.ToString(); } catch { }
+            if (token == nm || token == ji || token == tg) return v;
+        }
+        return null;
+    }
+
     private static string CreateDimension(string[] parts)
     {
         if (parts.Length < 7)
@@ -717,8 +775,9 @@ public static class NX_MCP_Loader
             _session = Session.GetSession();
             if (_part == null) return ErrJson("no active part; run nx_create_part first");
 
-            DrawingSheet sheet = CurrentSheet();
-            DraftingView view = ResolveView(sheet, parts[1].Trim());
+            DrawingSheet sheet;
+            DraftingView view = ResolveViewAnySheet(parts[1].Trim(), out sheet);
+            try { sheet.Open(); } catch { }
 
             Body body = ResolveBody(parts[2].Trim());
             Edge[] edges = body.GetEdges();
