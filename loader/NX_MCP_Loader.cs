@@ -612,7 +612,9 @@ public static class NX_MCP_Loader
             {
                 string nm = ""; try { nm = v.Name; } catch { }
                 string ji = ""; try { ji = v.JournalIdentifier; } catch { }
-                ids.Add(ji + "|" + nm);
+                bool ood = false; try { ood = v.IsOutOfDate; } catch { }
+                // format: journalIdentifier | name | out_of_date(0/1)
+                ids.Add(ji + "|" + nm + "|" + (ood ? "1" : "0"));
             }
             return OkJsonList("views", ids, "found " + ids.Count + " view(s)");
         }
