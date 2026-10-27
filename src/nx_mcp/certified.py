@@ -69,6 +69,13 @@ CERTIFIED_TOOL_NAMES = {
     "nx_undo",
     "nx_fit_view",
     "nx_release",
+    # drafting (2D drawing) - backed by the C# Loader on NX 12
+    "nx_create_drawing_sheet",
+    "nx_create_projected_view",
+    "nx_list_drawing_sheets",
+    "nx_list_drafting_views",
+    "nx_update_views",
+    "nx_create_dimension",
 }
 
 
@@ -540,6 +547,109 @@ def create_certified_server(
         or require Alt+F8 to start it again.
         """
         return OperationResult(**await call("nx_release", {}))
+
+    # ---- drafting (2D drawing) -------------------------------------------
+    # Executed by the resident C# Loader. Sheet and view names are tokenised in
+    # the pipe protocol, so they must not contain spaces.
+
+    @mcp.tool()
+    async def nx_create_drawing_sheet(
+        name: str = "MCP_SHEET_1",
+        size: Literal["A0", "A1", "A2", "A3", "A4"] = "A4",
+        projection: Literal["first", "third"] = "first",
+        scale: float = 1.0,
+        model_view: str = "Top",
+    ) -> OperationResult:
+        """Create a drawing sheet and place a base view of the given model view.
+
+        The part must already contain geometry for the base view to be meaningful.
+        """
+        return OperationResult(
+            **await call(
+                "nx_create_drawing_sheet",
+                {
+                    "name": name,
+                    "size": size,
+                    "projection": projection,
+                    "scale": scale,
+                    "model_view": model_view,
+                },
+            )
+        )
+
+    @mcp.tool()
+    async def nx_create_projected_view(
+        x: float,
+        y: float,
+        parent_view_id: str = "",
+        name: str = "",
+    ) -> OperationResult:
+        """Project a view from an existing drafting view at sheet position (x, y).
+
+        Leave parent_view_id empty to use the first drafting view on the sheet.
+        """
+        return OperationResult(
+            **await call(
+                "nx_create_projected_view",
+                {"x": x, "y": y, "parent_view_id": parent_view_id, "name": name},
+            )
+        )
+
+    @mcp.tool()
+    async def nx_list_drawing_sheets() -> OperationResult:
+        """List the drawing sheets in the active part."""
+        return OperationResult(**await call("nx_list_drawing_sheets", {}))
+
+    @mcp.tool()
+    async def nx_list_drafting_views() -> OperationResult:
+        """List the drafting views on the current drawing sheet."""
+        return OperationResult(**await call("nx_list_drafting_views", {}))
+
+    @mcp.tool()
+    async def nx_update_views() -> OperationResult:
+        """Force every drafting view on the current sheet to a fresh update.
+
+        Clears the out-of-date ("clock") flag shown in the Part Navigator after a
+        drawing or projected view is created or modified.
+        """
+        return OperationResult(**await call("nx_update_views", {}))
+
+    @mcp.tool()
+    async def nx_create_dimension(
+        view_id: str = "",
+        body_id: str = "",
+        first_edge_index: int = 0,
+        second_edge_index: int = 0,
+        pos_x: float = 0.0,
+        pos_y: float = 0.0,
+        measurement: Literal["horizontal", "vertical", "parallel"] = "horizontal",
+        upper_tolerance: float = 0.1,
+        lower_tolerance: float = -0.1,
+        dim_name: str = "MCP_DIMENSION",
+    ) -> OperationResult:
+        """Create an associative linear dimension with a bilateral tolerance.
+
+        Measures the distance between two model edges (selected by their 0-based
+        index from nx_list_edges on the given body) inside the drafting view.
+        Default tolerance is ±0.1 mm using the BilateralTwoLines style.
+        """
+        return OperationResult(
+            **await call(
+                "nx_create_dimension",
+                {
+                    "view_id": view_id,
+                    "body_id": body_id,
+                    "first_edge_index": first_edge_index,
+                    "second_edge_index": second_edge_index,
+                    "pos_x": pos_x,
+                    "pos_y": pos_y,
+                    "measurement": measurement,
+                    "upper_tolerance": upper_tolerance,
+                    "lower_tolerance": lower_tolerance,
+                    "dim_name": dim_name,
+                },
+            )
+        )
 
     if enable_experimental:
         from nx_mcp.experimental import add_experimental_tools
