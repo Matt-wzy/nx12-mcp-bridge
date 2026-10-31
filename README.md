@@ -1,170 +1,162 @@
-# NX MCP — Enhanced Edition (V2)
+# nx12-mcp-bridge
 
-> **原始项目**：[DreamEnding/NX_MCP](https://github.com/DreamEnding/NX_MCP) — MIT License.
-> 本项目为 **增强版**，在原项目基础上增加了 C# 常驻 NXOpen 后端
->（`NX_MCP_Loader`）、扩展建模工具，以及用于“二维工程图 → NX 自动建模”的一体化 Agent Pack。
+用自然语言（AI）驱动 **Siemens NX 12**：建模 → 出二维图纸 → 标注公差 → 读回校验 → 编制工艺 → 导出 PDF。
 
-作者：抖音 无趣
-
-NX MCP 是一套本地运行的 Siemens NX 自动化系统，可通过 Agent 接收文字建模要求，或自动读取二维机械工程图，统一生成建模计划并驱动 Siemens NX 完成建模。所有组件均在本机运行，不依赖云端服务。
+本项目是 [`kongbaic/NX_MCP-Enhanced`](https://github.com/kongbaic/NX_MCP-Enhanced)
+（作者：抖音 无趣；其原始项目为 [`DreamEnding/NX_MCP`](https://github.com/DreamEnding/NX_MCP)）
+的 **NX 12 适配与功能扩展**分支。
 
 ---
 
-## 推荐架构（V2）
+## 架构
 
-```text
-Agent
-  -> 文字描述 --------┐
-  -> 二维工程图 -> Drawing Reader
-                      ↓
-               Modeling Planner
-                      ↓
-                 Plan Runner
-                      ↓
-              Python MCP sidecar
-                      ↓
-               LoaderBridge
-                      ↓
-          named pipe (localhost)
-                      ↓
-            NX_MCP_Loader.dll
-                      ↓
-                   NXOpen
-                      ↓
-                Siemens NX
+```
+AI（自然语言）
+  → MCP 服务器（Python sidecar）
+  → Windows 命名管道
+  → NX 进程内常驻的 C# Loader
+  → NXOpen
 ```
 
-常驻 Loader 会在 NX 启动时自动加载，正常使用无需 `Alt+F8` 或手动运行 Journal。
-`NX_MCP_BACKEND=auto` 默认优先使用 Loader，仅在 Loader 不可用时回退到旧版 Python bridge。
+核心设计：**C# Loader 随 NX 启动加载并在整个会话中常驻**，
+不必每次执行都跑一遍 journal —— 这是相对"逐条 journal"方案最大的效率优势。
+
+- C# 侧：`loader/NX_MCP_Loader.cs`
+- Python 侧：`src/nx_mcp/`（`certified.py` 工具注册、`loader_bridge.py` 命令映射）
+- 构建产物：`NX_MCP_Loader.dll`（部署到 NX 的 startup 目录）
 
 ---
 
-## 已认证工具（32 个）
+## 与上游的差异
 
-已在 Windows + Siemens NX 2506 真机环境完成验证。
+### NX 12 适配（上游面向更早版本，在 NX 12 上会编译失败）
+- 修复 `MirrorBody` 相关 CS1061（改用保留源体的方式）
+- 修复 `ShellBuilder` 相关 CS1061（改用 `ReplaceRules`）
+- 迁移 `Update.AddToDeleteList` → `AddObjectsToDeleteList`（NX12.0.0 弃用）
 
-| 分类 | 工具 |
-| --- | --- |
-| 文件 | `nx_create_part`, `nx_open_part`, `nx_save_part`, `nx_close_part`, `nx_export_step` |
-| 状态 / 查询 | `nx_status`, `nx_list_sketches`, `nx_list_bodies`, `nx_list_features` |
-| 几何检查 | `nx_list_edges`, `nx_list_faces` |
-| 草图 | `nx_create_sketch`, `nx_sketch_line`, `nx_sketch_rectangle`, `nx_sketch_circle`, `nx_sketch_arc`, `nx_finish_sketch` |
-| 拉伸 | `nx_extrude`（create / subtract）；实体合并使用独立 `nx_unite` |
-| 孔 | `nx_hole`, `nx_counterbore_hole`, `nx_countersink_hole` |
-| 特征 | `nx_unite`, `nx_revolve`, `nx_mirror`, `nx_linear_pattern`, `nx_circular_pattern`, `nx_shell` |
-| 边处理 | `nx_edge_blend`, `nx_chamfer` |
-| 视图 / 恢复 | `nx_undo`, `nx_fit_view`, `nx_release` |
+### 新增能力（共 50 个 MCP 工具）
 
----
+| 类别 | 命令 |
+|---|---|
+| 尺寸标注 | `nx_create_diameter_dimension`（直径，轴类必需）、`nx_create_radius_dimension`（半径） |
+| 图纸文字 | `nx_create_note`（技术要求/工序文字，`|` 换行） |
+| 表面粗糙度 | `nx_create_roughness`（写入符号 a1 位） |
+| 标题栏 | `nx_create_title_block` |
+| 部件属性 | `nx_set_attribute` / `nx_list_attributes`（**标题栏内容来源**） |
+| 读回校验 | `nx_list_dimensions`（值+公差）、`nx_list_annotations`（NOTE/GDT/ROUGH） |
+| 清理 | `nx_delete_annotation`（按 ID/名称或 `note:0`/`dim:1`） |
+| 导出 | `nx_export_pdf`（图纸 → PDF） |
+| 三维查询 | `nx_measure_distance`（两棱边最小距离，基于 UFUN） |
 
-## 安装 — 一体化一键流程
+### 稳定性修复
+- **"保存 CGM"弹窗把 NX 卡死**：含多张图纸页的部件保存时 NX 弹模态框阻塞，
+  管道命令会一直等到超时。已通过在保存前关闭 `SaveOptions.DrawingCgmData` 根治
+- **重复打开同一部件**读到陈旧数据：路径分隔符归一化修复
 
-### 环境要求
-
-- Windows 10/11
-- 已安装 Siemens NX（当前在 **NX 2506** 上完成真机验证）
-- Python 3.10+
-- 已安装并至少启动过一次 Agent 客户端
-
-克隆仓库后，在仓库根目录执行一条命令：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
-```
-
-安装器会自动完成：
-
-1. 创建 Python 虚拟环境并安装 NX_MCP-Enhanced sidecar
-2. 创建 Workspace
-3. 为当前 Windows 用户配置 `UGII_USER_DIR`
-4. 构建 C# Loader
-5. 将 Loader 部署到 `%UGII_USER_DIR%\startup`
-6. 安装统一 `nx-agent` Skill（文字描述建模 + 二维工程图自动建模）
-7. 安装 Plan Runner 并执行轻量测试
-
-如果存在多个 Agent Profile，可手动指定：
-
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -AgentProfile "Profile 7"
-```
-
-> 注：`-AgentProfile` 是当前安装脚本中的兼容参数名，仅用于指定本机 Profile。
-
-如果安装前 Siemens NX 已经处于运行状态，安装完成后需要重启一次 NX，
-让新进程读取 `UGII_USER_DIR` 并自动加载新部署的 Loader。
-如果 NX 尚未启动，安装完成后直接启动即可。
-
-安装完成并启动 / 重启 NX 后，有两种建模方式：
-
-### 方式一：文字描述建模
-
-新建一个 Agent 对话，直接描述你希望创建或修改的 NX 模型，例如：
-
-```
-用我打开的 NX 创建一个 100×60×10 mm 的底板，四角 R8，
-并在四角各打一个 Ø8 通孔。
-```
-
-文字建模由统一 `nx-agent` 生成建模计划，再通过 Plan Runner → resident Loader 执行；无需额外 MCP 客户端 JSON 配置。
-
-### 方式二：二维工程图自动建模
-
-新建一个 Agent 对话，上传二维机械工程图，并发送：
-
-```
-开始建模
-```
-
-工程图模式由统一 `nx-agent` 内部执行：工程图读取 → 建模规划 → Plan Runner；阶段 C 失败时仅允许一次受控自动修复，并从干净状态完整重跑。
-
-完整安装说明请查看 [INSTALL.md](INSTALL.md)。
+### 构建
+- `build.bat` 增加 `NXOpen.UF.dll` 引用（三维测量需要 UFUN）
 
 ---
 
-## 路径自动检测
+## 环境要求
 
-| 项目 | 检测 / 使用顺序 |
-| --- | --- |
-| NX 安装目录（`UGII_BASE_DIR`） | `UGII_BASE_DIR` 环境变量 → 注册表 → `PATH` → `%ProgramFiles%\Siemens\NX*` |
-| Workspace（`NX_MCP_WORKSPACE`） | 环境变量 → `%USERPROFILE%\NX_MCP_WORKSPACE` |
-| NX 用户目录（`UGII_USER_DIR`） | 优先使用已有环境变量；未设置时自动配置为 `%USERPROFILE%\.nx_mcp_user` |
-| Loader 启动目录 | `%UGII_USER_DIR%\startup` |
+- Windows
+- Siemens NX （需 `NXBIN\managed\NXOpen*.dll`）
+- .NET Framework 4.x（构建用 `csc.exe`）
+- Python 3.x + MCP 客户端
 
 ---
 
-## 当前限制
+## 安装与运行
 
-- 暂不支持真实螺纹 / 螺纹孔几何。
-- Sweep、Loft、Draft、Spline、渐开线齿轮及复杂自由曲面不在当前认证范围内。
-- 当前真机认证环境为 **NX 2506 / Windows**；其他 NX 版本可能可用，但尚未正式验证。
-- STEP 导出后，NX Translator 可能需要短暂时间完成文件写入。
+```bash
+# 1) 构建 Loader
+cd loader && build.bat
+
+# 2) 部署 DLL 到 NX 的 startup 目录
+#    即 %USERPROFILE%\.nx_mcp_user\startup\NX_MCP_Loader.dll
+#    该目录需通过 UGII_USER_DIR 环境变量被 NX 识别
+
+# 3) 启动 NX（需带上述环境变量）
+#    从开始菜单直接打开 NX 也可以
+
+# 4) 验证管道
+python pipe_smoke.py ping nx_status
+```
+
+MCP 配置示例（`~/.workbuddy/mcp.json`）：
+
+```json
+{
+  "mcpServers": {
+    "nx-mcp": {
+      "command": "<venv>/Scripts/python.exe",
+      "args": ["-m", "nx_mcp.server"],
+      "cwd": "<repo>"
+    }
+  }
+}
+```
+
+> **注意**：NX 退出后管道即断开。建议用一个后台常驻脚本守护 NX
+> （检测到 NX 未运行则拉起）。后台任务通常**不跨会话/跨天存活**，新会话需重新拉起。
 
 ---
 
-## 两种建模入口
+## 使用要点
 
-Agent Pack 已经**内置在本仓库中，并由 `install.ps1` 自动安装**。
+1. **边索引在部件实例间不稳定**（重建后会变）→ 绝不硬编码索引，
+   先 `nx_list_edges` 再按半径/长度/坐标**自动筛选**
+2. **body_id 有两套 ID 空间**：`nx_list_bodies` 显示 NX 日志标识（如 `EXTRUDED(1)`），
+   命令只认建模时返回的内部 ID（如 `BODY_1`）
+3. **图纸名/视图名不能有空格**（管道按空格分词）
+4. **标题栏内容 = 部件属性**：格子引用属性显示，填标题栏要用 `nx_set_attribute`
+5. 坐标用 `{"x":..,"y":..}` 字典传，传 list 会报错
 
-对外只安装一个统一 Skill：
+---
 
-- `nx-agent`：自动识别并处理文字描述建模、工作区内已保存零件的安全修改、二维工程图自动建模
+## 已知限制
 
-工程图模式内部仍保持模块化规则：工程图读取 → 建模规划 → Plan Runner。Plan Runner 作为内部执行器安装，不再作为单独 Skill 展示。
+以下功能已研究但**未打通**，命令保留在源码中、未注册到 MCP
+（避免 AI 用到必失败的工具）：
 
-详细使用说明：[docs/DRAWING_TO_NX.md](docs/DRAWING_TO_NX.md)
+| 功能 | 状态 |
+|---|---|
+| 中心线 | `AutomaticCenterlineBuilder.Commit()` 报错 |
+| DWG/DXF 导出 | `Commit()` 成功但不出文件 |
+| 剖视图 | `SectionLineBuilder` 在 NX10 弃用，替代路径断档 |
+| 局部放大 | 报"用于定义边界的点不能相同" |
+| 图框边框线 | `NXOpen.Diagramming` 属图表应用，不适用于制图图纸页 |
+| 真实螺纹 | 上游亦不支持 |
 
-NX_MCP 核心仍可独立使用；`install-agent.ps1` 保留为高级工具，
-用于只重装 Agent Pack，而不重新安装 NX_MCP 核心。
+每项的详细调研（已试组合、排除项、错误原文、下一步建议）见 `受阻项调研档案`。
 
 ---
 
 ## 致谢
 
-- 原始项目：DreamEnding/NX_MCP
-- 增强版 / 一体化 Agent Pack：NX MCP contributors
+本项目是在以下开源项目基础上的 NX 12 适配与功能扩展：
+
+- **DreamEnding/NX_MCP** — 原始项目，奠定了 MCP 驱动 NX 的整体思路
+  https://github.com/DreamEnding/NX_MCP （MIT License）
+- **kongbaic/NX_MCP-Enhanced**（作者：抖音 无趣）— 本项目的直接基础，
+  提供常驻 Loader 与命名管道桥
+  https://github.com/kongbaic/NX_MCP-Enhanced （MIT License）
+- **Cai-aa/CAD-Agent-Hub** — 参考其已验证的 NXOpen 实现序列
+  https://github.com/Cai-aa/CAD-Agent-Hub （MIT License）
+
+感谢以上作者的开源贡献。
+
+Siemens NX 是 Siemens 公司的注册商标。本项目仅通过公开的 NXOpen API 与 NX 交互，
+**不包含任何 NX 专有代码或二进制文件** —— NX 相关程序集在构建时从本机 NX 安装目录引用。
+
+---
 
 ## 许可证
 
-MIT License，详见 [LICENSE](LICENSE)。
+本项目整体采用 **GNU General Public License v3.0**（见 `LICENSE`）。
 
-原始项目内容继续遵循其自身的 MIT License。
+上游组件以 MIT License 授权，其许可与版权声明保留在 `LICENSES/Upstream-MIT.txt`，
+不因本项目采用 GPL 而改变；接收者仍可依据 MIT 条款单独使用那些上游组件。
+
+如需商业授权（不适用 GPLv3 的场景），请联系仓库维护者。

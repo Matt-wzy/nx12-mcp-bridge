@@ -76,6 +76,33 @@ CERTIFIED_TOOL_NAMES = {
     "nx_list_drafting_views",
     "nx_update_views",
     "nx_create_dimension",
+    "nx_list_dimensions",
+    "nx_list_annotations",
+    "nx_create_note",
+    "nx_create_diameter_dimension",
+    "nx_create_radius_dimension",
+    "nx_delete_annotation",
+    "nx_export_pdf",
+    "nx_measure_distance",
+    "nx_create_roughness",
+    "nx_create_title_block",
+    "nx_set_attribute",
+    "nx_list_attributes",
+    # NOTE: nx_create_sheet_border is implemented but NOT exposed. Commit() always
+    # fails with "宽度必须大于零或小于水平或竖直区域大小..." (invalid zone width).
+    # Likely cause: NXOpen.Diagramming is NX's *diagramming* (schematic) app, not
+    # the drafting app, so it does not apply to drafting sheets. Zone sizes were
+    # set (no warnings in log) and it still failed, so the route is wrong.
+    # NOTE: nx_create_detail_view is implemented and compiles, but Commit() always
+    # fails with "用于定义边界的点不能相同" (boundary points must differ) no matter how
+    # the two points are supplied. Hidden until the real boundary API is found.
+    # NOTE: nx_export_dwg is implemented in the Loader but NOT exposed: Commit()
+    # succeeds yet no file is written. See memory for everything already tried.
+    # Exposing a tool that silently does nothing is worse than not having it.
+    # NOTE: nx_create_centerline is implemented in the Loader but NOT exposed yet.
+    # AutomaticCenterlineBuilder.Commit() fails with NX status 1175325 even after
+    # adding the drafting view to its Views list. Exposing a broken tool is worse
+    # than not having it, so it stays hidden until the cause is found.
 }
 
 
@@ -604,6 +631,204 @@ def create_certified_server(
     async def nx_list_drafting_views() -> OperationResult:
         """List the drafting views on the current drawing sheet."""
         return OperationResult(**await call("nx_list_drafting_views", {}))
+
+    @mcp.tool()
+    async def nx_list_dimensions() -> OperationResult:
+        """Read back every dimension in the part: measured size and tolerance.
+
+        Returns one entry per dimension, formatted as
+        "<journal_id>|<name>|size=<value>|tol=<upper>/<lower>|<tolerance_type>".
+        Use this to verify dimensions you just created, or to READ an existing
+        NX 2D drawing: sizes and tolerances are recovered from the model, so an
+        agent can understand what a drawing specifies without opening the UI.
+        """
+        return OperationResult(**await call("nx_list_dimensions", {}))
+
+    @mcp.tool()
+    async def nx_list_annotations() -> OperationResult:
+        """Read the non-dimension annotations of a drawing: notes, GD&T, roughness.
+
+        Each entry is prefixed by kind:
+          "NOTE|<journal_id>|<text>"            drafting / technical-requirement text
+          "GDT|<journal_id>|<characteristic>|tol=<value>|datum=<d1>,<d2>,<d3>"
+          "ROUGH|<journal_id>"                  surface finish symbol
+        Use this together with nx_list_dimensions to fully understand an existing
+        NX 2D process drawing.
+        """
+        return OperationResult(**await call("nx_list_annotations", {}))
+
+    @mcp.tool()
+    async def nx_create_radius_dimension(
+        view_id: str = "",
+        body_id: str = "",
+        edge_index: int = 0,
+        pos_x: float = 0.0,
+        pos_y: float = 0.0,
+        dim_name: str = "MCP_RADIUS",
+    ) -> OperationResult:
+        """Create a RADIUS dimension on one edge (fillets, arcs, rounds).
+
+        edge_index is the 0-based index from nx_list_edges on the given body.
+        """
+        return OperationResult(
+            **await call(
+                "nx_create_radius_dimension",
+                {
+                    "view_id": view_id,
+                    "body_id": body_id,
+                    "edge_index": edge_index,
+                    "pos_x": pos_x,
+                    "pos_y": pos_y,
+                    "dim_name": dim_name,
+                },
+            )
+        )
+
+    @mcp.tool()
+    async def nx_delete_annotation(annotation_id: str) -> OperationResult:
+        """Delete a note / dimension / GDT / roughness annotation.
+
+        Pass either its journal id or name (e.g. "LEN_120", "HANDLE R-5132"), or a
+        "kind:index" selector: note:0, dim:1, gdt:0, rough:0 (0-based, in the order
+        returned by nx_list_dimensions / nx_list_annotations).
+        Useful for cleaning up test annotations that nx_undo cannot reach.
+        """
+        return OperationResult(
+            **await call("nx_delete_annotation", {"annotation_id": annotation_id})
+        )
+
+    @mcp.tool()
+    async def nx_export_pdf(path: str, sheet_name: str = "") -> OperationResult:
+        """Export the current drawing display to a PDF file.
+
+        Pass sheet_name to display that sheet first (the export follows the current
+        display). Use nx_list_drawing_sheets to see available sheet names.
+        """
+        return OperationResult(
+            **await call("nx_export_pdf", {"path": path, "sheet_name": sheet_name})
+        )
+
+    @mcp.tool()
+    async def nx_create_roughness(
+        pos_x: float = 20.0,
+        pos_y: float = 20.0,
+        value: str = "1.6",
+    ) -> OperationResult:
+        """Create a surface finish (roughness) symbol on the current drawing sheet.
+
+        value goes into the symbol's a1 slot - e.g. "1.6" for Ra 1.6, "3.2" for Ra 3.2.
+        Position is in sheet coordinates (mm).
+        """
+        return OperationResult(
+            **await call(
+                "nx_create_roughness",
+                {"pos_x": pos_x, "pos_y": pos_y, "value": value},
+            )
+        )
+
+    @mcp.tool()
+    async def nx_create_title_block(
+        pos_x: float = 0.0,
+        pos_y: float = 0.0,
+    ) -> OperationResult:
+        """Place a title block on the current drawing sheet.
+
+        Position is in sheet coordinates (mm); typically bottom-right, e.g.
+        pos_x=340, pos_y=5 for an A3 landscape sheet.
+        """
+        return OperationResult(
+            **await call(
+                "nx_create_title_block", {"pos_x": pos_x, "pos_y": pos_y}
+            )
+        )
+
+    @mcp.tool()
+    async def nx_set_attribute(name: str, value: str) -> OperationResult:
+        """Set a string attribute on the part.
+
+        This is how a title block gets its CONTENT: title-block cells usually
+        reference part attributes. Typical names: 名称 / 图号 / 材料 / 设计 /
+        审核 / 比例 / 单位. Value may contain spaces.
+        """
+        return OperationResult(
+            **await call("nx_set_attribute", {"name": name, "value": value})
+        )
+
+    @mcp.tool()
+    async def nx_list_attributes() -> OperationResult:
+        """Read back all user attributes set on the part (title-block content)."""
+        return OperationResult(**await call("nx_list_attributes", {}))
+
+    @mcp.tool()
+    async def nx_measure_distance(
+        body_id: str = "",
+        edge_index_1: int = 0,
+        edge_index_2: int = 0,
+    ) -> OperationResult:
+        """Measure the minimum 3D distance between two edges of a body.
+
+        This is a QUERY: no annotation is created. It returns the numeric distance
+        (mm) plus the two closest points, so an agent can verify geometry instead of
+        guessing. Indices are 0-based from nx_list_edges.
+        """
+        return OperationResult(
+            **await call(
+                "nx_measure_distance",
+                {
+                    "body_id": body_id,
+                    "edge_index_1": edge_index_1,
+                    "edge_index_2": edge_index_2,
+                },
+            )
+        )
+
+    @mcp.tool()
+    async def nx_create_note(
+        text: str,
+        pos_x: float = 20.0,
+        pos_y: float = 20.0,
+    ) -> OperationResult:
+        """Add technical-requirement / process text to the current drawing sheet.
+
+        Use "|" to start a new line, e.g. "技术要求|1. 未注倒角 C0.5|2. 调质 28-32HRC".
+        Position is in sheet coordinates (mm).
+        """
+        return OperationResult(
+            **await call("nx_create_note", {"text": text, "pos_x": pos_x, "pos_y": pos_y})
+        )
+
+    @mcp.tool()
+    async def nx_create_diameter_dimension(
+        view_id: str = "",
+        body_id: str = "",
+        edge_index: int = 0,
+        pos_x: float = 0.0,
+        pos_y: float = 0.0,
+        upper_tolerance: float = 0.1,
+        lower_tolerance: float = -0.1,
+        dim_name: str = "MCP_DIAMETER",
+    ) -> OperationResult:
+        """Create a DIAMETER dimension on one edge (essential for shafts).
+
+        A linear dimension between two edges cannot express a diameter; use this
+        for cylindrical/circular features. edge_index is the 0-based index from
+        nx_list_edges on the given body.
+        """
+        return OperationResult(
+            **await call(
+                "nx_create_diameter_dimension",
+                {
+                    "view_id": view_id,
+                    "body_id": body_id,
+                    "edge_index": edge_index,
+                    "pos_x": pos_x,
+                    "pos_y": pos_y,
+                    "upper_tolerance": upper_tolerance,
+                    "lower_tolerance": lower_tolerance,
+                    "dim_name": dim_name,
+                },
+            )
+        )
 
     @mcp.tool()
     async def nx_update_views() -> OperationResult:
