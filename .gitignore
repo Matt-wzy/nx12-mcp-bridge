@@ -35,3 +35,13 @@ mcp-client-config.json
 
 # C# Loader build artifact (never commit)
 loader/*.dll
+*.pdb
+
+# editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# local runtime workspace
+NX_MCP_WORKSPACE/

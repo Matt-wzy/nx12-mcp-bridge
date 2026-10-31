@@ -102,7 +102,92 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
             if name:
                 cmd += " " + name
         return cmd
-    if method in ("nx_list_drawing_sheets", "nx_list_drafting_views"):
+    if method == "nx_create_note":
+        # text goes last so it may contain spaces; '|' marks a line break
+        return "nx_create_note %s %s %s" % (
+            _fmt(params.get("pos_x", 0.0)),
+            _fmt(params.get("pos_y", 0.0)),
+            str(params.get("text", "")),
+        )
+    if method == "nx_create_diameter_dimension":
+        return "nx_create_diameter_dimension %s %s %s %s %s %s %s %s" % (
+            str(params.get("view_id", "")),
+            str(params.get("body_id", "")),
+            str(params.get("edge_index", 0)),
+            _fmt(params.get("pos_x", 0.0)),
+            _fmt(params.get("pos_y", 0.0)),
+            _fmt(params.get("upper_tolerance", 0.1)),
+            _fmt(params.get("lower_tolerance", -0.1)),
+            str(params.get("dim_name", "MCP_DIAMETER")),
+        )
+    if method == "nx_create_radius_dimension":
+        return "nx_create_radius_dimension %s %s %s %s %s %s" % (
+            str(params.get("view_id", "")),
+            str(params.get("body_id", "")),
+            str(params.get("edge_index", 0)),
+            _fmt(params.get("pos_x", 0.0)),
+            _fmt(params.get("pos_y", 0.0)),
+            str(params.get("dim_name", "MCP_RADIUS")),
+        )
+    if method == "nx_measure_distance":
+        return "nx_measure_distance %s %s %s" % (
+            str(params.get("body_id", "")),
+            str(params.get("edge_index_1", params.get("first_edge_index", 0))),
+            str(params.get("edge_index_2", params.get("second_edge_index", 0))),
+        )
+    if method == "nx_export_dwg":
+        cmd = "nx_export_dwg " + str(params.get("path", ""))
+        sheet = str(params.get("sheet_name", "") or "")
+        if sheet:
+            cmd += " " + sheet
+        return cmd
+    if method == "nx_create_sheet_border":
+        return "nx_create_sheet_border %s" % (
+            "1" if str(params.get("zones", "1")) in ("1", "true", "True") else "0"
+        )
+    if method == "nx_set_attribute":
+        return "nx_set_attribute %s %s" % (
+            str(params.get("name", "")),
+            str(params.get("value", "")),
+        )
+    if method == "nx_list_attributes":
+        return "nx_list_attributes"
+    if method == "nx_create_title_block":
+        return "nx_create_title_block %s %s" % (
+            _fmt(params.get("pos_x", 0.0)),
+            _fmt(params.get("pos_y", 0.0)),
+        )
+    if method == "nx_create_detail_view":
+        return "nx_create_detail_view %s %s %s %s %s %s" % (
+            str(params.get("parent_view_id", "")),
+            _fmt(params.get("x", 0.0)),
+            _fmt(params.get("y", 0.0)),
+            _fmt(params.get("radius", 10.0)),
+            _fmt(params.get("scale", 2.0)),
+            str(params.get("view_name", "")),
+        )
+    if method == "nx_create_roughness":
+        return "nx_create_roughness %s %s %s" % (
+            _fmt(params.get("pos_x", 0.0)),
+            _fmt(params.get("pos_y", 0.0)),
+            str(params.get("value", "1.6")),
+        )
+    if method == "nx_create_centerline":
+        return "nx_create_centerline"
+    if method == "nx_export_pdf":
+        cmd = "nx_export_pdf " + str(params.get("path", ""))
+        sheet = str(params.get("sheet_name", "") or "")
+        if sheet:
+            cmd += " " + sheet
+        return cmd
+    if method == "nx_delete_annotation":
+        return "nx_delete_annotation " + str(params.get("annotation_id", ""))
+    if method in (
+        "nx_list_drawing_sheets",
+        "nx_list_drafting_views",
+        "nx_list_dimensions",
+        "nx_list_annotations",
+    ):
         return method
     # ---- drafting: view update + dimension annotation ------------
     if method == "nx_update_views":
@@ -411,10 +496,19 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
     # Drafting lists: ObjectRef.kind is a restricted literal (part/sketch/curve/
     # feature/body) and cannot carry "sheet"/"view", so surface the items inside
     # the message instead of returning them as objects.
-    if method in ("nx_list_drawing_sheets", "nx_list_drafting_views"):
+    if method in (
+        "nx_list_drawing_sheets",
+        "nx_list_drafting_views",
+        "nx_list_dimensions",
+        "nx_list_annotations",
+    ):
         items = resp.get("sheets")
         if items is None:
             items = resp.get("views")
+        if items is None:
+            items = resp.get("dimensions")
+        if items is None:
+            items = resp.get("annotations")
         items = items or []
         detail = ", ".join(str(i) for i in items) if items else "none"
         return {"status": "success", "message": "%s [%s]" % (msg, detail)}

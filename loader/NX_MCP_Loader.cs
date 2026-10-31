@@ -336,6 +336,38 @@ public static class NX_MCP_Loader
                 return ListDrawingSheets(parts);
             case "nx_list_drafting_views":
                 return ListDraftingViews(parts);
+            case "nx_list_dimensions":
+                return ListDimensions(parts);
+            case "nx_list_annotations":
+                return ListAnnotations(parts);
+            case "nx_create_note":
+                return CreateNote(parts);
+            case "nx_create_diameter_dimension":
+                return CreateDiameterDimension(parts);
+            case "nx_create_radius_dimension":
+                return CreateRadiusDimension(parts);
+            case "nx_delete_annotation":
+                return DeleteAnnotation(parts);
+            case "nx_export_pdf":
+                return ExportPdf(parts);
+            case "nx_measure_distance":
+                return MeasureDistance(parts);
+            case "nx_create_centerline":
+                return CreateCenterline(parts);
+            case "nx_create_roughness":
+                return CreateRoughness(parts);
+            case "nx_create_detail_view":
+                return CreateDetailView(parts);
+            case "nx_create_title_block":
+                return CreateTitleBlock(parts);
+            case "nx_set_attribute":
+                return SetAttributeCmd(parts);
+            case "nx_list_attributes":
+                return ListAttributes(parts);
+            case "nx_create_sheet_border":
+                return CreateSheetBorder(parts);
+            case "nx_export_dwg":
+                return ExportDwg(parts);
             // ---- drafting: view update + dimension annotation ------------
             case "nx_update_views":
                 return UpdateViewsCmd();
@@ -877,6 +909,948 @@ public static class NX_MCP_Loader
         throw new Exception("no body in work part");
     }
 
+    // nx_list_dimensions
+    // Read-back of every dimension in the part: measured size + bilateral tolerance.
+    // This closes the write/verify loop and lets an agent "read" an existing 2D
+    // drawing (values and tolerances), not just create one.
+    // Members confirmed present in NX 12: Part.Dimensions, Dimension.ComputedSize,
+    // Dimension.UpperMetricToleranceValue / LowerMetricToleranceValue, ToleranceType.
+    private static string ListDimensions(string[] parts)
+    {
+        try
+        {
+            if (_part == null) return ErrJson("no active part");
+            var items = new List<string>();
+            foreach (NXOpen.Annotations.Dimension dim in _part.Dimensions.ToArray())
+            {
+                string ji = "";  try { ji = dim.JournalIdentifier; } catch { }
+                string nm = "";  try { nm = dim.Name; } catch { }
+                double size = 0; try { size = dim.ComputedSize; } catch { }
+                double up = 0, lo = 0;
+                try { up = dim.UpperMetricToleranceValue; lo = dim.LowerMetricToleranceValue; } catch { }
+                string tt = "";
+                try { tt = dim.ToleranceType.ToString(); } catch { }
+                items.Add(
+                    ji + "|" + nm +
+                    "|size=" + size.ToString("0.###", CultureInfo.InvariantCulture) +
+                    "|tol=" + up.ToString("0.###", CultureInfo.InvariantCulture) +
+                    "/" + lo.ToString("0.###", CultureInfo.InvariantCulture) +
+                    "|" + tt);
+            }
+            return OkJsonList("dimensions", items, "found " + items.Count + " dimension(s)");
+        }
+        catch (Exception e)
+        {
+            return ErrJson("list_dimensions failed: " + e.Message);
+        }
+    }
+
+    // nx_create_note <pos_x> <pos_y> <text...>
+    // Technical-requirement / process text on the current drawing sheet.
+    // Text is everything after the position (spaces allowed); use '|' for line breaks.
+    // Ported from CAD-Agent-Hub _op_create_drafting_note (validated sequence).
+    private static string CreateNote(string[] parts)
+    {
+        if (parts.Length < 4)
+            return ErrJson("usage: nx_create_note <pos_x> <pos_y> <text...> (use | for line breaks)");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+
+            double posx = D(parts[1]);
+            double posy = D(parts[2]);
+
+            // Text == all remaining tokens re-joined, so it may contain spaces.
+            var sb = new StringBuilder();
+            for (int i = 3; i < parts.Length; i++)
+            {
+                if (i > 3) sb.Append(" ");
+                sb.Append(parts[i]);
+            }
+            string raw = sb.ToString().Trim();
+            if (raw.Length == 0) return ErrJson("note text is empty");
+
+            string[] lines = raw.Split('|');
+            for (int i = 0; i < lines.Length; i++) lines[i] = lines[i].Trim();
+
+            string jid = "";
+            NXOpen.Annotations.DraftingNoteBuilder nb =
+                // C# has no SimpleDraftingAid.Null (that is the Python spelling);
+                // passing null creates a brand-new note, same as the other builders here.
+                _part.Annotations.CreateDraftingNoteBuilder(null);
+            try
+            {
+                nb.Text.TextBlock.SetText(lines);
+                nb.Origin.OriginPoint = new Point3d(posx, posy, 0.0);
+                nb.Origin.Anchor = NXOpen.Annotations.OriginBuilder.AlignmentPosition.TopLeft;
+                NXOpen.Annotations.Note note = (NXOpen.Annotations.Note)nb.Commit();
+                try { note.SetName("MCP_NOTE"); } catch { }
+                try { jid = note.JournalIdentifier; } catch { }
+            }
+            finally { try { nb.Destroy(); } catch { } }
+
+            try { _part.DrawingSheets.RefreshCurrentSheet(); } catch { }
+            return OkJson("note", jid, "created note lines=" + lines.Length);
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_note failed: " + e.Message);
+        }
+    }
+
+    // nx_create_diameter_dimension <view_id> <body_id> <edge_index> <pos_x> <pos_y> [upper] [lower] [name]
+    // Needed for shafts: a linear dimension between two edges cannot express a diameter.
+    private static string CreateDiameterDimension(string[] parts)
+    {
+        if (parts.Length < 6)
+            return ErrJson("usage: nx_create_diameter_dimension <view_id> <body_id> <edge_index> <pos_x> <pos_y> [upper=0.1] [lower=-0.1] [name]");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+
+            DrawingSheet sheet;
+            DraftingView view = ResolveViewAnySheet(parts[1].Trim(), out sheet);
+            try { sheet.Open(); } catch { }
+
+            Body body = ResolveBody(parts[2].Trim());
+            Edge[] edges = body.GetEdges();
+            int ei = int.Parse(parts[3], CultureInfo.InvariantCulture);
+            if (ei < 0 || ei >= edges.Length)
+                return ErrJson("edge_index out of range: " + ei + " (have " + edges.Length + ")");
+            Edge e1 = edges[ei];
+
+            double posx = D(parts[4]);
+            double posy = D(parts[5]);
+            double upper = (parts.Length > 6 && !string.IsNullOrEmpty(parts[6].Trim())) ? D(parts[6]) : 0.1;
+            double lower = (parts.Length > 7 && !string.IsNullOrEmpty(parts[7].Trim())) ? D(parts[7]) : -0.1;
+            string dimName = (parts.Length > 8 && !string.IsNullOrEmpty(parts[8].Trim()))
+                ? parts[8].Trim() : "MCP_DIAMETER";
+
+            NXOpen.Annotations.DimensionData ddd = _part.Annotations.NewDimensionData();
+            NXOpen.Annotations.Associativity a1 = _part.Annotations.NewAssociativity();
+            a1.FirstObject = e1;
+            a1.SecondObject = null;
+            a1.ObjectView = view;
+            a1.PickPoint = MidpointOfObject(e1);
+            a1.PointOption = NXOpen.Annotations.AssociativityPointOption.OnCurve;
+            a1.LineOption = NXOpen.Annotations.AssociativityLineOption.None;
+            ddd.SetAssociativity(1, new NXOpen.Annotations.Associativity[] { a1 });
+
+            NXOpen.Annotations.Dimension dim =
+                _part.Dimensions.CreateDiameterDimension(ddd, new Point3d(posx, posy, 0.0));
+            try { dim.SetName(dimName); } catch { }
+
+            try
+            {
+                NXOpen.Annotations.ILinearTolerance ltObj = (NXOpen.Annotations.ILinearTolerance)dim;
+                NXOpen.Annotations.LinearTolerance lt = ltObj.GetTolerance();
+                lt.ToleranceType = NXOpen.Annotations.ToleranceType.BilateralTwoLines;
+                lt.SetUpperToleranceMm(new NXOpen.Annotations.Value(upper, null, 0));
+                lt.SetLowerToleranceMm(new NXOpen.Annotations.Value(lower, null, 0));
+                ltObj.SetTolerance(lt);
+            }
+            catch (Exception et) { Log("diameter tolerance warn: " + et.Message); }
+
+            try { ForceUpdateSheet(sheet); } catch { }
+
+            string jid = ""; try { jid = dim.JournalIdentifier; } catch { }
+            double computed = 0.0; try { computed = dim.ComputedSize; } catch { }
+            return OkJson("dimension", jid,
+                "created diameter dim name=" + dimName
+                + " value=" + F(computed) + " tol=+" + F(upper) + "/" + F(lower));
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_diameter_dimension failed: " + e.Message);
+        }
+    }
+
+    // nx_create_radius_dimension <view_id> <body_id> <edge_index> <pos_x> <pos_y> [name]
+    // For fillets and arcs; a linear dimension cannot express a radius.
+    private static string CreateRadiusDimension(string[] parts)
+    {
+        if (parts.Length < 6)
+            return ErrJson("usage: nx_create_radius_dimension <view_id> <body_id> <edge_index> <pos_x> <pos_y> [name]");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+
+            DrawingSheet sheet;
+            DraftingView view = ResolveViewAnySheet(parts[1].Trim(), out sheet);
+            try { sheet.Open(); } catch { }
+
+            Body body = ResolveBody(parts[2].Trim());
+            Edge[] edges = body.GetEdges();
+            int ei = int.Parse(parts[3], CultureInfo.InvariantCulture);
+            if (ei < 0 || ei >= edges.Length)
+                return ErrJson("edge_index out of range: " + ei + " (have " + edges.Length + ")");
+            Edge e1 = edges[ei];
+
+            double posx = D(parts[4]);
+            double posy = D(parts[5]);
+            string dimName = (parts.Length > 6 && !string.IsNullOrEmpty(parts[6].Trim()))
+                ? parts[6].Trim() : "MCP_RADIUS";
+
+            NXOpen.Annotations.DimensionData ddd = _part.Annotations.NewDimensionData();
+            NXOpen.Annotations.Associativity a1 = _part.Annotations.NewAssociativity();
+            a1.FirstObject = e1;
+            a1.SecondObject = null;
+            a1.ObjectView = view;
+            a1.PickPoint = MidpointOfObject(e1);
+            a1.PointOption = NXOpen.Annotations.AssociativityPointOption.OnCurve;
+            a1.LineOption = NXOpen.Annotations.AssociativityLineOption.None;
+            ddd.SetAssociativity(1, new NXOpen.Annotations.Associativity[] { a1 });
+
+            NXOpen.Annotations.Dimension dim = _part.Dimensions.CreateRadiusDimension(
+                ddd, NXOpen.Annotations.RadiusDimensionType.ToCenter,
+                new Point3d(posx, posy, 0.0));
+            try { dim.SetName(dimName); } catch { }
+
+            try { ForceUpdateSheet(sheet); } catch { }
+
+            string jid = ""; try { jid = dim.JournalIdentifier; } catch { }
+            double computed = 0.0; try { computed = dim.ComputedSize; } catch { }
+            return OkJson("dimension", jid,
+                "created radius dim name=" + dimName + " value=" + F(computed));
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_radius_dimension failed: " + e.Message);
+        }
+    }
+
+    // nx_export_pdf <path.pdf> [sheet_name]
+    // Exports the current display (or a chosen sheet) to PDF.
+    // Entry point is PlotManager.CreatePrintPdfbuilder() - note the lowercase 'b'
+    // in "Pdfbuilder"; searching for "PdfBuilder" finds nothing and makes PDF
+    // export look impossible. Available since NX5.0.1, Windows only.
+    private static string ExportPdf(string[] parts)
+    {
+        if (parts.Length < 2)
+            return ErrJson("usage: nx_export_pdf <path.pdf> [sheet_name]");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+
+            string path = parts[1].Trim();
+            string dir = null;
+            try { dir = Path.GetDirectoryName(path); } catch { }
+            if (!string.IsNullOrEmpty(dir))
+            {
+                try { Directory.CreateDirectory(dir); } catch { }
+            }
+
+            // The PDF builder exports the CURRENT DISPLAY. Manually this works because
+            // opening a drawing sheet puts NX into the Drafting application; headless
+            // we must switch explicitly, otherwise Commit() succeeds but writes nothing.
+            try { _session.ApplicationSwitchImmediate("UG_APP_DRAFTING"); }
+            catch (Exception ea) { Log("app switch warn: " + ea.Message); }
+
+            // Resolve the sheet to export: by name if given, else the current one.
+            DrawingSheet target = null;
+            string want = (parts.Length > 2) ? parts[2].Trim() : "";
+            try
+            {
+                if (!string.IsNullOrEmpty(want))
+                {
+                    foreach (DrawingSheet s in _part.DrawingSheets.ToArray())
+                    {
+                        string nm = "";
+                        try { nm = s.Name; } catch { }
+                        if (nm == want) { target = s; break; }
+                    }
+                }
+                if (target == null) target = _part.DrawingSheets.CurrentDrawingSheet;
+                if (target != null) { try { target.Open(); } catch { } }
+            }
+            catch { }
+
+            NXOpen.PrintPDFBuilder pb = _part.PlotManager.CreatePrintPdfbuilder();
+            try
+            {
+                pb.Filename = path;
+                try { pb.Append = false; } catch { }
+                // PlotSourceBuilder.SetSheets(NXObject[]) is what actually selects the
+                // sheets to export. Without it Commit() succeeds but writes no file.
+                if (target != null)
+                {
+                    try { pb.SourceBuilder.SetSheets(new NXObject[] { target }); }
+                    catch (Exception es) { Log("set sheets warn: " + es.Message); }
+                }
+                pb.Commit();
+            }
+            finally { try { pb.Destroy(); } catch { } }
+
+            bool exists = File.Exists(path);
+            long size = 0;
+            if (exists) { try { size = new FileInfo(path).Length; } catch { } }
+            return OkJson("pdf", path,
+                exists ? ("exported " + size + " bytes")
+                       : "commit ok but file not found - check NX display state");
+        }
+        catch (Exception e)
+        {
+            return ErrJson("export_pdf failed: " + e.Message);
+        }
+    }
+
+    // nx_measure_distance <body_id> <edge_index_1> <edge_index_2>
+    // 3D QUERY (no annotation is created) - returns the minimum distance between two
+    // edges of a body so an agent can verify geometry numerically.
+    // The NXOpen Measure classes do not expose the measured value, so this uses UFUN
+    // (NXOpen.UF.UFSession.Sf.FindMinimumDistance), which returns a real number.
+    // Requires NXOpen.UF.dll, added to build.bat.
+    private static string MeasureDistance(string[] parts)
+    {
+        if (parts.Length < 4)
+            return ErrJson("usage: nx_measure_distance <body_id> <edge_index_1> <edge_index_2>");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+
+            Body body = ResolveBody(parts[1].Trim());
+            Edge[] edges = body.GetEdges();
+            int i1 = int.Parse(parts[2], CultureInfo.InvariantCulture);
+            int i2 = int.Parse(parts[3], CultureInfo.InvariantCulture);
+            if (i1 < 0 || i1 >= edges.Length)
+                return ErrJson("edge_index_1 out of range: " + i1 + " (have " + edges.Length + ")");
+            if (i2 < 0 || i2 >= edges.Length)
+                return ErrJson("edge_index_2 out of range: " + i2 + " (have " + edges.Length + ")");
+
+            Edge e1 = edges[i1];
+            Edge e2 = edges[i2];
+
+            NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+            double dist = 0.0;
+            double[] p1 = new double[3];
+            double[] p2 = new double[3];
+            // UFSf.FindMinimumDistance returned 0 with (0,0,0) points - it does not
+            // work for edge-to-edge. UFModl.AskMinimumDist is the general one.
+            uf.Modl.AskMinimumDist(e1.Tag, e2.Tag, 0, new double[3], 0, new double[3],
+                                   out dist, p1, p2);
+
+            return OkJson(
+                "distance", dist.ToString("0.####", CultureInfo.InvariantCulture),
+                "min distance=" + F(dist) + " mm  p1=(" + F(p1[0]) + "," + F(p1[1]) + "," + F(p1[2])
+                + ")  p2=(" + F(p2[0]) + "," + F(p2[1]) + "," + F(p2[2]) + ")");
+        }
+        catch (Exception e)
+        {
+            return ErrJson("measure_distance failed: " + e.Message);
+        }
+    }
+
+    // nx_create_centerline
+    // Auto centreline for cylindrical/conical faces - very common on shaft drawings.
+    // Entry: Part.Annotations.Centerlines.CreateAutomaticCenterlineBuilder().
+    private static string CreateCenterline(string[] parts)
+    {
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+            try { _session.ApplicationSwitchImmediate("UG_APP_DRAFTING"); }
+            catch (Exception ea) { Log("app switch warn: " + ea.Message); }
+
+            int before = 0;
+            try { before = _part.Annotations.Centerlines.ToArray().Length; } catch { }
+
+            NXOpen.Annotations.AutomaticCenterlineBuilder cb =
+                _part.Annotations.Centerlines.CreateAutomaticCenterlineBuilder();
+            // Views is a read-only SelectDraftingViewList - the view must be ADDED to
+            // it. Without a view the builder fails with NX status 1175325.
+            DraftingView clView = null;
+            try
+            {
+                if (parts.Length > 1 && !string.IsNullOrEmpty(parts[1].Trim()))
+                {
+                    DrawingSheet sh;
+                    clView = ResolveViewAnySheet(parts[1].Trim(), out sh);
+                }
+                if (clView == null)
+                {
+                    DrawingSheet cs = _part.DrawingSheets.CurrentDrawingSheet;
+                    if (cs != null)
+                    {
+                        try { cs.Open(); } catch { }
+                        DraftingView[] vs = cs.GetDraftingViews();
+                        if (vs != null && vs.Length > 0) clView = vs[0];
+                    }
+                }
+            }
+            catch { }
+
+            try
+            {
+                if (clView != null)
+                {
+                    try { cb.Views.Add(clView); }
+                    catch (Exception ev) { Log("view add warn: " + ev.Message); }
+                }
+                cb.Commit();
+            }
+            finally { try { cb.Destroy(); } catch { } }
+
+            try { _part.DrawingSheets.RefreshCurrentSheet(); } catch { }
+            int after = 0;
+            try { after = _part.Annotations.Centerlines.ToArray().Length; } catch { }
+
+            return OkJson("centerlines", after.ToString(CultureInfo.InvariantCulture),
+                "centerlines " + before + " -> " + after);
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_centerline failed: " + e.Message);
+        }
+    }
+
+    // nx_create_roughness <pos_x> <pos_y> [value] [text]
+    // Surface finish (Ra) symbol - very common on machining drawings.
+    // Entry: Part.Annotations.DraftingSurfaceFinishSymbols.CreateDraftingSurfaceFinishBuilder.
+    private static string CreateRoughness(string[] parts)
+    {
+        if (parts.Length < 3)
+            return ErrJson("usage: nx_create_roughness <pos_x> <pos_y> [value] [text]");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+            try { _session.ApplicationSwitchImmediate("UG_APP_DRAFTING"); }
+            catch (Exception ea) { Log("app switch warn: " + ea.Message); }
+
+            double posx = D(parts[1]);
+            double posy = D(parts[2]);
+            string value = (parts.Length > 3) ? parts[3].Trim() : "1.6";
+
+            NXOpen.Annotations.DraftingSurfaceFinishBuilder rb =
+                _part.Annotations.DraftingSurfaceFinishSymbols.CreateDraftingSurfaceFinishBuilder(null);
+            string jid = "";
+            try
+            {
+                rb.Origin.OriginPoint = new Point3d(posx, posy, 0.0);
+                rb.Origin.Anchor = NXOpen.Annotations.OriginBuilder.AlignmentPosition.TopLeft;
+                // A1 is the roughness value field (the "a1" slot of the symbol).
+                rb.SingleRoughnessValue = true;
+                rb.A1 = value;
+                NXOpen.Annotations.DraftingSurfaceFinish sf =
+                    (NXOpen.Annotations.DraftingSurfaceFinish)rb.Commit();
+                try { sf.SetName("MCP_ROUGHNESS"); } catch { }
+                try { jid = sf.JournalIdentifier; } catch { }
+            }
+            finally { try { rb.Destroy(); } catch { } }
+
+            try { _part.DrawingSheets.RefreshCurrentSheet(); } catch { }
+            return OkJson("roughness", jid, "created surface finish value=" + value);
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_roughness failed: " + e.Message);
+        }
+    }
+
+    // nx_export_dwg <path.dwg|.dxf> [sheet_name]
+    // DXF/DWG export. Entry is Session.DexManager.CreateDxfdwgCreator() - a NO-ARG
+    // method, so its XML name has no "(" and is easy to miss when grepping for
+    // signatures with parameters.
+    private static string ExportDwg(string[] parts)
+    {
+        if (parts.Length < 2)
+            return ErrJson("usage: nx_export_dwg <path.dwg|.dxf> [sheet_name]");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+
+            string path = parts[1].Trim();
+            string dir = null;
+            try { dir = Path.GetDirectoryName(path); } catch { }
+            if (!string.IsNullOrEmpty(dir)) { try { Directory.CreateDirectory(dir); } catch { } }
+
+            // OutputTo must be set to Drafting, otherwise Commit() succeeds but
+            // writes no file - same class of trap as SourceBuilder.SetSheets for PDF.
+            try { _session.ApplicationSwitchImmediate("UG_APP_DRAFTING"); }
+            catch (Exception ea) { Log("app switch warn: " + ea.Message); }
+
+            NXOpen.DxfdwgCreator dx = _session.DexManager.CreateDxfdwgCreator();
+            try
+            {
+                dx.OutputFile = path;
+                dx.OutputTo = NXOpen.DxfdwgCreator.OutputToOption.Drafting;
+                dx.OutputFileType = path.ToLowerInvariant().EndsWith(".dxf")
+                    ? NXOpen.DxfdwgCreator.OutputFileTypeOption.Dxf
+                    : NXOpen.DxfdwgCreator.OutputFileTypeOption.Dwg;
+                // Try Explicit source part instead of DisplayPart: headless the
+                // display-part route produced no file at all.
+                dx.InputFile = _partPath ?? _part.FullPath;
+                dx.ExportFrom = NXOpen.DxfdwgCreator.ExportFromOption.ExistingPart;
+                dx.ExportAs = NXOpen.DxfdwgCreator.ExportAsOption.TwoD;
+                try { dx.ExportData = NXOpen.DxfdwgCreator.ExportDataOption.Drawing; }
+                catch (Exception ed) { Log("export data warn: " + ed.Message); }
+                if (parts.Length > 2 && !string.IsNullOrEmpty(parts[2].Trim()))
+                {
+                    try { dx.DrawingList = parts[2].Trim(); }
+                    catch (Exception el) { Log("drawing list warn: " + el.Message); }
+                }
+                dx.Commit();
+            }
+            finally { try { dx.Destroy(); } catch { } }
+
+            bool exists = File.Exists(path);
+            long size = 0;
+            if (exists) { try { size = new FileInfo(path).Length; } catch { } }
+            return OkJson("dwg", path,
+                exists ? ("exported " + size + " bytes")
+                       : "commit ok but file not found - check sheet name and display part");
+        }
+        catch (Exception e)
+        {
+            return ErrJson("export_dwg failed: " + e.Message);
+        }
+    }
+
+    /// compiled with the legacy csc, which predates C# 7 local functions.
+    // nx_create_detail_view <parent_view_id> <x> <y> [radius] [scale] [view_name]
+    // Detail (enlarged) view: circular boundary around a point in the parent view.
+    private static string CreateDetailView(string[] parts)
+    {
+        if (parts.Length < 4)
+            return ErrJson("usage: nx_create_detail_view <parent_view_id> <x> <y> [radius] [scale] [view_name]");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+            try { _session.ApplicationSwitchImmediate("UG_APP_DRAFTING"); }
+            catch (Exception ea) { Log("app switch warn: " + ea.Message); }
+
+            DrawingSheet sheet = CurrentSheet();
+            DraftingView[] views = sheet.GetDraftingViews();
+            if (views == null || views.Length == 0) return ErrJson("sheet has no drafting views");
+
+            string token = parts[1].Trim();
+            DraftingView parent = null;
+            for (int i = 0; i < views.Length; i++)
+            {
+                string nm = ""; try { nm = views[i].Name; } catch { }
+                string ji = ""; try { ji = views[i].JournalIdentifier; } catch { }
+                if (token == i.ToString() || token == nm || token == ji) { parent = views[i]; break; }
+            }
+            if (parent == null) parent = views[0];
+
+            double x = D(parts[2]);
+            double y = D(parts[3]);
+            double radius = (parts.Length > 4 && !string.IsNullOrEmpty(parts[4].Trim())) ? D(parts[4]) : 10.0;
+            double scale = (parts.Length > 5 && !string.IsNullOrEmpty(parts[5].Trim())) ? D(parts[5]) : 2.0;
+
+            NXOpen.Drawings.DetailViewBuilder dvb =
+                _part.DraftingViews.CreateDetailViewBuilder(null);
+            string id = "";
+            try
+            {
+                // Boundary must be declared circular first; the two points are then
+                // centre + a point on the circle (radius).
+                dvb.Type = NXOpen.Drawings.DetailViewBuilder.Types.Circular;
+                // Pass a REAL model view: with null views NX could not tell the two
+                // points apart and rejected them as identical.
+                NXOpen.View mv = null;
+                try { mv = _part.ModelingViews.WorkView; } catch { }
+                dvb.Parent.View.SetValue(
+                    NXOpen.InferSnapType.SnapType.None,
+                    parent, mv, new Point3d(x, y, 0.0),
+                    parent, mv, new Point3d(x + radius, y, 0.0));
+                // Origin is the placement of the new view; place it offset to the right.
+                // Same 3-arg pattern: SetValue(Point, View, Point3d)
+                dvb.Origin.Placement.SetValue(null, null, new Point3d(x + 80.0, y, 0.0));
+                dvb.Scale.Numerator = scale;
+                dvb.Scale.Denominator = 1.0;
+                dvb.Commit();
+            }
+            finally { try { dvb.Destroy(); } catch { } }
+
+            try { ForceUpdateSheet(sheet); } catch { }
+            int count = 0;
+            try { count = sheet.GetDraftingViews().Length; } catch { }
+            return OkJson("view", id, "detail view created views=" + count
+                + " origin=(" + F(x) + "," + F(y) + ") r=" + F(radius) + " scale=" + F(scale));
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_detail_view failed: " + e.Message);
+        }
+    }
+
+    // nx_create_title_block <pos_x> <pos_y>
+    // Places a title block on the current sheet.
+    private static string CreateTitleBlock(string[] parts)
+    {
+        if (parts.Length < 3)
+            return ErrJson("usage: nx_create_title_block <pos_x> <pos_y>");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+            try { _session.ApplicationSwitchImmediate("UG_APP_DRAFTING"); }
+            catch (Exception ea) { Log("app switch warn: " + ea.Message); }
+
+            double x = D(parts[1]);
+            double y = D(parts[2]);
+
+            int before = 0;
+            try { before = _part.DraftingManager.TitleBlocks.ToArray().Length; } catch { }
+
+            NXOpen.Annotations.DefineTitleBlockBuilder tbb =
+                _part.DraftingManager.TitleBlocks.CreateDefineTitleBlockBuilder(null);
+            try
+            {
+                // Origin here is a plain Point3d, not an OriginBuilder.
+                tbb.Origin = new Point3d(x, y, 0.0);
+                tbb.Commit();
+            }
+            finally { try { tbb.Destroy(); } catch { } }
+
+            int after = 0;
+            try { after = _part.DraftingManager.TitleBlocks.ToArray().Length; } catch { }
+
+            try { ForceUpdateSheet(CurrentSheet()); } catch { }
+            return OkJson("title_block", "ok",
+                "title block created at " + F(x) + "," + F(y)
+                + "  count " + before + " -> " + after
+                + (after <= before ? "  [WARNING: nothing was actually created]" : ""));
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_title_block failed: " + e.Message);
+        }
+    }
+
+    // nx_set_attribute <name> <value...>
+    // Title-block cells normally display PART ATTRIBUTES, so filling a title block
+    // means setting attributes. Value may contain spaces (tokens are re-joined).
+    private static string SetAttributeCmd(string[] parts)
+    {
+        if (parts.Length < 3)
+            return ErrJson("usage: nx_set_attribute <name> <value...>");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+
+            string name = parts[1].Trim();
+            var sb = new StringBuilder();
+            for (int i = 2; i < parts.Length; i++)
+            {
+                if (i > 2) sb.Append(" ");
+                sb.Append(parts[i]);
+            }
+            string value = sb.ToString().Trim();
+
+            // Second arg is the array INDEX, not the type: -1 means "not an array".
+            _part.SetUserAttribute(name, -1, value, NXOpen.Update.Option.Now);
+            return OkJson("attribute", name, "set " + name + " = " + value);
+        }
+        catch (Exception e)
+        {
+            return ErrJson("set_attribute failed: " + e.Message);
+        }
+    }
+
+    // nx_list_attributes
+    // Read back the part attributes (what a title block would display).
+    private static string ListAttributes(string[] parts)
+    {
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+
+            var items = new System.Collections.Generic.List<string>();
+            NXOpen.NXObject.AttributeInformation[] atts = _part.GetUserAttributes();
+            if (atts != null)
+            {
+                foreach (NXOpen.NXObject.AttributeInformation a in atts)
+                {
+                    string t = ""; try { t = a.Title; } catch { }
+                    string v = "";
+                    try { v = a.StringValue; } catch { }
+                    if (string.IsNullOrEmpty(v)) { try { v = a.IntegerValue.ToString(CultureInfo.InvariantCulture); } catch { } }
+                    if (string.IsNullOrEmpty(v)) { try { v = a.RealValue.ToString(CultureInfo.InvariantCulture); } catch { } }
+                    items.Add(t + "=" + v);
+                }
+            }
+            return OkJson("attributes", items.Count.ToString(CultureInfo.InvariantCulture),
+                "found " + items.Count + " attribute(s) [" + string.Join(", ", items.ToArray()) + "]");
+        }
+        catch (Exception e)
+        {
+            return ErrJson("list_attributes failed: " + e.Message);
+        }
+    }
+
+    // nx_create_sheet_border [zones=1]
+    // Sheet border lines + optional zone letters/numbers.
+    // [NX12 port] Drawings.BordersAndZonesBuilder is deprecated in NX10.0.0; the
+    // supported route is Diagramming.SheetBordersAndZonesBuilder, reached via
+    // Part.DiagrammingManager.SheetBordersAndZones.
+    private static string CreateSheetBorder(string[] parts)
+    {
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+            try { _session.ApplicationSwitchImmediate("UG_APP_DRAFTING"); }
+            catch (Exception ea) { Log("app switch warn: " + ea.Message); }
+
+            bool zones = !(parts.Length > 1 && parts[1].Trim() == "0");
+
+            int before = 0;
+            try { before = _part.DiagrammingManager.SheetBordersAndZones.ToArray().Length; } catch { }
+
+            NXOpen.Diagramming.SheetBordersAndZonesBuilder bz =
+                _part.DiagrammingManager.SheetBordersAndZones
+                     .CreateSheetBordersAndZonesBuilder(null);
+            try
+            {
+                bz.CreateBorders = true;
+                // Zone sizes default to 0, which NX rejects:
+                // "宽度必须大于零...或小于图纸页大小的四分之一".
+                bz.HorizontalSize = 50.0;
+                bz.VerticalSize = 50.0;
+                bz.Width = 1.0;
+                // Zone settings live on the sub-builder and CreateZones must be on.
+                NXOpen.Diagramming.SheetZoneSettingsBuilder zs = bz.SheetZoneSettings;
+                try { zs.CreateZones = true; }
+                catch (Exception ez) { Log("zone create warn: " + ez.Message); }
+                try { zs.HorizontalSize = 50.0; }
+                catch (Exception ez) { Log("zone hsize warn: " + ez.Message); }
+                try { zs.VerticalSize = 50.0; }
+                catch (Exception ez) { Log("zone vsize warn: " + ez.Message); }
+                try { zs.CreateZoneMarkings = true; }
+                catch (Exception ez) { Log("zone marking warn: " + ez.Message); }
+                if (zones)
+                {
+                    bz.CreateZoneLabels = true;
+                    bz.CreateZoneMarking = true;
+                }
+                bz.Commit();
+            }
+            finally { try { bz.Destroy(); } catch { } }
+
+            int after = 0;
+            try { after = _part.DiagrammingManager.SheetBordersAndZones.ToArray().Length; } catch { }
+
+            try { ForceUpdateSheet(CurrentSheet()); } catch { }
+            return OkJson("border", "ok",
+                "sheet border enabled zones=" + zones
+                + "  count " + before + " -> " + after
+                + (after <= before ? "  [WARNING: nothing was actually created]" : ""));
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_sheet_border failed: " + e.Message);
+        }
+    }
+
+    private static bool AnnotationMatches(NXObject o, string token)
+    {
+        try { if (token == o.JournalIdentifier) return true; } catch { }
+        try { if (token == o.Name) return true; } catch { }
+        return false;
+    }
+
+    // nx_delete_annotation <id | kind:index>
+    // Removes a note / dimension / GDT / roughness symbol. Needed because a stray
+    // annotation cannot be removed any other way (nx_undo only reaches the most
+    // recent visible mark, which is often not enough).
+    // Deletion goes through Session.UpdateManager: AddToDeleteList + DoUpdate.
+    private static string DeleteAnnotation(string[] parts)
+    {
+        if (parts.Length < 2)
+            return ErrJson("usage: nx_delete_annotation <id|kind:index>  (kind = note|dim|gdt|rough)");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+            string token = parts[1].Trim();
+
+            // [NX12 port] Update.AddToDeleteList is deprecated exactly in NX12.0.0;
+            // use Update.AddObjectsToDeleteList(TaggedObject[]) instead.
+            var objs = new List<NXOpen.TaggedObject>();
+
+            // ---- collect candidates by kind ----
+            var notes = new List<NXOpen.Annotations.Note>();
+            var dims = new List<NXOpen.Annotations.Dimension>();
+            var gdts = new List<NXOpen.Annotations.Gdt>();
+            var roughs = new List<NXOpen.Annotations.DraftingSurfaceFinish>();
+            try { foreach (NXOpen.Annotations.Note n in _part.Notes.ToArray()) notes.Add(n); } catch { }
+            try { foreach (NXOpen.Annotations.Dimension d in _part.Dimensions.ToArray()) dims.Add(d); } catch { }
+            try { foreach (NXOpen.Annotations.Gdt g in _part.Gdts.ToArray()) gdts.Add(g); } catch { }
+            try
+            {
+                foreach (NXOpen.Annotations.DraftingSurfaceFinish sf
+                         in _part.Annotations.DraftingSurfaceFinishSymbols.ToArray()) roughs.Add(sf);
+            }
+            catch { }
+
+            // ---- 1) exact id / name match across all kinds ----
+            foreach (var n in notes) if (AnnotationMatches(n, token)) objs.Add(n);
+            foreach (var d in dims) if (AnnotationMatches(d, token)) objs.Add(d);
+            foreach (var g in gdts) if (AnnotationMatches(g, token)) objs.Add(g);
+            foreach (var r in roughs) if (AnnotationMatches(r, token)) objs.Add(r);
+
+            // ---- 2) fallback: "kind:index" ----
+            if (objs.Count == 0 && token.Contains(":"))
+            {
+                string[] kv = token.Split(':');
+                string kind = kv[0].Trim().ToLowerInvariant();
+                int idx;
+                if (kv.Length == 2 && int.TryParse(kv[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out idx))
+                {
+                    if (kind == "note" && idx >= 0 && idx < notes.Count) objs.Add(notes[idx]);
+                    else if (kind == "dim" && idx >= 0 && idx < dims.Count) objs.Add(dims[idx]);
+                    else if (kind == "gdt" && idx >= 0 && idx < gdts.Count) objs.Add(gdts[idx]);
+                    else if (kind == "rough" && idx >= 0 && idx < roughs.Count) objs.Add(roughs[idx]);
+                    else return ErrJson("kind:index out of range: " + token);
+                }
+            }
+
+            if (objs.Count == 0)
+                return ErrJson("no annotation matched: " + token
+                    + " (try nx_list_dimensions / nx_list_annotations first)");
+
+            NXOpen.Session.UndoMarkId mark =
+                _session.SetUndoMark(NXOpen.Session.MarkVisibility.Visible, "Delete Annotation");
+            _session.UpdateManager.AddObjectsToDeleteList(objs.ToArray());
+            _session.UpdateManager.DoUpdate(mark);
+
+            return OkJson("deleted", token, "deleted " + objs.Count + " annotation(s)");
+        }
+        catch (Exception e)
+        {
+            return ErrJson("delete_annotation failed: " + e.Message);
+        }
+    }
+
+    // nx_list_annotations
+    // Read back the non-dimension annotations of a drawing, so an agent can
+    // understand an existing 2D process drawing beyond just sizes:
+    //   NOTE  - drafting / technical-requirement text   (Part.Notes -> GetText)
+    //   GDT   - geometric tolerance                     (Part.Gdts -> GetFcfFrameData)
+    //   ROUGH - surface finish symbols                  (Annotations.DraftingSurfaceFinishSymbols)
+    private static string ListAnnotations(string[] parts)
+    {
+        try
+        {
+            if (_part == null) return ErrJson("no active part");
+            var items = new List<string>();
+
+            // ---- 1. notes (technical requirement text) ----
+            try
+            {
+                foreach (NXOpen.Annotations.Note n in _part.Notes.ToArray())
+                {
+                    string ji = "";
+                    try { ji = n.JournalIdentifier; } catch { }
+                    string txt = "";
+                    try
+                    {
+                        string[] lines = n.GetText();
+                        if (lines != null) txt = string.Join(" / ", lines);
+                    }
+                    catch { }
+                    txt = txt.Replace("\r", " ").Replace("\n", " ").Trim();
+                    items.Add("NOTE|" + ji + "|" + txt);
+                }
+            }
+            catch { }
+
+            // ---- 2. geometric dimensioning & tolerancing ----
+            try
+            {
+                foreach (NXOpen.Annotations.Gdt g in _part.Gdts.ToArray())
+                {
+                    string ji = "";
+                    try { ji = g.JournalIdentifier; } catch { }
+                    // [NX12 port] FcfFrameData.GetFrames()/GeometricCharacteristic and
+                    // FcfFrame.GetTolerance()/Get*DatumReference() are all deprecated in
+                    // NX10.0.0. Use the recommended drafting FCF builder instead, obtained
+                    // from AnnotationManager.CreateDraftingFeatureControlFrameBuilder(Gdt).
+                    NXOpen.Annotations.FeatureControlFrameBuilder fb = null;
+                    try
+                    {
+                        fb = _part.Annotations.CreateDraftingFeatureControlFrameBuilder(g);
+                        string ch = "";
+                        try { ch = fb.Characteristic.ToString(); } catch { }
+                        // FeatureControlFrameDataList is a builder *list* object
+                        // (Length + FindItem), not a plain array.
+                        NXOpen.Annotations.FeatureControlFrameDataBuilderList dataList = null;
+                        try { dataList = fb.FeatureControlFrameDataList; } catch { }
+                        int nFrames = 0;
+                        try { if (dataList != null) nFrames = dataList.Length; } catch { }
+                        if (dataList == null || nFrames <= 0)
+                        {
+                            items.Add("GDT|" + ji + "|" + ch + "|<no frames>");
+                            continue;
+                        }
+                        for (int fi = 0; fi < nFrames; fi++)
+                        {
+                            NXOpen.Annotations.FeatureControlFrameDataBuilder d = null;
+                            try { d = dataList.FindItem(fi); } catch { }
+                            if (d == null) continue;
+                            string tol = "";
+                            try { object v = d.ToleranceValue; if (v != null) tol = v.ToString(); } catch { }
+                            string d1 = "", d2 = "", d3 = "";
+                            try { object r = d.PrimaryDatumReference; if (r != null) d1 = r.ToString(); } catch { }
+                            try { object r = d.SecondaryDatumReference; if (r != null) d2 = r.ToString(); } catch { }
+                            try { object r = d.TertiaryDatumReference; if (r != null) d3 = r.ToString(); } catch { }
+                            items.Add("GDT|" + ji + "|" + ch
+                                + "|tol=" + OneLine(tol)
+                                + "|datum=" + OneLine(d1) + "," + OneLine(d2) + "," + OneLine(d3));
+                        }
+                    }
+                    catch (Exception eg)
+                    {
+                        items.Add("GDT|" + ji + "|<read error: " + OneLine(eg.Message) + ">");
+                    }
+                    finally
+                    {
+                        if (fb != null) { try { fb.Destroy(); } catch { } }
+                    }
+                }
+            }
+            catch { }
+
+            // ---- 3. surface finish (roughness) symbols ----
+            try
+            {
+                NXOpen.Annotations.DraftingSurfaceFinishCollection sfs =
+                    _part.Annotations.DraftingSurfaceFinishSymbols;
+                foreach (NXOpen.Annotations.DraftingSurfaceFinish sf in sfs.ToArray())
+                {
+                    string ji = "";
+                    try { ji = sf.JournalIdentifier; } catch { }
+                    items.Add("ROUGH|" + ji);
+                }
+            }
+            catch { }
+
+            return OkJsonList("annotations", items, "found " + items.Count + " annotation(s)");
+        }
+        catch (Exception e)
+        {
+            return ErrJson("list_annotations failed: " + e.Message);
+        }
+    }
+
+    private static string OneLine(string s)
+    {
+        if (string.IsNullOrEmpty(s)) return "";
+        return s.Replace("\r", " ").Replace("\n", " ").Trim();
+    }
+
     private static string CreatePart(string[] parts)
     {
         if (parts.Length < 2) return ErrJson("usage: nx_create_part <path>");
@@ -909,6 +1883,14 @@ public static class NX_MCP_Loader
     private static string SavePart()
     {
         if (_part == null) return ErrJson("no active part");
+        // [NX12 fix] When a part holds drawing sheets that are not displayed at save
+        // time, NX pops a MODAL "保存 CGM" warning ("CGM will be deleted, continue?").
+        // NX then blocks until a human clicks, so every pipe call hangs until the
+        // 300s timeout. Explicitly disabling drawing-CGM generation removes the
+        // prompt. PartSaveOptions.DrawingCgmData exists since NX3.0, so it is safe
+        // on NX 12.
+        try { _part.SaveOptions.DrawingCgmData = false; }
+        catch (Exception e) { Log("save options warn: " + e.Message); }
         _part.Save(NXOpen.BasePart.SaveComponents.False, NXOpen.BasePart.CloseAfterSave.False);
         return OkJson("saved", _part.FullPath, "saved");
     }
@@ -2247,12 +3229,84 @@ public static class NX_MCP_Loader
     }
 
     // ---- phase-2: remaining certified tools ----------------------------
+    /// Normalise a path so comparisons are not defeated by mixed '/' and '\'.
+    private static string NormPath(string p)
+    {
+        if (string.IsNullOrEmpty(p)) return "";
+        return p.Trim().Replace("/", "\\");
+    }
+
+    private static void RegisterExistingBodies(NXOpen.Part part)
+    {
+        if (part == null) return;
+        try
+        {
+            foreach (Body b in part.Bodies.ToArray())
+            {
+                string bid = "";
+                try { bid = b.Name; } catch { }
+                if (string.IsNullOrEmpty(bid)) { try { bid = b.JournalIdentifier; } catch { } }
+                if (string.IsNullOrEmpty(bid)) bid = "BODY_" + (++_bodyCounter);
+                _bodies[bid] = b;
+            }
+        }
+        catch { }
+    }
+
     private static string OpenPart(string[] parts)
     {
         if (parts.Length < 2) return ErrJson("usage: nx_open_part <path>");
         string path = parts[1];
         if (!File.Exists(path)) return ErrJson("part file not found: " + path);
         if (_session == null) _session = Session.GetSession();
+
+        // [NX12 fix] Re-opening a part that is ALREADY loaded in this session made
+        // NX throw "文件已存在", and every later call then reported stale data from
+        // whatever part was still current. An agent routinely re-opens the same
+        // drawing, so detect that case and simply switch to the loaded part.
+        try
+        {
+            string want = NormPath(path);
+            foreach (NXOpen.BasePart bp in _session.Parts.ToArray())
+            {
+                string fp = "";
+                try { fp = bp.FullPath; } catch { }
+                if (string.IsNullOrEmpty(fp)) continue;
+                string have = NormPath(fp);
+
+                // The path arriving over the pipe can mix '/' and '\' separators,
+                // which makes a raw string comparison miss an already-open part.
+                bool hit = string.Equals(have, want, StringComparison.OrdinalIgnoreCase);
+                if (!hit)
+                {
+                    try
+                    {
+                        hit = string.Equals(
+                            Path.GetFileName(have), Path.GetFileName(want),
+                            StringComparison.OrdinalIgnoreCase);
+                    }
+                    catch { }
+                }
+                if (!hit) continue;
+
+                NXOpen.PartLoadStatus st2 = null;
+                try { _session.Parts.SetDisplay(bp, false, false, out st2); } catch { }
+                finally { if (st2 != null) { try { st2.Dispose(); } catch { } } }
+
+                NXOpen.Part p2 = _session.Parts.Work;
+                if (p2 == null) p2 = bp as NXOpen.Part;
+                if (p2 != null)
+                {
+                    _part = p2;
+                    _partPath = p2.FullPath;
+                    ResetTaskState();
+                    RegisterExistingBodies(p2);
+                    return OkJson("part", _partPath, "already open; switched to it");
+                }
+            }
+        }
+        catch { }
+
         NXOpen.PartLoadStatus status = null;
         try
         {
@@ -2263,18 +3317,7 @@ public static class NX_MCP_Loader
             _partPath = part.FullPath;
             ResetTaskState();
             // register existing bodies so GetBody works after nx_open_part
-            try
-            {
-                foreach (Body b in _part.Bodies.ToArray())
-                {
-                    string bid = "";
-                    try { bid = b.Name; } catch { }
-                    if (string.IsNullOrEmpty(bid)) { try { bid = b.JournalIdentifier; } catch { } }
-                    if (string.IsNullOrEmpty(bid)) bid = "BODY_" + (++_bodyCounter);
-                    _bodies[bid] = b;
-                }
-            }
-            catch { }
+            RegisterExistingBodies(_part);
             return OkJson("part", _partPath, "opened");
         }
         finally

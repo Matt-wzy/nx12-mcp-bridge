@@ -70,6 +70,7 @@ exit /b 1
   /reference:"%BASE%\NXBIN\managed\NXOpen.dll" ^
   /reference:"%BASE%\NXBIN\managed\NXOpenUI.dll" ^
   /reference:"%BASE%\NXBIN\managed\NXOpen.Utilities.dll" ^
+  /reference:"%BASE%\NXBIN\managed\NXOpen.UF.dll" ^
   /reference:System.Windows.Forms.dll ^
   /reference:System.Core.dll ^
   /reference:System.dll ^
