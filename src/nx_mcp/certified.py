@@ -88,6 +88,10 @@ CERTIFIED_TOOL_NAMES = {
     "nx_create_title_block",
     "nx_set_attribute",
     "nx_list_attributes",
+    # WAVE 链接 / 草图读取 / 尺寸改值（NX12 适配，2026-11 已在管道实测）
+    "nx_create_wave_link",
+    "nx_read_sketch",
+    "nx_set_dimension_value",
     # NOTE: nx_create_sheet_border is implemented but NOT exposed. Commit() always
     # fails with "宽度必须大于零或小于水平或竖直区域大小..." (invalid zone width).
     # Likely cause: NXOpen.Diagramming is NX's *diagramming* (schematic) app, not
@@ -873,6 +877,75 @@ def create_certified_server(
                     "lower_tolerance": lower_tolerance,
                     "dim_name": dim_name,
                 },
+            )
+        )
+
+    @mcp.tool()
+    async def nx_create_wave_link(
+        source_part: str,
+        target_part: str,
+        body_index: int = 1,
+        associative: bool = False,
+        position: Point3D | None = None,
+    ) -> OperationResult:
+        """Create a WAVE geometry link from a master part into a process part.
+
+        The source part becomes the assembly root and the target part is added
+        as its downstream component (NX WAVE requires this downstream
+        structure), then the solid body is linked into the target part.
+
+        Default link type is a fixed timestamp / extracted geometry snapshot:
+        the process part does NOT update when the master changes - exactly
+        what "freeze the master into each operation part" needs. Pass
+        associative=true to keep the live link instead.
+
+        body_index is 1-based (default 1 = first solid body). position is an
+        optional {"x","y","z"} mm offset - RESERVED for now: the loader
+        currently rejects it with a clear error while the transform path is
+        being validated (see NX_MCP_Loader.cs CreateWaveLink).
+
+        WARNING: the target part file is deleted and re-created if it exists.
+        Paths must not contain spaces (tokenised pipe protocol, same as
+        nx_open_part).
+        """
+        params: dict[str, Any] = {
+            "source_part": source_part,
+            "target_part": target_part,
+            "body_index": body_index,
+            "associative": associative,
+        }
+        if position is not None:
+            params["position"] = {"x": position.x, "y": position.y, "z": position.z}
+        return OperationResult(**await call("nx_create_wave_link", params))
+
+    @mcp.tool()
+    async def nx_read_sketch(sketch_name: str) -> OperationResult:
+        """Dump a sketch's 2D geometry in sketch-local coordinates (u, w).
+
+        Works on pre-existing / externally-authored sketches: returns the
+        sketch plane (XY/XZ/YZ), origin and axes in part coordinates, plus
+        every curve as line {a,b}, arc {c,r,a1,a2} or circle {c,d}. Use it to
+        faithfully re-create a profile in another part, e.g. for WAVE-based
+        process planning.
+        """
+        return OperationResult(
+            **await call("nx_read_sketch", {"sketch_name": sketch_name})
+        )
+
+    @mcp.tool()
+    async def nx_set_dimension_value(target_size: float, new_value: float) -> OperationResult:
+        """Force an associative dimension's displayed nominal to a given value.
+
+        Finds the dimension whose computed size is closest to target_size
+        (e.g. a mid-tolerance nominal: computed 99.96, displayed 100) and pins
+        its displayed value to new_value. NX 12 exposes no public value
+        override on Dimension, so the loader probes the API surface at runtime;
+        the reply text records which override path succeeded.
+        """
+        return OperationResult(
+            **await call(
+                "nx_set_dimension_value",
+                {"target_size": target_size, "new_value": new_value},
             )
         )
 

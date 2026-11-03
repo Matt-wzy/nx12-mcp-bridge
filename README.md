@@ -34,11 +34,13 @@ AI（自然语言）
 - 修复 `ShellBuilder` 相关 CS1061（改用 `ReplaceRules`）
 - 迁移 `Update.AddToDeleteList` → `AddObjectsToDeleteList`（NX12.0.0 弃用）
 
-### 新增能力（共 50 个 MCP 工具）
+### 新增能力（共 53 个 MCP 工具）
 
 | 类别 | 命令 |
 |---|---|
-| 尺寸标注 | `nx_create_diameter_dimension`（直径，轴类必需）、`nx_create_radius_dimension`（半径） |
+| 尺寸标注 | `nx_create_diameter_dimension`（直径，轴类必需）、`nx_create_radius_dimension`（半径）、`nx_set_dimension_value`（中差显示值强制） |
+| 草图读取 | `nx_read_sketch`（按草图局部坐标导出全部曲线，支持外部绘制的草图） |
+| WAVE 链接 | `nx_create_wave_link`（主模型 → 工序件固定时间戳记/提取几何链接） |
 | 图纸文字 | `nx_create_note`（技术要求/工序文字，`|` 换行） |
 | 表面粗糙度 | `nx_create_roughness`（写入符号 a1 位） |
 | 标题栏 | `nx_create_title_block` |

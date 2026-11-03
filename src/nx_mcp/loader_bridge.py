@@ -305,6 +305,33 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
             _fmt(params.get("reverse", False)))
     if method == "nx_fit_view":
         return "nx_fit_view"
+    # ---- WAVE 链接 / 草图读取 / 尺寸改值（NX12 适配新增） ----------------
+    if method == "nx_create_wave_link":
+        # Loader 语法: nx_create_wave_link <src> <tgt> [body_index] [assoc=1] [x=..] [y=..] [z=..]
+        # 协议按空格分词，路径不能包含空格（与 nx_open_part 同一限制）。
+        cmd = "nx_create_wave_link %s %s %s" % (
+            params["source_part"],
+            params["target_part"],
+            int(params.get("body_index", 1) or 1),
+        )
+        if params.get("associative"):
+            cmd += " assoc=1"
+        pos = params.get("position") or {}
+        if pos:
+            if "x" in pos:
+                cmd += " x=" + _fmt(float(pos["x"]))
+            if "y" in pos:
+                cmd += " y=" + _fmt(float(pos["y"]))
+            if "z" in pos:
+                cmd += " z=" + _fmt(float(pos["z"]))
+        return cmd
+    if method == "nx_read_sketch":
+        return "nx_read_sketch " + str(params.get("sketch_name", ""))
+    if method == "nx_set_dimension_value":
+        return "nx_set_dimension_value %s %s" % (
+            _fmt(float(params["target_size"])),
+            _fmt(float(params["new_value"])),
+        )
     return None  # unsupported by the phase-1 Loader
 
 

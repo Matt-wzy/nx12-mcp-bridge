@@ -45,3 +45,6 @@ Thumbs.db
 
 # local runtime workspace
 NX_MCP_WORKSPACE/
+
+# WorkBuddy app-local folder (skill/config, never commit)
+.workbuddy/

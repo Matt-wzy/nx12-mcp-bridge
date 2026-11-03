@@ -33,6 +33,7 @@
 //   nx_fit_view
 //   nx_export_step <step-path>
 //   nx_build_plate_test           (single-command acceptance part)
+//   nx_create_wave_link <src_master> <target> [body_index] [assoc=1] [x=..] [y=..] [z=..]   (WAVE 链接：源件为装配根，目标件作下游组件，固定时间戳记/提取几何，可选摆放偏移)
 //   create_block <w> <h> <d>      (kept for backward compatibility)
 //
 // Responses are one line of JSON: {"ok":true,...} or {"ok":false,"error":"..."}.
@@ -348,6 +349,8 @@ public static class NX_MCP_Loader
                 return CreateRadiusDimension(parts);
             case "nx_delete_annotation":
                 return DeleteAnnotation(parts);
+            case "nx_set_dimension_value":
+                return SetDimensionValue(parts);
             case "nx_export_pdf":
                 return ExportPdf(parts);
             case "nx_measure_distance":
@@ -389,12 +392,16 @@ public static class NX_MCP_Loader
                 return ListEdges(parts);
             case "nx_list_faces":
                 return ListFaces(parts);
+            case "nx_read_sketch":
+                return ReadSketch(parts);
             case "nx_undo":
                 return Undo();
             case "nx_build_plate_test":
                 return BuildPlateTest();
             case "create_block":
                 return CreateBlock(parts);
+            case "nx_create_wave_link":
+                return CreateWaveLink(parts);
             default:
                 return ErrJson("unknown command: " + cmd);
         }
@@ -867,6 +874,16 @@ public static class NX_MCP_Loader
             }
             try { dim.SetName(dimName); } catch { }
 
+            // Force 2-decimal NOMINAL display so mid-tolerance values (99.96, 80.05)
+            // are not rounded to 100 / 80 by NX's default 0-decimal precision.
+            // NX 12 exposes these directly on Dimension (no DimensionStyle API yet).
+            try
+            {
+                dim.NominalDecimalPlaces = 2;
+                dim.MetricNominalDecimalPlaces = 2;
+            }
+            catch (Exception ep) { Log("precision warn: " + ep.Message); }
+
             // Apply bilateral (two-line) tolerance. Best-effort: if the
             // dimension type does not support linear tolerance we skip it.
             try
@@ -879,6 +896,15 @@ public static class NX_MCP_Loader
                 ltObj.SetTolerance(lt);
             }
             catch (Exception et) { Log("tolerance warn: " + et.Message); }
+
+            // Tolerance decimals must be set AFTER the bilateral tolerance is
+            // applied, otherwise the LinearTolerance assignment resets them to 0.
+            try
+            {
+                dim.ToleranceDecimalPlaces = 1;
+                dim.MetricToleranceDecimalPlaces = 1;
+            }
+            catch (Exception ep) { Log("tol precision warn: " + ep.Message); }
 
             try { ForceUpdateSheet(sheet); } catch { }
 
@@ -1042,6 +1068,16 @@ public static class NX_MCP_Loader
                 _part.Dimensions.CreateDiameterDimension(ddd, new Point3d(posx, posy, 0.0));
             try { dim.SetName(dimName); } catch { }
 
+            // Force 2-decimal NOMINAL display so mid-tolerance values (99.96, 80.05)
+            // are not rounded to 100 / 80 by NX's default 0-decimal precision.
+            // NX 12 exposes these directly on Dimension (no DimensionStyle API yet).
+            try
+            {
+                dim.NominalDecimalPlaces = 2;
+                dim.MetricNominalDecimalPlaces = 2;
+            }
+            catch (Exception ep) { Log("precision warn: " + ep.Message); }
+
             try
             {
                 NXOpen.Annotations.ILinearTolerance ltObj = (NXOpen.Annotations.ILinearTolerance)dim;
@@ -1052,6 +1088,15 @@ public static class NX_MCP_Loader
                 ltObj.SetTolerance(lt);
             }
             catch (Exception et) { Log("diameter tolerance warn: " + et.Message); }
+
+            // Tolerance decimals must be set AFTER the bilateral tolerance is
+            // applied, otherwise the LinearTolerance assignment resets them to 0.
+            try
+            {
+                dim.ToleranceDecimalPlaces = 1;
+                dim.MetricToleranceDecimalPlaces = 1;
+            }
+            catch (Exception ep) { Log("tol precision warn: " + ep.Message); }
 
             try { ForceUpdateSheet(sheet); } catch { }
 
@@ -1734,6 +1779,103 @@ public static class NX_MCP_Loader
         }
     }
 
+    // nx_set_dimension_value <target_size> <new_value>
+    // Find the associative dimension whose ComputedSize is closest to
+    // <target_size>, then force its displayed value to <new_value> so the
+    // drawing shows a mid-tolerance (中差) nominal. NX 12's Dimension API has
+    // no public Value/BreakAssociativity, so we probe via reflection and apply
+    // whatever override mechanism the loaded assembly exposes.
+    private static string SetDimensionValue(string[] parts)
+    {
+        if (parts.Length < 3) return ErrJson("usage: nx_set_dimension_value <target_size> <new_value>");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part");
+            double target = D(parts[1]);
+            double nv = D(parts[2]);
+            var dims = new List<NXOpen.Annotations.Dimension>();
+            try { foreach (NXOpen.Annotations.Dimension d in _part.Dimensions.ToArray()) dims.Add(d); } catch { }
+            if (dims.Count == 0) return ErrJson("no dimensions in part");
+
+            NXOpen.Annotations.Dimension best = null;
+            double bestErr = 1e9;
+            foreach (var d in dims)
+            {
+                double cs = 0; try { cs = d.ComputedSize; } catch { continue; }
+                double err = Math.Abs(cs - target);
+                if (err < bestErr) { bestErr = err; best = d; }
+            }
+            if (best == null) return ErrJson("no dimension near " + F(target));
+
+            var t = best.GetType();
+            var sb = new System.Text.StringBuilder();
+            // 1) try to detach associativity (any of these names)
+            foreach (string mn in new[] { "BreakAssociativity", "Disassociate", "RemoveAllAssociativity", "MakeNonAssociative" })
+            {
+                var m = t.GetMethod(mn);
+                if (m != null) { try { m.Invoke(best, null); sb.Append("broke(" + mn + ");"); } catch (Exception ex) { sb.Append("breakErr(" + mn + "):" + ex.Message + ";"); } break; }
+            }
+            // 2) try to set the displayed value
+            bool setOk = false;
+            var vp = t.GetProperty("Value");
+            if (vp != null && vp.CanWrite) { try { vp.SetValue(best, nv, null); sb.Append("setValueProp;"); setOk = true; } catch (Exception ex) { sb.Append("setValuePropErr:" + ex.Message + ";"); } }
+            if (!setOk)
+            {
+                var ms = t.GetMethod("SetValue", new System.Type[] { typeof(double) });
+                if (ms != null) { try { ms.Invoke(best, new object[] { nv }); sb.Append("setValueMeth;"); setOk = true; } catch (Exception ex) { sb.Append("setValueMethErr:" + ex.Message + ";"); } }
+            }
+            if (!setOk)
+            {
+                // NX 12 Dimension has no public Value setter; the only supported
+                // way to pin a displayed value is through the DimensionBuilder.
+                // Open the builder on the dimension, set its Value, commit.
+                try
+                {
+                    var mgrType = _part.Annotations.GetType();
+                    var bld = mgrType.GetMethod("CreateDimensionBuilder");
+                    if (bld != null)
+                    {
+                        object builder = bld.Invoke(_part.Annotations, new object[] { best });
+                        var bt = builder.GetType();
+                        bool bset = false;
+                        var bvp = bt.GetProperty("Value");
+                        if (bvp != null && bvp.CanWrite) { try { bvp.SetValue(builder, nv, null); bset = true; sb.Append("builderValue;"); } catch (Exception ex) { sb.Append("bValErr:" + ex.Message + ";"); } }
+                        if (!bset)
+                        {
+                            var bvm = bt.GetMethod("SetValue", new System.Type[] { typeof(double) });
+                            if (bvm != null) { try { bvm.Invoke(builder, new object[] { nv }); bset = true; sb.Append("builderSetValue;"); } catch (Exception ex) { sb.Append("bSetErr:" + ex.Message + ";"); } }
+                        }
+                        var commit = bt.GetMethod("Commit");
+                        if (commit != null) { try { commit.Invoke(builder, null); setOk = true; } catch (Exception ex) { sb.Append("commitErr:" + ex.Message + ";"); } }
+                        var destroy = bt.GetMethod("Destroy");
+                        if (destroy != null) { try { destroy.Invoke(builder, null); } catch { } }
+                    }
+                    else sb.Append("noCreateDimBuilder;");
+                }
+                catch (Exception ex) { sb.Append("builderErr:" + ex.Message + ";"); }
+            }
+            if (!setOk)
+            {
+                // last resort: report candidate members to guide a follow-up fix
+                sb.Append("NO_OVERRIDE; candidates: ");
+                foreach (var p in t.GetProperties()) if (p.Name.ToLower().Contains("value") || p.Name.ToLower().Contains("assoc")) sb.Append(p.Name + "(" + (p.CanWrite ? "w" : "r") + ") ");
+                foreach (var m in t.GetMethods()) if (m.Name.ToLower().Contains("value") || m.Name.ToLower().Contains("assoc") || m.Name.ToLower().Contains("break")) sb.Append(m.Name + "() ");
+            }
+
+            foreach (NXOpen.Drawings.DrawingSheet sh in _part.DrawingSheets.ToArray())
+            {
+                try { ForceUpdateSheet(sh); } catch { }
+            }
+            string jid = ""; try { jid = best.JournalIdentifier; } catch { }
+            return OkJson("dimension", jid, "target=" + F(target) + " set=" + F(nv) + " " + sb.ToString());
+        }
+        catch (Exception e)
+        {
+            return ErrJson("set_dimension_value failed: " + e.Message);
+        }
+    }
+
     // nx_list_annotations
     // Read back the non-dimension annotations of a drawing, so an agent can
     // understand an existing 2D process drawing beyond just sizes:
@@ -2027,6 +2169,120 @@ public static class NX_MCP_Loader
         var sk = GetSketch(parts[1]);
         try { sk.Deactivate(Sketch.ViewReorient.True, Sketch.UpdateLevel.Model); } catch { }
         return OkJson("finished " + parts[1]);
+    }
+
+    // Read a (possibly pre-existing, externally-authored) sketch and dump its
+    // 2D geometry in sketch-local coordinates so an agent can faithfully
+    // re-create the profile in another part. X axis = u, Y axis = w of the
+    // sketch's own orientation; conversion uses Origin + Orientation so it
+    // works regardless of which plane the sketch lives on.
+    private static string ReadSketch(string[] parts)
+    {
+        if (parts.Length < 2) return ErrJson("usage: nx_read_sketch <sketch_name>");
+        if (_part == null) return ErrJson("no active part");
+        string token = parts[1];
+        Sketch sk = null;
+        foreach (Sketch s in _part.Sketches)
+        {
+            if (s.Name == token || s.Name.EndsWith(token) || token.EndsWith(s.Name)
+                || s.Name.Contains(token) || token.Contains(s.Name))
+            { sk = s; break; }
+        }
+        if (sk == null) return ErrJson("sketch not found: " + token);
+
+        Point3d origin = sk.Origin;
+        Matrix3x3 om = sk.Orientation.Element;
+        Vector3d xAxis = new Vector3d(om.Xx, om.Xy, om.Xz);
+        Vector3d yAxis = new Vector3d(om.Yx, om.Yy, om.Yz);
+        Vector3d zAxis = new Vector3d(om.Zx, om.Zy, om.Zz);
+        System.Func<Point3d, double> U = (p) => (p.X - origin.X) * xAxis.X + (p.Y - origin.Y) * xAxis.Y + (p.Z - origin.Z) * xAxis.Z;
+        System.Func<Point3d, double> W = (p) => (p.X - origin.X) * yAxis.X + (p.Y - origin.Y) * yAxis.Y + (p.Z - origin.Z) * yAxis.Z;
+
+        // Point on an arc/ellipse given its own CSYS matrix, center, radius, angle.
+        System.Func<NXOpen.NXMatrix, Point3d, double, double, Point3d> OnCurve = (mat, ctr, r, ang) =>
+        {
+            Matrix3x3 eM = mat.Element;
+            Vector3d ax = new Vector3d(eM.Xx, eM.Xy, eM.Xz);
+            Vector3d ay = new Vector3d(eM.Yx, eM.Yy, eM.Yz);
+            double ca = Math.Cos(ang), sa = Math.Sin(ang);
+            return new Point3d(
+                ctr.X + r * (ca * ax.X + sa * ay.X),
+                ctr.Y + r * (ca * ax.Y + sa * ay.Y),
+                ctr.Z + r * (ca * ax.Z + sa * ay.Z));
+        };
+
+        string plane = "XY";
+        if (IsAxis(xAxis, 1, 0, 0) && IsAxis(yAxis, 0, 0, 1)) plane = "XZ";
+        else if (IsAxis(xAxis, 0, 1, 0) && IsAxis(yAxis, 0, 0, 1)) plane = "YZ";
+        else if (IsAxis(xAxis, 1, 0, 0) && IsAxis(yAxis, 0, 1, 0)) plane = "XY";
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append("{\"ok\":true,\"sketch\":\"").Append(Esc(sk.Name)).Append("\"");
+        sb.Append(",\"plane\":\"").Append(plane).Append("\"");
+        sb.Append(",\"origin\":[").Append(F(origin.X)).Append(",").Append(F(origin.Y)).Append(",").Append(F(origin.Z)).Append("]");
+        sb.Append(",\"xaxis\":[").Append(F(xAxis.X)).Append(",").Append(F(xAxis.Y)).Append(",").Append(F(xAxis.Z)).Append("]");
+        sb.Append(",\"yaxis\":[").Append(F(yAxis.X)).Append(",").Append(F(yAxis.Y)).Append(",").Append(F(yAxis.Z)).Append("]");
+        sb.Append(",\"curves\":[");
+        bool first = true;
+        try
+        {
+            foreach (object o in sk.GetAllGeometry())
+            {
+                NXOpen.Curve c = o as NXOpen.Curve;
+                if (c == null) continue;
+                if (!first) sb.Append(",");
+                first = false;
+                Line ln = c as Line;
+                if (ln != null)
+                {
+                    sb.Append("{\"type\":\"line\",\"a\":[").Append(F(U(ln.StartPoint))).Append(",").Append(F(W(ln.StartPoint))).Append("]");
+                    sb.Append(",\"b\":[").Append(F(U(ln.EndPoint))).Append(",").Append(F(W(ln.EndPoint))).Append("]}");
+                    continue;
+                }
+                Arc arc = c as Arc;
+                if (arc != null)
+                {
+                    double cx = U(arc.CenterPoint), cy = W(arc.CenterPoint);
+                    Point3d sp = OnCurve(arc.Matrix, arc.CenterPoint, arc.Radius, arc.StartAngle);
+                    Point3d ep = OnCurve(arc.Matrix, arc.CenterPoint, arc.Radius, arc.EndAngle);
+                    double a1 = Math.Atan2(W(sp) - cy, U(sp) - cx) * 180.0 / Math.PI;
+                    double a2 = Math.Atan2(W(ep) - cy, U(ep) - cx) * 180.0 / Math.PI;
+                    sb.Append("{\"type\":\"arc\",\"c\":[").Append(F(cx)).Append(",").Append(F(cy)).Append("],\"r\":").Append(F(arc.Radius));
+                    sb.Append(",\"a1\":").Append(F(a1)).Append(",\"a2\":").Append(F(a2)).Append("}");
+                    continue;
+                }
+                Ellipse el = c as Ellipse;
+                if (el != null)
+                {
+                    double cx = U(el.CenterPoint), cy = W(el.CenterPoint);
+                    bool isCircle = Math.Abs(el.MajorRadius - el.MinorRadius) < 1e-6;
+                    double span = Math.Abs(el.EndAngle - el.StartAngle);
+                    if (isCircle && span >= 2.0 * Math.PI - 1e-3)
+                    {
+                        sb.Append("{\"type\":\"circle\",\"c\":[").Append(F(cx)).Append(",").Append(F(cy)).Append("],\"d\":").Append(F(2.0 * el.MajorRadius)).Append("}");
+                    }
+                    else
+                    {
+                        Point3d sp = OnCurve(el.Matrix, el.CenterPoint, el.MajorRadius, el.StartAngle);
+                        Point3d ep = OnCurve(el.Matrix, el.CenterPoint, el.MajorRadius, el.EndAngle);
+                        double a1 = Math.Atan2(W(sp) - cy, U(sp) - cx) * 180.0 / Math.PI;
+                        double a2 = Math.Atan2(W(ep) - cy, U(ep) - cx) * 180.0 / Math.PI;
+                        sb.Append("{\"type\":\"arc\",\"c\":[").Append(F(cx)).Append(",").Append(F(cy)).Append("],\"r\":").Append(F(el.MajorRadius));
+                        sb.Append(",\"a1\":").Append(F(a1)).Append(",\"a2\":").Append(F(a2)).Append("}");
+                    }
+                    continue;
+                }
+                sb.Append("{\"type\":\"unknown\"}");
+            }
+        }
+        catch (Exception e) { sb.Append("{\"type\":\"read_error\",\"msg\":\"").Append(Esc(e.Message)).Append("\"}"); }
+        sb.Append("]}");
+        return sb.ToString();
+    }
+
+    private static bool IsAxis(Vector3d v, double x, double y, double z)
+    {
+        return Math.Abs(v.X - x) < 0.01 && Math.Abs(v.Y - y) < 0.01 && Math.Abs(v.Z - z) < 0.01;
     }
 
     private static string Extrude(string[] parts)
@@ -3010,11 +3266,20 @@ public static class NX_MCP_Loader
         return sk;
     }
 
+    // Resolves a body by its MCP id (from _bodies) or falls back to the first
+    // solid body in the work part. This lets edge_blend/chamfer/hole work on
+    // parts that were opened (not created) by the loader, where _bodies is empty.
     private static Body GetBody(string id)
     {
-        Body b;
-        if (!_bodies.TryGetValue(id, out b)) throw new Exception("unknown body_id: " + id);
-        return b;
+        if (!string.IsNullOrEmpty(id))
+        {
+            Body b;
+            if (_bodies.TryGetValue(id, out b)) return b;
+        }
+        Body[] all = _part.Bodies.ToArray();
+        foreach (Body b in all) if (b.IsSolidBody) return b;
+        if (all.Length > 0) return all[0];
+        throw new Exception("no body in work part");
     }
 
     private static double D(string s)
@@ -3251,6 +3516,312 @@ public static class NX_MCP_Loader
             }
         }
         catch { }
+    }
+
+    // ------------------------------------------------------------------
+    // WAVE 几何链接器：从上游客体源部件把实体链入当前工作部件（目标件）。
+    // 链接类型 = 固定时间戳记（Timestamp），即抓取一份"冻结时刻"的快照，
+    // 不再随主模型实时更新——用于"主模型 → 各工序文件"的自上而下设计。
+    //   用法: nx_create_wave_link <source_part_path> [body_index]
+    // ------------------------------------------------------------------
+    private static string CreateWaveLink(string[] parts)
+    {
+        // 用法: nx_create_wave_link <源主模型> <目标工序件> [body_index] [assoc=1] [x=..] [y=..] [z=..]
+        // 源件成为装配根；目标件作为源件的下游组件被链入（NX WAVE 要求"下游"结构）。
+        // x=/y=/z= 为链入几何的摆放偏移（mm），用于"不同位置链出不同工序件"。
+        if (parts.Length < 3) return ErrJson("usage: nx_create_wave_link <source_master> <target_part> [body_index] [assoc=1] [x=0] [y=0] [z=0]");
+        if (_session == null) _session = Session.GetSession();
+
+        string srcPath = parts[1];
+        string tgtPath = parts[2];
+        if (!File.Exists(srcPath)) return ErrJson("source part not found: " + srcPath);
+        if (string.Equals(NormPath(srcPath), NormPath(tgtPath), StringComparison.OrdinalIgnoreCase))
+            return ErrJson("source and target are the same file");
+
+        // 参数解析（token 式，向后兼容旧的位置式写法）：
+        //   [body_index]            纯数字（仅第 4 个 token 位置生效）
+        //   [assoc=1]               关联链接（默认 0 = 固定时间戳记/提取几何）
+        //   [x=10] [y=5] [z=-3]     链入几何的摆放偏移（对链接体施加变换）
+        int bodyIdx = 0;
+        bool assoc = false;
+        double placeX = 0.0, placeY = 0.0, placeZ = 0.0;
+        for (int i = 3; i < parts.Length; i++)
+        {
+            string t = parts[i];
+            if (t.StartsWith("assoc=", StringComparison.OrdinalIgnoreCase))
+                assoc = (t.Substring(6) == "1");
+            else if (t.StartsWith("x=", StringComparison.OrdinalIgnoreCase))
+                placeX = D(t.Substring(2));
+            else if (t.StartsWith("y=", StringComparison.OrdinalIgnoreCase))
+                placeY = D(t.Substring(2));
+            else if (t.StartsWith("z=", StringComparison.OrdinalIgnoreCase))
+                placeZ = D(t.Substring(2));
+            else if (i == 3 || (i == 4 && t == "1" && !assoc))
+            {
+                // i==3: 旧的 [body_index] 位置；i==4 的裸 "1": 旧的 [assoc=1] 位置
+                if (!(i == 4 && t == "1")) { try { bodyIdx = int.Parse(t, CultureInfo.InvariantCulture); } catch { bodyIdx = 0; } }
+                else assoc = true;
+            }
+        }
+        bool extractAs = !assoc;
+        bool hasPlacement = (placeX != 0.0 || placeY != 0.0 || placeZ != 0.0);
+
+        try
+        {
+            // 1) 打开源件（主模型），作为装配根
+            NXOpen.Part sourcePart = null;
+            string want = NormPath(srcPath);
+            foreach (NXOpen.BasePart bp in _session.Parts.ToArray())
+            {
+                string fp = "";
+                try { fp = bp.FullPath; } catch { }
+                if (string.IsNullOrEmpty(fp)) continue;
+                string have = NormPath(fp);
+                if (string.Equals(have, want, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(Path.GetFileName(have), Path.GetFileName(want), StringComparison.OrdinalIgnoreCase))
+                { sourcePart = bp as NXOpen.Part; break; }
+            }
+            if (sourcePart == null)
+            {
+                NXOpen.PartLoadStatus st = null;
+                try { sourcePart = _session.Parts.OpenBaseDisplay(srcPath, out st) as NXOpen.Part; }
+                catch (Exception e) { Log("wave link open source warn: " + e.Message); }
+                finally { if (st != null) { try { st.Dispose(); } catch { } } }
+            }
+            if (sourcePart == null) return ErrJson("could not load source part: " + srcPath);
+
+            // 2) 选源件要链接的实体（默认第一个实体）
+            Body[] sbodies = sourcePart.Bodies.ToArray();
+            if (sbodies.Length == 0) return ErrJson("source part has no bodies to link");
+            Body sourceBody = null;
+            if (bodyIdx >= 1 && bodyIdx <= sbodies.Length) sourceBody = sbodies[bodyIdx - 1];
+            if (sourceBody == null)
+            {
+                foreach (Body b in sbodies) if (b.IsSolidBody) { sourceBody = b; break; }
+                if (sourceBody == null) sourceBody = sbodies[0];
+            }
+
+            // 3) 显示先切到源件（装配根），保证后续 AddComponent 语义正确，
+            //    也让"关闭会话中的旧目标件"安全执行
+            NXOpen.PartLoadStatus st2 = null;
+            try { _session.Parts.SetDisplay(sourcePart, false, false, out st2); }
+            catch (Exception e) { Log("wave link setdisplay warn: " + e.Message); }
+            finally { if (st2 != null) { try { st2.Dispose(); } catch { } } }
+
+            // 3.5) ⚠️ 源装配里若已挂同名子组件（上次执行的残留——组件引用随
+            //      源件保存而永久存在），目标件会以组件身份在会话里，
+            //      NewDisplay 对它报"文件已存在"。先卸载这些实例。
+            //      （UF_ASSEM_ask_component_data 的 csys 数组必须给 9 元素。）
+            NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+            try
+            {
+                NXOpen.Assemblies.Component[] kids =
+                    sourcePart.ComponentAssembly.RootComponent.GetChildren();
+                Log("wave link child-enum: " + ((kids == null) ? -1 : kids.Length) + " children under root");
+                string wantLeaf = Path.GetFileName(tgtPath);
+                foreach (NXOpen.Assemblies.Component c in kids)
+                {
+                    string partName = "", refset = "", inst = "";
+                    double[] cOrigin = new double[3];
+                    double[] cCsys = new double[9];   // 3x3 矩阵按行展开，必须 9 元素
+                    double[,] cXform = new double[4, 4];
+                    try
+                    {
+                        uf.Assem.AskComponentData(c.Tag, out partName, out refset,
+                                                  out inst, cOrigin, cCsys, cXform);
+                    }
+                    catch (Exception ae)
+                    {
+                        // 坏组件（引用的子文件不存在等）常在这里抛——退回 DisplayName 匹配
+                        Log("wave link ask-comp-data warn: " + c.DisplayName + " -> " + ae.Message);
+                        partName = "";
+                    }
+                    bool same = false;
+                    if (!string.IsNullOrEmpty(partName))
+                        same = string.Equals(NormPath(partName), NormPath(tgtPath), StringComparison.OrdinalIgnoreCase)
+                            || string.Equals(Path.GetFileName(partName), wantLeaf, StringComparison.OrdinalIgnoreCase);
+                    if (!same)
+                    {
+                        // DisplayName 形如 "工序_place_A"，或含子件名——兜底比对
+                        string dn = "";
+                        try { dn = c.DisplayName ?? ""; } catch { }
+                        same = (!string.IsNullOrEmpty(dn) &&
+                                (dn.IndexOf(wantLeaf, StringComparison.OrdinalIgnoreCase) >= 0
+                                 || wantLeaf.IndexOf(dn, StringComparison.OrdinalIgnoreCase) >= 0 && dn.Length > 3));
+                    }
+                    if (same)
+                    {
+                        try
+                        {
+                            uf.Assem.RemoveInstance(c.Tag);
+                            Log("wave link removed stale component instance: " + (partName.Length > 0 ? partName : c.DisplayName));
+                        }
+                        catch (Exception re) { Log("wave link remove-instance warn: " + re.Message); }
+                    }
+                }
+            }
+            catch (Exception ce) { Log("wave link child-enum warn: " + ce.Message); }
+
+            // 3.7) 卸载实例后，会话部件表里可能仍挂着同名幽灵部件
+            //      （引用的子文件不存在，加载主模型时以占位形式注册）——关掉它们。
+            foreach (NXOpen.BasePart bp in _session.Parts.ToArray())
+            {
+                string nm = "";
+                try { nm = bp.Name ?? ""; } catch { }
+                string fp = "";
+                try { fp = bp.FullPath ?? ""; } catch { }
+                string id = string.IsNullOrEmpty(fp) ? nm : fp;
+                if (string.IsNullOrEmpty(id)) continue;
+                if (id.IndexOf(Path.GetFileNameWithoutExtension(tgtPath), StringComparison.OrdinalIgnoreCase) >= 0)
+                {
+                    try
+                    {
+                        bp.Close(NXOpen.BasePart.CloseWholeTree.False,
+                                 NXOpen.BasePart.CloseModified.CloseModified, null);
+                        Log("wave link closed phantom part: " + id);
+                    }
+                    catch (Exception ce2) { Log("wave link close-phantom warn: " + id + " -> " + ce2.Message); }
+                }
+            }
+
+            // 4) 用 UF_ASSEM_create_component_part 直接创建子部件文件并挂为组件。
+            //    ⚠️ 不用 NewDisplay：会话部件表里只要登记过同名部件（哪怕只是
+            //    组件引用/上次残留），NewDisplay 就报"文件已存在"；
+            //    CreateComponentPart 立即在磁盘上建子文件，无此问题。
+            if (File.Exists(tgtPath)) { try { File.Delete(tgtPath); } catch (Exception de) { Log("wave link delete warn: " + de.Message); } }
+            double[] cOrigin2 = { 0.0, 0.0, 0.0 };
+            double[] cCsys2 = { 1.0, 0.0, 0.0, 0.0, 1.0, 0.0 };  // x 方向 + y 方向（6 元素）
+            NXOpen.Tag compTag;
+            // units：UF_PART_METRIC=1（uf_part_types.h:130；ENGLISH=2）。
+            // 传错会造成"根部件与工作部件单位不一致"——实测踩坑。
+            uf.Assem.CreateComponentPart(
+                sourcePart.Tag, tgtPath, "", "", 1, 0,
+                cOrigin2, cCsys2, 0, null, out compTag);
+            Log("wave link component part created: comp=" + compTag + " path=" + tgtPath);
+            try { _session.ApplicationSwitchImmediate("UG_APP_MODELING"); } catch { }
+
+            // 5) 找到子部件并设为工作部件（下游组件）
+            NXOpen.Part targetPart = null;
+            NXOpen.NXObject compObj = (NXOpen.NXObject)NXOpen.Utilities.NXObjectManager.Get(compTag);
+            NXOpen.Assemblies.Component comp = compObj as NXOpen.Assemblies.Component;
+            if (comp != null)
+            {
+                try { targetPart = comp.Prototype as NXOpen.Part; } catch { }
+            }
+            if (targetPart == null)
+            {
+                // 兜底：按路径在会话部件表里找
+                foreach (NXOpen.BasePart bp in _session.Parts.ToArray())
+                {
+                    string fp = "";
+                    try { fp = bp.FullPath; } catch { }
+                    if (!string.IsNullOrEmpty(fp) &&
+                        string.Equals(NormPath(fp), NormPath(tgtPath), StringComparison.OrdinalIgnoreCase))
+                    { targetPart = bp as NXOpen.Part; break; }
+                }
+            }
+            if (targetPart == null) return ErrJson("created component but could not resolve its part: " + tgtPath);
+            _session.Parts.SetWork(targetPart);
+
+            // 6) 创建 WAVE 链接（固定时间戳记 / 提取几何，可选摆放变换）
+            NXOpen.Tag linkedTag;
+            // UF_WAVE_create_linked_body:
+            //   extractAs=true  -> 固定时间戳记/提取几何（静态、非关联）
+            //   extractAs=false -> 关联链接（随主模型更新）
+            // 注意：NXOpen.UF 的 .NET 包装器签名是
+            //   CreateLinkedBody(Tag body, Tag xform, Tag object_in_part, bool update_at_timestamp, out Tag linked_feature)
+            // 与 C 版 UF_WAVE_create_linked_body(target, source, body, extract_as, out) 的参数顺序不同：
+            //   body             = 要链接的源实体
+            //   xform            = 变换（NULL_TAG 表示原位，不平移）
+            //   object_in_part   = 接收链接实体的目标件
+            //   update_at_timestamp = extract_as：true=固定时间戳记/提取几何（非关联静态），false=实时关联
+            NXOpen.Tag xformTag = NXOpen.Tag.Null;
+            if (hasPlacement)
+            {
+                // ⚠️ 摆放（x=/y=/z=）暂不开放，明确报错优于静默错位。
+                //
+                // 已走的路（代码保留在下方，翻转 PLACEMENT_ENABLED 即可启用）：
+                //   1) UF_WAVE_create_linked_body 的 xform 参数：NXOpen.Xform 与
+                //      UF_SO_create_xform_doubles 两种 xform 都报
+                //      "传递的第二个参数无效"（NX12 .NET 包装器问题）；
+                //   2) 链出后用 UF_MODL_transform_objects 平移链接体：可行，但
+                //      4x4 矩阵的行/列主序两种写法未经几何验证（行主序实测把
+                //      几何畸变了；列主序因共享管道环境反复中断，未完成验证）。
+                //      验证方法：链两件（一个原位、一个 x=100 y=50），用
+                //      nx_list_edges 按边长配对比对 midpoint 差应恰为 (100,50,0)。
+                return ErrJson("placement (x=/y=/z=) is reserved and not enabled yet; use an in-place link (no x=/y=/z=)");
+            }
+            const bool PLACEMENT_ENABLED = false;
+            if (PLACEMENT_ENABLED && hasPlacement && assoc)
+            {
+                // 摆放 + 关联链接：关联模式下平移会破坏链接语义，明确拒绝。
+                return ErrJson("placement (x=/y=/z=) only supports the default fixed-timestamp link; drop assoc=1");
+            }
+            uf.Wave.CreateLinkedBody(sourceBody.Tag, xformTag, targetPart.Tag, extractAs, out linkedTag);
+
+            // 摆放（仅提取模式）：对链接体直接施加平移矩阵。
+            // UF_MODL_transform_objects 的 4x4 行主序矩阵，平移在第 4 列。
+            if (hasPlacement)
+            {
+                NXOpen.NXObject linkObj = (NXOpen.NXObject)NXOpen.Utilities.NXObjectManager.Get(linkedTag);
+                Body linkBody = linkObj as Body;
+                if (linkBody == null)
+                {
+                    try
+                    {
+                        NXOpen.Features.Feature lf = linkObj as NXOpen.Features.Feature;
+                        if (lf != null)
+                        {
+                            NXOpen.NXObject[] ents = lf.GetEntities();
+                            foreach (NXOpen.NXObject e in ents)
+                            {
+                                Body b = e as Body;
+                                if (b != null && b.IsSolidBody) { linkBody = b; break; }
+                            }
+                        }
+                    }
+                    catch { }
+                }
+                if (linkBody != null)
+                {
+                    // ⚠️ UF 矩阵为【列主序】4x4：平移分量在最后一行。
+                    //    （行主序写法会把平移误当旋转轴，几何被畸变——实测踩坑）
+                    double[] mx = {
+                        1.0, 0.0, 0.0, 0.0,
+                        0.0, 1.0, 0.0, 0.0,
+                        0.0, 0.0, 1.0, 0.0,
+                        placeX, placeY, placeZ, 1.0 };
+                    uf.Modl.TransformEntities(1, new NXOpen.Tag[] { linkBody.Tag }, mx);
+                    Log("wave link placement applied: " + F(placeX) + "," + F(placeY) + "," + F(placeZ));
+                }
+            }
+
+            NXOpen.NXObject obj = (NXOpen.NXObject)NXOpen.Utilities.NXObjectManager.Get(linkedTag);
+            Body linked = obj as Body;
+
+            // 7) 登记链接实体，并把工作部件状态切到目标件
+            _bodyCounter++;
+            string newId = "BODY_" + _bodyCounter;
+            if (linked != null) _bodies[newId] = linked;
+            _part = targetPart;
+            _partPath = targetPart.FullPath;
+            RegisterExistingBodies(targetPart);
+
+            string name = (linked != null) ? linked.Name : "(unknown)";
+            string placeInfo = hasPlacement
+                ? " placement=" + F(placeX) + "," + F(placeY) + "," + F(placeZ)
+                : "";
+            return OkJson("wave link",
+                "body=" + newId + " tag=" + linkedTag.ToString() + " name=" + name +
+                " source=" + Path.GetFileName(srcPath) + " target=" + Path.GetFileName(tgtPath) +
+                " type=" + (assoc ? "associative" : "timestamp(extract)") + placeInfo,
+                "created");
+        }
+        catch (Exception e)
+        {
+            Log("wave link error: " + e.ToString());
+            return ErrJson("wave link failed: " + e.Message);
+        }
     }
 
     private static string OpenPart(string[] parts)
