@@ -84,6 +84,9 @@ CERTIFIED_TOOL_NAMES = {
     "nx_create_radius_dimension",
     "nx_delete_annotation",
     "nx_export_pdf",
+    # DXF/DWG：NX 内 Commit() 从不 spawn translator（实测），由 Python 侧
+    # 进程外官方 translator 实现（loader_bridge._export_dwg_external）
+    "nx_export_dwg",
     "nx_measure_distance",
     # 质量属性查询（体积/表面积/重心/质量）——工艺材料定额/毛坯选用常用
     "nx_mass_properties",
@@ -102,16 +105,12 @@ CERTIFIED_TOOL_NAMES = {
     # Likely cause: NXOpen.Diagramming is NX's *diagramming* (schematic) app, not
     # the drafting app, so it does not apply to drafting sheets. Zone sizes were
     # set (no warnings in log) and it still failed, so the route is wrong.
-    # NOTE: nx_create_detail_view is implemented and compiles, but Commit() always
-    # fails with "用于定义边界的点不能相同" (boundary points must differ) no matter how
-    # the two points are supplied. Hidden until the real boundary API is found.
-    # NOTE: nx_export_dwg is implemented in the Loader but NOT exposed: Commit()
-    # succeeds yet no file is written. See memory for everything already tried.
-    # Exposing a tool that silently does nothing is worse than not having it.
-    # NOTE: nx_create_centerline is implemented in the Loader but NOT exposed yet.
-    # AutomaticCenterlineBuilder.Commit() fails with NX status 1175325 even after
-    # adding the drafting view to its Views list. Exposing a broken tool is worse
-    # than not having it, so it stays hidden until the cause is found.
+    # NOTE: nx_create_detail_view is implemented (UFDraw.AddDetailView route) but
+    # NOT exposed yet: the view/boundary/label are created, but the enlarged
+    # geometry does not render, and the pending refPt double[2] fix is unbuilt/
+    # untested (deploy ran out of time 2026-11-04). See 受阻项调研档案
+    # section 4 for the full matrix and the exact next steps. A tool that
+    # silently produces an empty view is worse than no tool.
 }
 
 
@@ -718,6 +717,24 @@ def create_certified_server(
         )
 
     @mcp.tool()
+    async def nx_export_dwg(path: str, sheet_name: str = "") -> ExportResult:
+        """Export the active part's drawing to a DXF or DWG file.
+
+        Runs the official NX DXFDWG translator out-of-process: the in-NX
+        DxfdwgCreator.Commit() silently does nothing in a headless session
+        (verified 2026-11-04). The part is saved to disk first, so the export
+        reflects the current session state. Pass sheet_name to pin the drawing
+        list; omit it to translate everything. Use .dxf or .dwg as the
+        extension - laser/nesting workflows usually want .dxf.
+        """
+        return ExportResult(
+            **await call(
+                "nx_export_dwg",
+                {"path": resolve_path(path), "sheet_name": sheet_name},
+            )
+        )
+
+    @mcp.tool()
     async def nx_create_roughness(
         pos_x: float = 20.0,
         pos_y: float = 20.0,
@@ -831,6 +848,20 @@ def create_certified_server(
                 {"view_id": view_id, "body_id": body_id, "face_index": face_index},
             )
         )
+
+    # nx_create_detail_view: 暂不暴露（局部放大内容不渲染，修复未实测，
+    # 见 受阻项调研档案 第 4 节）。恢复暴露时把下面的函数原样
+    # 挂回 @mcp.tool() 并把 "nx_create_detail_view" 加回 CERTIFIED_TOOL_NAMES。
+    _DETAIL_VIEW_PARAMS = {
+        "parent_view_id": "",
+        "center_x": 0.0,
+        "center_y": 0.0,
+        "radius": 10.0,
+        "pos_x": 0.0,
+        "pos_y": 0.0,
+        "scale": 0.0,
+        "view_name": "",
+    }
 
     @mcp.tool()
     async def nx_create_note(

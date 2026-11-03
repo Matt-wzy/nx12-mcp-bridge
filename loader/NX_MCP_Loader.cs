@@ -1661,10 +1661,31 @@ public static class NX_MCP_Loader
     /// compiled with the legacy csc, which predates C# 7 local functions.
     // nx_create_detail_view <parent_view_id> <x> <y> [radius] [scale] [view_name]
     // Detail (enlarged) view: circular boundary around a point in the parent view.
+    // UF "smart point" from three scalar doubles - UFDraw.AddCircDetailView
+    // rejects plain points ("点必须是一个智能点"); smart points are UF_SO objects.
+    private static Tag CreateSmartPoint(NXOpen.UF.UFSession uf, double x, double y, double z)
+    {
+        Tag sx, sy, sz, pt;
+        NXOpen.UF.UFSo.UpdateOption opt =
+            NXOpen.UF.UFSo.UpdateOption.UpdateWithinModeling;
+        uf.So.CreateScalarDouble(_part.Tag, opt, x, out sx);
+        uf.So.CreateScalarDouble(_part.Tag, opt, y, out sy);
+        uf.So.CreateScalarDouble(_part.Tag, opt, z, out sz);
+        uf.So.CreatePoint3Scalars(_part.Tag, opt, new Tag[] { sx, sy, sz }, out pt);
+        return pt;
+    }
+
+    // nx_create_detail_view <parent_view_id> <cx> <cy> <radius> <px> <py> [scale] [view_name]
+    // Detail (enlarged) view via UFDraw.AddDetailView - the UFUN route is the
+    // one actually designed for programmatic creation. The NXOpen
+    // DetailViewBuilder path creates view/label/boundary but the enlarged
+    // geometry never renders (empty circle; see 受阻项调研档案 section 4).
+    // The user-facing semantics stay "circular-ish": centre + radius are converted
+    // to the rectangle (cx-r, cy-r)..(cx+r, cy+r) in parent-view coordinates.
     private static string CreateDetailView(string[] parts)
     {
-        if (parts.Length < 4)
-            return ErrJson("usage: nx_create_detail_view <parent_view_id> <x> <y> [radius] [scale] [view_name]");
+        if (parts.Length < 7)
+            return ErrJson("usage: nx_create_detail_view <parent_view_id> <cx> <cy> <radius> <px> <py> [scale] [view_name]");
         try
         {
             _session = Session.GetSession();
@@ -1686,41 +1707,67 @@ public static class NX_MCP_Loader
             }
             if (parent == null) parent = views[0];
 
-            double x = D(parts[2]);
-            double y = D(parts[3]);
-            double radius = (parts.Length > 4 && !string.IsNullOrEmpty(parts[4].Trim())) ? D(parts[4]) : 10.0;
-            double scale = (parts.Length > 5 && !string.IsNullOrEmpty(parts[5].Trim())) ? D(parts[5]) : 2.0;
+            double cx = D(parts[2]);
+            double cy = D(parts[3]);
+            double radius = D(parts[4]);
+            if (radius <= 0.0) return ErrJson("radius must be > 0");
+            double px = D(parts[5]);
+            double py = D(parts[6]);
+            double scale = (parts.Length > 7 && !string.IsNullOrEmpty(parts[7].Trim())) ? D(parts[7]) : 0.0;
+            string name = (parts.Length > 8) ? parts[8].Trim() : "";
 
-            NXOpen.Drawings.DetailViewBuilder dvb =
-                _part.DraftingViews.CreateDetailViewBuilder(null);
-            string id = "";
+            int before = 0;
+            try { before = sheet.GetDraftingViews().Length; } catch { }
+
+            NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+            Tag dvTag = Tag.Null;
+            // Rectangular boundary via AddDetailView: xy points are plain 2D
+            // doubles in the PARENT VIEW's coordinates - no smart point needed
+            // (AddCircDetailView demands smart points that are also *visible*
+            // in the member view, i.e. unobstructed - interior points of the
+            // solid fail with "点在成员视图中不可见").
+            double[] xy1 = new double[] { cx - radius, cy - radius };
+            double[] xy2 = new double[] { cx + radius, cy + radius };
+            double[] refPt = new double[] { px, py };
             try
             {
-                // Boundary must be declared circular first; the two points are then
-                // centre + a point on the circle (radius).
-                dvb.Type = NXOpen.Drawings.DetailViewBuilder.Types.Circular;
-                // Pass a REAL model view: with null views NX could not tell the two
-                // points apart and rejected them as identical.
-                NXOpen.View mv = null;
-                try { mv = _part.ModelingViews.WorkView; } catch { }
-                dvb.Parent.View.SetValue(
-                    NXOpen.InferSnapType.SnapType.None,
-                    parent, mv, new Point3d(x, y, 0.0),
-                    parent, mv, new Point3d(x + radius, y, 0.0));
-                // Origin is the placement of the new view; place it offset to the right.
-                // Same 3-arg pattern: SetValue(Point, View, Point3d)
-                dvb.Origin.Placement.SetValue(null, null, new Point3d(x + 80.0, y, 0.0));
-                dvb.Scale.Numerator = scale;
-                dvb.Scale.Denominator = 1.0;
-                dvb.Commit();
+                uf.Draw.AddDetailView(sheet.Tag, parent.Tag, xy1, xy2,
+                    scale > 0.0 ? scale : 1.0, refPt, out dvTag);
             }
-            finally { try { dvb.Destroy(); } catch { } }
+            catch (Exception eu)
+            {
+                return ErrJson("AddDetailView failed: " + eu.Message);
+            }
+            if (dvTag == Tag.Null)
+                return ErrJson("AddDetailView returned a null view tag");
 
+            DraftingView created = null;
+            try
+            {
+                created = NXOpen.Utilities.NXObjectManager.Get(dvTag) as DraftingView;
+            }
+            catch { }
+            if (created == null)
+            {
+                DraftingView[] after = sheet.GetDraftingViews();
+                if (after.Length > before) created = after[after.Length - 1];
+            }
+            if (created == null)
+                return ErrJson("detail view tag could not be resolved to a view");
+
+            if (!string.IsNullOrEmpty(name))
+            {
+                try { created.SetName(name); } catch { }
+            }
             try { ForceUpdateSheet(sheet); } catch { }
+
+            string id = ""; try { id = created.JournalIdentifier; } catch { }
             int count = 0;
             try { count = sheet.GetDraftingViews().Length; } catch { }
             return OkJson("view", id, "detail view created views=" + count
-                + " origin=(" + F(x) + "," + F(y) + ") r=" + F(radius) + " scale=" + F(scale));
+                + " boundary=center(" + F(cx) + "," + F(cy) + ") r=" + F(radius)
+                + " placed=(" + F(px) + "," + F(py) + ")"
+                + (scale > 0.0 ? " scale=" + F(scale) + ":1" : ""));
         }
         catch (Exception e)
         {

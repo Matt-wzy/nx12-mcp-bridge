@@ -89,3 +89,42 @@ def test_centerline_wire_format():
         {"view_id": "0", "body_id": "1", "face_index": 3},
     )
     assert cmd == "nx_create_centerline 0 1 3"
+
+
+def test_export_dwg_is_local_not_pipe():
+    # NX 内 DxfdwgCreator.Commit() 从不 spawn translator（2026-11-04 实测，
+    # 见 受阻项调研档案 第 2 节），nx_export_dwg 由 Python 侧
+    # 进程外 translator 实现，没有线格式。
+    assert _command("nx_export_dwg", {"path": "C:/w/out.dxf"}) is None
+
+
+def test_detail_view_boundary_and_placement():
+    cmd = _command(
+        "nx_create_detail_view",
+        {
+            "parent_view_id": "V_TOP",
+            "center_x": 30.0,
+            "center_y": 30.0,
+            "radius": 12.5,
+            "pos_x": 200.0,
+            "pos_y": 60.0,
+        },
+    )
+    assert cmd == "nx_create_detail_view V_TOP 30 30 12.5 200 60"
+
+
+def test_detail_view_scale_and_name():
+    cmd = _command(
+        "nx_create_detail_view",
+        {
+            "parent_view_id": "0",
+            "center_x": 0.0,
+            "center_y": 0.0,
+            "radius": 10.0,
+            "pos_x": 100.0,
+            "pos_y": 50.0,
+            "scale": 2.0,
+            "view_name": "DETAIL_A",
+        },
+    )
+    assert cmd == "nx_create_detail_view 0 0 0 10 100 50 2 DETAIL_A"

@@ -34,7 +34,7 @@ AI（自然语言）
 - 修复 `ShellBuilder` 相关 CS1061（改用 `ReplaceRules`）
 - 迁移 `Update.AddToDeleteList` → `AddObjectsToDeleteList`（NX12.0.0 弃用）
 
-### 新增能力（共 55 个 MCP 工具）
+### 新增能力（共 56 个 MCP 工具）
 
 | 类别 | 命令 |
 |---|---|
@@ -45,6 +45,7 @@ AI（自然语言）
 | 表面粗糙度 | `nx_create_roughness`（写入符号 a1 位） |
 | 质量属性 | `nx_mass_properties`（体积/表面积/重心/质量，密度可传，工艺材料定额用） |
 | 对称中心线 | `nx_create_centerline`（轴类零件轴线，SymmetricalCenterlineBuilder） |
+| DXF/DWG 导出 | `nx_export_dwg`（进程外官方 translator，激光切割/套料用 .dxf） |
 | 标题栏 | `nx_create_title_block` |
 | 部件属性 | `nx_set_attribute` / `nx_list_attributes`（**标题栏内容来源**） |
 | 读回校验 | `nx_list_dimensions`（值+公差）、`nx_list_annotations`（NOTE/GDT/ROUGH） |

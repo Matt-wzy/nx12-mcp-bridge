@@ -20,6 +20,8 @@ import asyncio
 import ctypes
 import ctypes.wintypes as wt
 import json
+import os
+import subprocess
 import time
 from typing import Any
 
@@ -146,11 +148,22 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
             str(params.get("body_id", "")),
             str(params.get("face_index", 0)),
         )
-    if method == "nx_export_dwg":
-        cmd = "nx_export_dwg " + str(params.get("path", ""))
-        sheet = str(params.get("sheet_name", "") or "")
-        if sheet:
-            cmd += " " + sheet
+    if method == "nx_create_detail_view":
+        # 边界中心/半径按模型坐标；px/py 是新视图在图纸上的放置点（mm）
+        cmd = "nx_create_detail_view %s %s %s %s %s %s" % (
+            str(params.get("parent_view_id", "")),
+            _fmt(params.get("center_x", 0.0)),
+            _fmt(params.get("center_y", 0.0)),
+            _fmt(params.get("radius", 10.0)),
+            _fmt(params.get("pos_x", 0.0)),
+            _fmt(params.get("pos_y", 0.0)),
+        )
+        scale = params.get("scale", 0.0) or 0.0
+        if scale:
+            cmd += " " + _fmt(scale)
+        name = str(params.get("view_name", "") or "")
+        if name:
+            cmd += " " + name
         return cmd
     if method == "nx_create_sheet_border":
         return "nx_create_sheet_border %s" % (
@@ -344,6 +357,157 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
             _fmt(float(params["new_value"])),
         )
     return None  # unsupported by the phase-1 Loader
+
+
+def _find_nx_base_dir() -> str | None:
+    """Locate the NX install root (the one containing DXFDWG\\dxfdwg.exe).
+
+    Order: UGII_BASE_DIR env -> registry (HKLM ...\\Siemens\\NX*) ->
+    default Program Files location. Returns None when no candidate validates.
+    """
+    candidates: list[str] = []
+    env = os.environ.get("UGII_BASE_DIR")
+    if env:
+        candidates.append(env)
+    try:
+        import winreg
+
+        for sub in (r"SOFTWARE\WOW6432Node\Siemens", r"SOFTWARE\Siemens"):
+            try:
+                key = winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, sub)
+            except OSError:
+                continue
+            with key:
+                i = 0
+                while True:
+                    try:
+                        name = winreg.EnumKey(key, i)
+                        i += 1
+                    except OSError:
+                        break
+                    if not name.upper().startswith("NX"):
+                        continue
+                    try:
+                        with winreg.OpenKey(key, name) as nk:
+                            base, _ = winreg.QueryValueEx(nk, "UGII_BASE_DIR")
+                        candidates.append(str(base))
+                    except OSError:
+                        continue
+    except Exception:
+        pass
+    candidates.append(r"C:\Program Files\Siemens\NX 12.0")
+    for cand in candidates:
+        if cand and os.path.isfile(os.path.join(cand, "DXFDWG", "dxfdwg.exe")):
+            return cand
+    return None
+
+
+def _dxfdwg_def_copy(base: str, outdir: str, sheet: str, logfile: str) -> str:
+    """Copy the official dxfdwg.def with LOG_FILE turned on (and the drawing
+    list pinned when a sheet is given), so every translation leaves evidence."""
+    src = os.path.join(base, "DXFDWG", "dxfdwg.def")
+    dst = os.path.join(outdir, "dxfdwg_mcp.def")
+    try:
+        with open(src, "r", errors="replace") as fh:
+            lines = fh.read().splitlines()
+        out = []
+        for ln in lines:
+            low = ln.strip().lower()
+            if low.startswith("log_file"):
+                out.append("LOG_FILE = " + logfile)
+            elif low.startswith("ugi_drawing_names") and sheet:
+                out.append("UGI_DRAWING_NAMES = " + sheet)
+            else:
+                out.append(ln)
+        with open(dst, "w") as fh:
+            fh.write("\r\n".join(out) + "\r\n")
+        return dst
+    except Exception:
+        return src
+
+
+def _export_dwg_external(params: dict[str, Any]) -> dict[str, Any]:
+    """DXF/DWG export via the official translator OUT-OF-PROCESS.
+
+    Why not DxfdwgCreator.Commit() inside NX: in a headless session it returns
+    success yet never spawns dxfdwg.exe - with or without a SettingsFile
+    (verified 2026-11-04, see 受阻项调研档案 section 2). The standalone
+    translator works: it reads the saved .prt directly, so the part is saved
+    over the pipe first and the translator is then run as a plain subprocess.
+    """
+    out = str(params.get("path", "") or "").strip()
+    if not out:
+        raise NXToolError(
+            "NX_LOADER_ERROR", "nx_export_dwg requires an output path", retryable=False)
+    if not (out.lower().endswith(".dxf") or out.lower().endswith(".dwg")):
+        out += ".dxf"
+    mode = "ugtodwg" if out.lower().endswith(".dwg") else "ugtodxf"
+    sheet = str(params.get("sheet_name", "") or "").strip()
+
+    status = _pipe_call("nx_status", timeout=60.0)
+    part = str(status.get("part", "") or "").strip()
+    if not part:
+        raise NXToolError(
+            "NX_LOADER_ERROR",
+            "no active part to export; create or open a part first",
+            retryable=False,
+        )
+    _pipe_call("nx_save_part", timeout=180.0)
+
+    base = _find_nx_base_dir()
+    exe = os.path.join(base, "DXFDWG", "dxfdwg.exe") if base else ""
+    if not base or not os.path.isfile(exe):
+        raise NXToolError(
+            "NX_LOADER_ERROR",
+            "DXFDWG translator not found; set UGII_BASE_DIR to the NX install root",
+            retryable=False,
+        )
+
+    out_abs = os.path.abspath(out)
+    outdir = os.path.dirname(out_abs)
+    os.makedirs(outdir, exist_ok=True)
+    logfile = os.path.join(outdir, "dxfdwg_mcp.log")
+    defcopy = _dxfdwg_def_copy(base, outdir, sheet, logfile)
+    try:
+        os.remove(out_abs)
+    except OSError:
+        pass
+
+    env = dict(os.environ)
+    env["UGII_BASE_DIR"] = base
+    env["PATH"] = os.pathsep.join([
+        os.path.join(base, "NXBIN"),
+        os.path.join(base, "UGII"),
+        os.path.join(base, "DXFDWG"),
+        env.get("PATH", ""),
+    ])
+    try:
+        proc = subprocess.run(
+            [exe, part, "o=" + out_abs, "l=" + logfile, "d=" + defcopy, "m=" + mode],
+            env=env, capture_output=True, text=True, timeout=300,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise NXToolError(
+            "NX_LOADER_ERROR", "dxfdwg translator timed out after 300s", retryable=True,
+        ) from exc
+
+    if os.path.isfile(out_abs) and os.path.getsize(out_abs) > 0:
+        size = os.path.getsize(out_abs)
+        msg = "exported %d bytes (external dxfdwg translator, %s)" % (size, mode)
+        if sheet:
+            msg += " sheet=" + sheet
+        return {"status": "success", "path": out_abs, "message": msg}
+
+    tail = ""
+    if os.path.isfile(logfile):
+        with open(logfile, "r", errors="replace") as fh:
+            tail = " | ".join(fh.read().splitlines()[-8:])
+    detail = (proc.stderr or "").strip()[:300] or tail or "no log written"
+    raise NXToolError(
+        "NX_LOADER_ERROR",
+        "translator produced no file (exit %s): %s" % (proc.returncode, detail),
+        retryable=True,
+    )
 
 
 def _pipe_call(cmd: str, timeout: float = 180.0, pipe: str = PIPE_NAME) -> dict[str, Any]:
@@ -596,6 +760,11 @@ class LoaderBridge:
             return False
 
     async def call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        if method == "nx_export_dwg":
+            # Not a pipe command: the in-NX DxfdwgCreator never spawns the
+            # translator headless, so this runs the official translator locally
+            # (part is saved over the pipe first). See _export_dwg_external.
+            return await asyncio.to_thread(_export_dwg_external, params)
         cmd = _command(method, params)
         if cmd is None:
             raise NXToolError(
