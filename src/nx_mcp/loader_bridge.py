@@ -135,6 +135,17 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
             str(params.get("edge_index_1", params.get("first_edge_index", 0))),
             str(params.get("edge_index_2", params.get("second_edge_index", 0))),
         )
+    if method == "nx_mass_properties":
+        return "nx_mass_properties %s %s" % (
+            _fmt(params.get("density_kg_m3", 7830.0)),
+            _fmt(params.get("accuracy", 0.99)),
+        )
+    if method == "nx_create_centerline":
+        return "nx_create_centerline %s %s %s" % (
+            str(params.get("view_id", "")),
+            str(params.get("body_id", "")),
+            str(params.get("face_index", 0)),
+        )
     if method == "nx_export_dwg":
         cmd = "nx_export_dwg " + str(params.get("path", ""))
         sheet = str(params.get("sheet_name", "") or "")
@@ -545,6 +556,21 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
         return {
             "status": "success",
             "dimension": resp.get("dimension"),
+            "message": msg,
+        }
+    if method == "nx_mass_properties":
+        return {
+            "status": "success",
+            "body_count": int(resp.get("body_count", 0)),
+            "mass_kg": float(resp.get("mass_kg", 0.0)),
+            "volume_mm3": float(resp.get("volume_mm3", 0.0)),
+            "surface_area_mm2": float(resp.get("surface_area_mm2", 0.0)),
+            "density_kg_m3": float(resp.get("density_kg_m3", 0.0)),
+            "center_of_gravity": {
+                "x": float(resp.get("cog_x_mm", 0.0)),
+                "y": float(resp.get("cog_y_mm", 0.0)),
+                "z": float(resp.get("cog_z_mm", 0.0)),
+            },
             "message": msg,
         }
     return {"status": "success", "message": msg}

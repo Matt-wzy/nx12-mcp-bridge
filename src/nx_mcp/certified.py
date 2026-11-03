@@ -13,6 +13,7 @@ from nx_mcp import __version__
 from nx_mcp.contracts import (
     ExportResult,
     ExtrudeResult,
+    MassPropertiesResult,
     NXToolError,
     ObjectListResult,
     ObjectResult,
@@ -84,6 +85,10 @@ CERTIFIED_TOOL_NAMES = {
     "nx_delete_annotation",
     "nx_export_pdf",
     "nx_measure_distance",
+    # 质量属性查询（体积/表面积/重心/质量）——工艺材料定额/毛坯选用常用
+    "nx_mass_properties",
+    # 对称中心线（轴类零件轴线，SymmetricalCenterlineBuilder，管道实测通过）
+    "nx_create_centerline",
     "nx_create_roughness",
     "nx_create_title_block",
     "nx_set_attribute",
@@ -783,6 +788,47 @@ def create_certified_server(
                     "edge_index_1": edge_index_1,
                     "edge_index_2": edge_index_2,
                 },
+            )
+        )
+
+    @mcp.tool()
+    async def nx_mass_properties(
+        density_kg_m3: float = 7830.0,
+        accuracy: float = 0.99,
+    ) -> MassPropertiesResult:
+        """Compute mass properties of all solid bodies in the active part.
+
+        Returns volume (mm^3), surface area (mm^2), centre of gravity (mm) and
+        mass (kg) = volume x density. The default density 7830 kg/m^3 is steel;
+        override for the actual material (e.g. 2700 aluminium, 7190 cast iron,
+        8940 copper, 1150 nylon). Useful for material quoting, blank (毛坯)
+        selection and fixture/hoisting planning.
+        """
+        return MassPropertiesResult(
+            **await call(
+                "nx_mass_properties",
+                {"density_kg_m3": density_kg_m3, "accuracy": accuracy},
+            )
+        )
+
+    @mcp.tool()
+    async def nx_create_centerline(
+        view_id: str = "",
+        body_id: str = "",
+        face_index: int = 0,
+    ) -> OperationResult:
+        """Create a symmetrical centreline (轴线/中心线) for a shaft in a view.
+
+        Select the cylindrical FACE of the shaft (face_index from nx_list_faces);
+        the axis line is drawn across the view - the classic turned-part centre
+        line. view_id follows nx_create_projected_view conventions ("0" = first
+        view of the sheet). This replaced the dead-end AutomaticCenterlineBuilder
+        route; see 受阻项调研档案.
+        """
+        return OperationResult(
+            **await call(
+                "nx_create_centerline",
+                {"view_id": view_id, "body_id": body_id, "face_index": face_index},
             )
         )
 

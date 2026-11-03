@@ -11,6 +11,7 @@ from nx_mcp.runtime import NXToolError, ObjectKind, ObjectRef
 __all__ = [
     "ExportResult",
     "ExtrudeResult",
+    "MassPropertiesResult",
     "NXToolError",
     "ObjectKind",
     "ObjectListResult",
@@ -21,6 +22,7 @@ __all__ = [
     "Point2D",
     "StatusResult",
     "ToolSuccess",
+    "Vector3D",
 ]
 
 
@@ -29,6 +31,29 @@ class Point2D(BaseModel):
 
     x: float = Field(allow_inf_nan=False)
     y: float = Field(allow_inf_nan=False)
+
+
+class Vector3D(BaseModel):
+    """A 3D vector/point in model space (mm)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    x: float = Field(allow_inf_nan=False)
+    y: float = Field(allow_inf_nan=False)
+    z: float = Field(allow_inf_nan=False)
+
+
+class MassPropertiesResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["success"] = "success"
+    body_count: int
+    mass_kg: float
+    volume_mm3: float
+    surface_area_mm2: float
+    density_kg_m3: float
+    center_of_gravity: Vector3D
+    message: str = ""
 
 
 class ToolSuccess(BaseModel):

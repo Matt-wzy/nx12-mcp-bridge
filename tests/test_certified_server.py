@@ -39,8 +39,8 @@ async def test_default_server_lists_only_certified_tools():
         response = await client.list_tools()
 
     assert {tool.name for tool in response.tools} == CERTIFIED_TOOL_NAMES
-    # 2026-11: 50 tools + wave-link/sketch-read/dim-value = 53. If this trips
-    # after adding a tool, update the count (or derive it from the set).
+    # 2026-11: 53 tools + mass-properties = 54. If this trips after adding a
+    # tool, update the count (or derive it from the set).
     assert len(response.tools) == len(CERTIFIED_TOOL_NAMES)
 
 

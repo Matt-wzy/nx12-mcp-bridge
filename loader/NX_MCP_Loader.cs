@@ -32,6 +32,7 @@
 //   nx_linear_pattern <body_id> <X|Y|Z> <count> <spacing> [reverse=0|1]
 //   nx_fit_view
 //   nx_export_step <step-path>
+//   nx_mass_properties [density_kg_m3] [accuracy]   (体积/表面积/重心/质量，工艺常用)
 //   nx_build_plate_test           (single-command acceptance part)
 //   nx_create_wave_link <src_master> <target> [body_index] [assoc=1] [x=..] [y=..] [z=..]   (WAVE 链接：源件为装配根，目标件作下游组件，固定时间戳记/提取几何，可选摆放偏移)
 //   create_block <w> <h> <d>      (kept for backward compatibility)
@@ -355,6 +356,8 @@ public static class NX_MCP_Loader
                 return ExportPdf(parts);
             case "nx_measure_distance":
                 return MeasureDistance(parts);
+            case "nx_mass_properties":
+                return MassProperties(parts);
             case "nx_create_centerline":
                 return CreateCenterline(parts);
             case "nx_create_roughness":
@@ -1290,11 +1293,115 @@ public static class NX_MCP_Loader
         }
     }
 
+    // nx_mass_properties [density_kg_m3] [accuracy]
+    // 3D QUERY - volume / surface area / centre of gravity / mass of every solid
+    // body in the work part. Entry: MeasureManager.NewMassProperties (the NX12
+    // .NET wrapper does NOT expose UF_MODL_ask_mass_properties_3, verified via
+    // reflection over NXOpen.UF.dll).
+    // Mass = measured volume x caller-supplied density (default steel 7830 kg/m^3):
+    // MeasureBodies.Mass follows the NX part density default, which is not what a
+    // process engineer wants when quoting a specific material.
+    // Units pinned to kg / mm / mm^3 through UnitCollection lookups.
+    private static string MassProperties(string[] parts)
+    {
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+
+            double density = 7830.0; // kg/m^3, steel - the everyday process default
+            double accuracy = 0.99;
+            if (parts.Length > 1 && parts[1].Trim().Length > 0)
+            {
+                if (!double.TryParse(parts[1].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out density))
+                    return ErrJson("usage: nx_mass_properties [density_kg_m3] [accuracy]");
+            }
+            if (parts.Length > 2 && parts[2].Trim().Length > 0)
+            {
+                if (!double.TryParse(parts[2].Trim(), NumberStyles.Float, CultureInfo.InvariantCulture, out accuracy))
+                    return ErrJson("usage: nx_mass_properties [density_kg_m3] [accuracy]");
+            }
+            if (density <= 0.0) return ErrJson("density must be > 0 (kg/m^3)");
+            if (accuracy <= 0.0 || accuracy >= 1.0) accuracy = 0.99;
+
+            List<Body> solids = new List<Body>();
+            foreach (Body b in _part.Bodies.ToArray())
+                if (b.IsSolidBody) solids.Add(b);
+            if (solids.Count == 0) return ErrJson("no solid bodies in active part");
+
+            Unit massU = null, lenU = null, volU = null;
+            try { massU = _part.UnitCollection.FindObject("Kilogram"); } catch { }
+            try { lenU = _part.UnitCollection.FindObject("Millimeter"); } catch { }
+            try { volU = _part.UnitCollection.FindObject("CubicMillimeter"); } catch { }
+            if (massU == null || lenU == null || volU == null)
+                return ErrJson("unit lookup failed: mass=" + (massU != null)
+                    + " length=" + (lenU != null) + " volume=" + (volU != null));
+
+            MeasureBodies mp = null;
+            try
+            {
+                mp = _part.MeasureManager.NewMassProperties(
+                    new Unit[] { massU, lenU, volU }, accuracy, solids.ToArray());
+            }
+            catch (Exception e3)
+            {
+                Log("massprops [mass,len,vol] rejected: " + e3.Message);
+                // Some NX builds take only [mass, length]; retry that shape.
+                try
+                {
+                    mp = _part.MeasureManager.NewMassProperties(
+                        new Unit[] { massU, lenU }, accuracy, solids.ToArray());
+                }
+                catch (Exception e2)
+                {
+                    return ErrJson("mass_properties failed: " + e2.Message);
+                }
+            }
+
+            double volume = mp.Volume;   // mm^3
+            double area = mp.Area;       // mm^2
+            Point3d cog = mp.Centroid;   // mm
+            // kg = kg/m^3 * mm^3 * 1e-9  (1 mm^3 = 1e-9 m^3); mass needs round-trip
+            // formatting - the 3-decimal F() would flatten 7.83e-6 to "0".
+            double massKg = volume * density * 1e-9;
+
+            string res = "bodies=" + solids.Count
+                + "  volume=" + F(volume) + " mm^3"
+                + "  area=" + F(area) + " mm^2"
+                + "  mass=" + massKg.ToString("R", CultureInfo.InvariantCulture) + " kg"
+                + "  (density " + F(density) + " kg/m^3)"
+                + "  cog=(" + F(cog.X) + "," + F(cog.Y) + "," + F(cog.Z) + ") mm";
+
+            return "{\"ok\":true"
+                + ",\"body_count\":" + solids.Count
+                + ",\"volume_mm3\":" + volume.ToString("R", CultureInfo.InvariantCulture)
+                + ",\"surface_area_mm2\":" + area.ToString("R", CultureInfo.InvariantCulture)
+                + ",\"mass_kg\":" + massKg.ToString("R", CultureInfo.InvariantCulture)
+                + ",\"density_kg_m3\":" + density.ToString("R", CultureInfo.InvariantCulture)
+                + ",\"cog_x_mm\":" + F(cog.X)
+                + ",\"cog_y_mm\":" + F(cog.Y)
+                + ",\"cog_z_mm\":" + F(cog.Z)
+                + ",\"result\":\"" + Esc(res) + "\"}";
+        }
+        catch (Exception e)
+        {
+            return ErrJson("mass_properties failed: " + e.Message);
+        }
+    }
+
     // nx_create_centerline
     // Auto centreline for cylindrical/conical faces - very common on shaft drawings.
     // Entry: Part.Annotations.Centerlines.CreateAutomaticCenterlineBuilder().
+    // nx_create_centerline <view_id> <body_id> <face_index>
+    // Symmetrical centreline (对称中心线) - the correct "shaft axis" annotation
+    // for turned parts. AutomaticCenterlineBuilder was a dead end: Commit()
+    // failed with NX status 1175325 even with the view added to its list (see
+    // 受阻项调研档案). SymmetricalCenterlineBuilder with Type=FromFace
+    // takes the cylindrical face of the shaft and draws its axis in the view.
     private static string CreateCenterline(string[] parts)
     {
+        if (parts.Length < 4)
+            return ErrJson("usage: nx_create_centerline <view_id> <body_id> <face_index>");
         try
         {
             _session = Session.GetSession();
@@ -1302,51 +1409,81 @@ public static class NX_MCP_Loader
             try { _session.ApplicationSwitchImmediate("UG_APP_DRAFTING"); }
             catch (Exception ea) { Log("app switch warn: " + ea.Message); }
 
+            DrawingSheet sheet;
+            DraftingView view = ResolveViewAnySheet(parts[1].Trim(), out sheet);
+            try { sheet.Open(); } catch { }
+
+            Body body = ResolveBody(parts[2].Trim());
+            Face[] faces = body.GetFaces();
+            int fi = int.Parse(parts[3].Trim(), CultureInfo.InvariantCulture);
+            if (fi < 0 || fi >= faces.Length)
+                return ErrJson("face_index out of range: " + fi + " (have " + faces.Length + ")");
+            Face face = faces[fi];
+
             int before = 0;
             try { before = _part.Annotations.Centerlines.ToArray().Length; } catch { }
 
-            NXOpen.Annotations.AutomaticCenterlineBuilder cb =
-                _part.Annotations.Centerlines.CreateAutomaticCenterlineBuilder();
-            // Views is a read-only SelectDraftingViewList - the view must be ADDED to
-            // it. Without a view the builder fails with NX status 1175325.
-            DraftingView clView = null;
+            // centreline annotation is view-dependent: expand the target view first
+            bool activated = false;
             try
             {
-                if (parts.Length > 1 && !string.IsNullOrEmpty(parts[1].Trim()))
+                if (!view.IsActiveForSketching) { view.ActivateForSketching(); activated = true; }
+            }
+            catch (Exception ea) { Log("activate warn: " + ea.Message); }
+
+            SymmetricalCenterlineBuilder cb = null;
+            try
+            {
+                cb = _part.Annotations.Centerlines.CreateSymmetricalCenterlineBuilder(null);
+                cb.Type = SymmetricalCenterlineBuilder.Types.FromFace;
+                try { cb.Settings.Extension = 3.0; }
+                catch (Exception es) { Log("extension warn: " + es.Message); }
+
+                // a pick point somewhere on the face (midpoint of its first edge)
+                Point3d pick = new Point3d(0, 0, 0);
+                try
                 {
-                    DrawingSheet sh;
-                    clView = ResolveViewAnySheet(parts[1].Trim(), out sh);
-                }
-                if (clView == null)
-                {
-                    DrawingSheet cs = _part.DrawingSheets.CurrentDrawingSheet;
-                    if (cs != null)
+                    Edge[] fedges = face.GetEdges();
+                    if (fedges.Length > 0)
                     {
-                        try { cs.Open(); } catch { }
-                        DraftingView[] vs = cs.GetDraftingViews();
-                        if (vs != null && vs.Length > 0) clView = vs[0];
+                        Point3d s = new Point3d(), e2 = new Point3d();
+                        fedges[0].GetVertices(out s, out e2);
+                        pick = new Point3d((s.X + e2.X) / 2.0, (s.Y + e2.Y) / 2.0, (s.Z + e2.Z) / 2.0);
                     }
                 }
-            }
-            catch { }
+                catch (Exception ep) { Log("pick point warn: " + ep.Message); }
 
-            try
-            {
-                if (clView != null)
-                {
-                    try { cb.Views.Add(clView); }
-                    catch (Exception ev) { Log("view add warn: " + ev.Message); }
-                }
+                cb.Face.SetValue(face, view, pick);
                 cb.Commit();
             }
-            finally { try { cb.Destroy(); } catch { } }
+            finally { try { if (cb != null) cb.Destroy(); } catch { } }
+
+            // An expanded view changes how later drafting commands behave. The
+            // NX12 .NET API has no DeactivateForSketching, so collapse it via an
+            // application switch round trip and verify below.
+            if (activated)
+            {
+                try
+                {
+                    _session.ApplicationSwitchImmediate("UG_APP_MODELING");
+                    _session.ApplicationSwitchImmediate("UG_APP_DRAFTING");
+                }
+                catch (Exception ea) { Log("app switch back warn: " + ea.Message); }
+            }
 
             try { _part.DrawingSheets.RefreshCurrentSheet(); } catch { }
             int after = 0;
             try { after = _part.Annotations.Centerlines.ToArray().Length; } catch { }
+            if (after <= before)
+                return ErrJson("symmetrical_centerline created nothing (centerlines "
+                    + before + " -> " + after + "); check that the face is cylindrical "
+                    + "and visible in the view");
+            bool stillActive = false;
+            try { stillActive = view.IsActiveForSketching; } catch { }
 
             return OkJson("centerlines", after.ToString(CultureInfo.InvariantCulture),
-                "centerlines " + before + " -> " + after);
+                "symmetrical centerline created in view '" + view.Name + "' (centerlines "
+                + before + " -> " + after + (stillActive ? ", view left expanded" : "") + ")");
         }
         catch (Exception e)
         {
@@ -1422,6 +1559,7 @@ public static class NX_MCP_Loader
             catch (Exception ea) { Log("app switch warn: " + ea.Message); }
 
             NXOpen.DxfdwgCreator dx = _session.DexManager.CreateDxfdwgCreator();
+            string defCopy = null, logFile = null;
             try
             {
                 dx.OutputFile = path;
@@ -1436,10 +1574,54 @@ public static class NX_MCP_Loader
                 dx.ExportAs = NXOpen.DxfdwgCreator.ExportAsOption.TwoD;
                 try { dx.ExportData = NXOpen.DxfdwgCreator.ExportDataOption.Drawing; }
                 catch (Exception ed) { Log("export data warn: " + ed.Message); }
-                if (parts.Length > 2 && !string.IsNullOrEmpty(parts[2].Trim()))
+                string sheetName = parts.Length > 2 ? parts[2].Trim() : "";
+                if (!string.IsNullOrEmpty(sheetName))
                 {
-                    try { dx.DrawingList = parts[2].Trim(); }
+                    try { dx.DrawingList = sheetName; }
                     catch (Exception el) { Log("drawing list warn: " + el.Message); }
+                }
+                // The translator runs as a separate dxfdwg.exe process configured by
+                // a .def settings file. Without SettingsFile the commit "succeeds"
+                // and NOTHING happens - the same class of trap as the PDF export's
+                // missing SourceBuilder.SetSheets(). We copy the NX default def,
+                // turn its LOG_FILE on and pin UGI_DRAWING_NAMES to the requested
+                // sheet so the translator has a real configuration and we get logs.
+                string baseDir = Environment.GetEnvironmentVariable("UGII_BASE_DIR");
+                if (string.IsNullOrEmpty(baseDir))
+                    baseDir = @"C:\Program Files\Siemens\NX 12.0";
+                string defSrc = Path.Combine(baseDir, "DXFDWG", "dxfdwg.def");
+                if (File.Exists(defSrc))
+                {
+                    try
+                    {
+                        defCopy = Path.Combine(
+                            string.IsNullOrEmpty(dir) ? Path.GetTempPath() : dir,
+                            "dxfdwg_mcp.def");
+                        logFile = Path.Combine(
+                            string.IsNullOrEmpty(dir) ? Path.GetTempPath() : dir,
+                            "dxfdwg_mcp.log");
+                        try { if (File.Exists(defCopy)) File.Delete(defCopy); } catch { }
+                        try { if (File.Exists(logFile)) File.Delete(logFile); } catch { }
+                        string[] lines = File.ReadAllLines(defSrc);
+                        var sb = new StringBuilder();
+                        foreach (string ln in lines)
+                        {
+                            string outLn = ln;
+                            if (ln.StartsWith("LOG_FILE", StringComparison.OrdinalIgnoreCase))
+                                outLn = "LOG_FILE = " + logFile;
+                            else if (ln.StartsWith("UGI_DRAWING_NAMES", StringComparison.OrdinalIgnoreCase)
+                                     && !string.IsNullOrEmpty(sheetName))
+                                outLn = "UGI_DRAWING_NAMES = " + sheetName;
+                            sb.Append(outLn).Append("\r\n");
+                        }
+                        File.WriteAllText(defCopy, sb.ToString());
+                        dx.SettingsFile = defCopy;
+                    }
+                    catch (Exception es) { Log("settings file warn: " + es.Message); }
+                }
+                else
+                {
+                    Log("dxfdwg.def not found at " + defSrc);
                 }
                 dx.Commit();
             }
@@ -1448,9 +1630,27 @@ public static class NX_MCP_Loader
             bool exists = File.Exists(path);
             long size = 0;
             if (exists) { try { size = new FileInfo(path).Length; } catch { } }
-            return OkJson("dwg", path,
-                exists ? ("exported " + size + " bytes")
-                       : "commit ok but file not found - check sheet name and display part");
+            if (exists)
+                return OkJson("dwg", path, "exported " + size + " bytes");
+
+            // no file: surface whatever the translator logged so the next
+            // iteration does not have to guess
+            string diag = "commit ok but file not found";
+            if (!string.IsNullOrEmpty(logFile) && File.Exists(logFile))
+            {
+                string[] lg = File.ReadAllLines(logFile);
+                var tail = new StringBuilder();
+                int start = Math.Max(0, lg.Length - 12);
+                for (int i = start; i < lg.Length; i++) tail.Append(lg[i]).Append(" | ");
+                diag = diag + "; translator log tail: " + tail.ToString();
+            }
+            else
+            {
+                diag = diag + (defCopy != null
+                    ? "; no translator log written (translator did not run?)"
+                    : "; no dxfdwg.def found to configure the translator");
+            }
+            return OkJson("dwg", path, diag);
         }
         catch (Exception e)
         {

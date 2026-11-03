@@ -70,3 +70,22 @@ def test_set_dimension_value_formats_numbers():
         {"target_size": 99.96, "new_value": 100.0},
     )
     assert cmd == "nx_set_dimension_value 99.96 100"
+
+
+def test_mass_properties_defaults_to_steel():
+    assert _command("nx_mass_properties", {}) == "nx_mass_properties 7830 0.99"
+
+
+def test_mass_properties_custom_density():
+    assert (
+        _command("nx_mass_properties", {"density_kg_m3": 2700.5})
+        == "nx_mass_properties 2700.5 0.99"
+    )
+
+
+def test_centerline_wire_format():
+    cmd = _command(
+        "nx_create_centerline",
+        {"view_id": "0", "body_id": "1", "face_index": 3},
+    )
+    assert cmd == "nx_create_centerline 0 1 3"
