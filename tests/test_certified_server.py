@@ -234,3 +234,34 @@ async def test_gdt_frame_english_characteristic_passthrough():
     assert result.is_error is False
     _, params = bridge.calls[0]
     assert params["characteristic"] == "circularrunout"
+
+
+@pytest.mark.asyncio
+async def test_add_component_passes_child_and_defaults():
+    bridge = RecordingBridge(
+        {
+            "status": "success",
+            "component_name": "bolt",
+            "journal_id": "jid-1",
+            "part_path": "C:/m/bolt.prt",
+            "children": 2,
+            "message": "component 'bolt' added (children 1 -> 2)",
+        }
+    )
+    server = create_server(bridge)
+
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "nx_add_component", {"child_part": "C:/m/bolt.prt"}
+        )
+
+    assert result.is_error is False
+    method, params = bridge.calls[0]
+    assert method == "nx_add_component"
+    assert params["child_part"] == "C:/m/bolt.prt"
+    assert params["refset"] == "MODEL"
+    assert params["layer"] == 0
+    # instance_name defaults to the file name server-side; omitted here
+    assert "instance_name" not in params
+    assert result.structured_content["component_name"] == "bolt"
+    assert result.structured_content["children"] == 2

@@ -42,6 +42,10 @@
 //   nx_create_auxiliary_view <parent_view> <hx1> <hy1> <hx2> <hy2> <px> <py>  (辅助视图，试验性)
 //   nx_delete_view <view_id>                        (删除图纸视图，GTAC 路线 UF_OBJ_delete_object)
 //   nx_list_assembly                                (装配树拍平 -> BOM 行，工艺路线表数据源)
+//   nx_add_component <child_prt> [name=..] [refset=..] [x=..] [y=..] [z=..] [layer=..]
+//                                                   (装配添加组件：把已有 prt 加为当前件组件，
+//                                                    ComponentAssembly.AddComponent 路线，
+//                                                    路径不能含空格)
 //   nx_create_id_symbol <type> <x> <y> [size=k] [lower=t] [upper text...]  (球标/ID 符号，
 //                                                   装配工艺零件序号气泡，type 见 CreateIdSymbol)
 //   nx_create_datum_symbol <letter> <x> <y>        (基准符号 GD&T，GB/T 17851 基准字母框，
@@ -452,6 +456,8 @@ public static class NX_MCP_Loader
                 return DeleteViewCmd(parts);
             case "nx_list_assembly":
                 return ListAssembly(parts);
+            case "nx_add_component":
+                return AddComponentCmd(parts);
             default:
                 return ErrJson("unknown command: " + cmd);
         }
@@ -5583,6 +5589,162 @@ public static class NX_MCP_Loader
                 rows.Add(sb.ToString());
             }
             WalkComponent(child, level + 1, rows, ref total, qty);
+        }
+    }
+
+    // nx_add_component <child_prt> [name=..] [refset=..] [x=..] [y=..] [z=..] [layer=..]
+    // Add an existing part file as a component of the current work part's
+    // assembly (装配添加组件, building assembly-process models: 工序装配/合件).
+    // Route (reflection-confirmed NX12 signature, 2026-11-05):
+    //   ComponentAssembly.AddComponent(childPath, refsetName, instanceName,
+    //                                  Point3d origin, Matrix3x3 orientation,
+    //                                  int layer, out PartLoadStatus)
+    // The child file must exist; paths must not contain spaces (tokenised pipe
+    // protocol, same as nx_open_part/nx_create_wave_link). Options:
+    //   name=   instance name (default: child file name without extension)
+    //   refset= reference set (default MODEL)
+    //   x=/y=/z= placement origin in mm (default 0 0 0)
+    //   layer=  0 = original layers (default), -1 = work layer, >0 fixed layer
+    // Verification is by child count before -> after (the project's counting
+    // rule); load problems of the child part are reported, not silently dropped.
+    private static string AddComponentCmd(string[] parts)
+    {
+        if (parts.Length < 2)
+            return ErrJson("usage: nx_add_component <child_prt> [name=..] [refset=..] "
+                + "[x=..] [y=..] [z=..] [layer=..]");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null)
+                return ErrJson("no active part; open the assembly root with nx_open_part first");
+            string childPath = parts[1];
+            if (!File.Exists(childPath))
+                return ErrJson("component part file not found: " + childPath);
+            string workPath = "";
+            try { workPath = _part.FullPath; } catch { }
+            if (!string.IsNullOrEmpty(workPath) &&
+                string.Equals(NormPath(workPath), NormPath(childPath), StringComparison.OrdinalIgnoreCase))
+                return ErrJson("cannot add the work part itself as a component of itself");
+
+            string instName = "";
+            string refset = "MODEL";
+            double px = 0.0, py = 0.0, pz = 0.0;
+            int layer = 0;
+            for (int i = 2; i < parts.Length; i++)
+            {
+                string t = parts[i];
+                if (t.StartsWith("name=", StringComparison.OrdinalIgnoreCase))
+                    instName = t.Substring(5).Trim();
+                else if (t.StartsWith("refset=", StringComparison.OrdinalIgnoreCase))
+                    refset = t.Substring(7).Trim();
+                else if (t.StartsWith("x=", StringComparison.OrdinalIgnoreCase))
+                    px = D(t.Substring(2));
+                else if (t.StartsWith("y=", StringComparison.OrdinalIgnoreCase))
+                    py = D(t.Substring(2));
+                else if (t.StartsWith("z=", StringComparison.OrdinalIgnoreCase))
+                    pz = D(t.Substring(2));
+                else if (t.StartsWith("layer=", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!int.TryParse(t.Substring(6), out layer)) layer = 0;
+                }
+            }
+            if (string.IsNullOrEmpty(instName))
+                instName = Path.GetFileNameWithoutExtension(childPath);
+            // The pipe protocol is space-tokenised: a refset/instance name with
+            // a space would arrive pre-split and its tail silently ignored, so
+            // reject up front with a clear message instead of NX's cryptic one.
+            if (refset.IndexOf(' ') >= 0)
+                return ErrJson("refset= must not contain spaces (tokenised pipe "
+                    + "protocol); use e.g. MODEL");
+            if (instName.IndexOf(' ') >= 0)
+                return ErrJson("name= must not contain spaces (tokenised pipe protocol)");
+
+            int before = CountRootChildren();
+            NXOpen.Point3d origin = new NXOpen.Point3d(px, py, pz);
+            NXOpen.Matrix3x3 orient = new NXOpen.Matrix3x3();
+            orient.Xx = 1.0; orient.Yy = 1.0; orient.Zz = 1.0;   // identity rows
+
+            NXOpen.Assemblies.Component comp = null;
+            string addErr = "";
+            NXOpen.PartLoadStatus load = null;
+            try
+            {
+                comp = _part.ComponentAssembly.AddComponent(
+                    childPath, refset, instName, origin, orient, layer, out load);
+            }
+            catch (Exception e)
+            {
+                addErr = e.Message;
+            }
+            string loadWarn = "";
+            if (load != null)
+            {
+                try
+                {
+                    if (load.NumberUnloadedParts > 0)
+                    {
+                        var sb = new StringBuilder();
+                        for (int i = 0; i < load.NumberUnloadedParts; i++)
+                        {
+                            if (i > 0) sb.Append("; ");
+                            sb.Append(load.GetPartName(i) + " -> "
+                                + load.GetStatusDescription(i));
+                        }
+                        loadWarn = sb.ToString();
+                    }
+                }
+                catch (Exception e) { loadWarn = "load-status unreadable: " + e.Message; }
+                try { load.Dispose(); } catch { }
+            }
+            if (comp == null)
+                return ErrJson("add_component failed: "
+                    + ((addErr.Length > 0) ? addErr : "AddComponent returned null"));
+
+            int after = CountRootChildren();
+            string jid = "";
+            try { jid = comp.JournalIdentifier; } catch { }
+            string shown = "";
+            try { shown = comp.DisplayName; } catch { }
+            if (string.IsNullOrEmpty(shown)) shown = instName;
+
+            Log("add_component: '" + childPath + "' as '" + shown + "' children "
+                + before + " -> " + after
+                + ((loadWarn.Length > 0) ? " loadWarn=" + loadWarn : ""));
+            if (after <= before && after >= 0)
+                return ErrJson("add_component created no child (children "
+                    + before + " -> " + after + ")");
+            string msg = "component '" + shown + "' added (children " + before
+                + " -> " + after + ")";
+            if (loadWarn.Length > 0) msg += "; load warning: " + loadWarn;
+            var rs = new StringBuilder();
+            rs.Append("{\"ok\":true,\"component\":\"").Append(Esc(shown));
+            rs.Append("\",\"journal_id\":\"").Append(Esc(jid));
+            rs.Append("\",\"part_path\":\"").Append(Esc(childPath));
+            rs.Append("\",\"children\":").Append(after);
+            rs.Append(",\"result\":\"").Append(Esc(msg)).Append("\"}");
+            return rs.ToString();
+        }
+        catch (Exception e)
+        {
+            return ErrJson("add_component failed: " + e.Message);
+        }
+    }
+
+    // Direct children of the assembly root, -1 when the tree is not walkable
+    // (dangling components after failed re-links can throw in GetChildren).
+    private static int CountRootChildren()
+    {
+        try
+        {
+            NXOpen.Assemblies.Component root = _part.ComponentAssembly.RootComponent;
+            if (root == null) return 0;
+            NXOpen.Assemblies.Component[] kids = root.GetChildren();
+            return (kids == null) ? 0 : kids.Length;
+        }
+        catch (Exception e)
+        {
+            Log("count_root_children warn: " + e.Message);
+            return -1;
         }
     }
 

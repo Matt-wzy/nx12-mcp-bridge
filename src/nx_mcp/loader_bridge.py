@@ -207,6 +207,27 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
         )
     if method == "nx_list_assembly":
         return "nx_list_assembly"
+    if method == "nx_add_component":
+        # Loader 语法: nx_add_component <child_prt> [name=..] [refset=..] [x=..] [y=..] [z=..] [layer=..]
+        # 协议按空格分词，路径不能包含空格（与 nx_open_part 同一限制）。
+        cmd = "nx_add_component " + str(params["child_part"])
+        name = str(params.get("instance_name", "") or "")
+        if name:
+            cmd += " name=" + name
+        refset = str(params.get("refset", "") or "")
+        if refset:
+            cmd += " refset=" + refset
+        pos = params.get("position") or {}
+        if "x" in pos:
+            cmd += " x=" + _fmt(float(pos["x"]))
+        if "y" in pos:
+            cmd += " y=" + _fmt(float(pos["y"]))
+        if "z" in pos:
+            cmd += " z=" + _fmt(float(pos["z"]))
+        layer = params.get("layer")
+        if layer is not None and int(layer) != 0:
+            cmd += " layer=" + str(int(layer))
+        return cmd
     if method == "nx_create_centerline":
         return "nx_create_centerline %s %s %s" % (
             str(params.get("view_id", "")),
@@ -881,6 +902,15 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
             "status": "success",
             "count": count,
             "attributes": attributes,
+            "message": msg,
+        }
+    if method == "nx_add_component":
+        return {
+            "status": "success",
+            "component_name": str(resp.get("component", "")),
+            "journal_id": str(resp.get("journal_id", "")),
+            "part_path": str(resp.get("part_path", "")),
+            "children": int(resp.get("children", 0)),
             "message": msg,
         }
     if method == "nx_create_section_view":

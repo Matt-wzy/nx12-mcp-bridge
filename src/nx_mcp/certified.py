@@ -16,6 +16,7 @@ from nx_mcp import __version__
 from nx_mcp.contracts import (
     AssemblyListResult,
     AttributeListResult,
+    ComponentAddResult,
     ExportResult,
     ExtrudeResult,
     MassPropertiesResult,
@@ -334,6 +335,8 @@ CERTIFIED_TOOL_NAMES = {
     # 装配树拍平 + BOM CSV 导出（工艺路线表基础）
     "nx_list_assembly",
     "nx_export_bom_csv",
+    # 装配添加组件（工序装配/合件建模；装配工艺路线第一步）
+    "nx_add_component",
     # 工序卡导出（OP<nn>_<字段> 属性模板 → 结构化工艺卡片，纯 Python 侧）
     "nx_export_process_card",
     # 球标/ID 符号（装配工艺零件序号气泡，与 BOM 导出配套）
@@ -1337,6 +1340,43 @@ def create_certified_server(
         nx_export_bom_csv to write it out.
         """
         return AssemblyListResult(**await call("nx_list_assembly", {}))
+
+    @mcp.tool()
+    async def nx_add_component(
+        child_part: str,
+        instance_name: str = "",
+        refset: str = "MODEL",
+        position: Point3D | None = None,
+        layer: int = 0,
+    ) -> ComponentAddResult:
+        """Add an existing part file as a component of the active assembly.
+
+        The active part (nx_open_part on the assembly root first) gains one
+        component instance of ``child_part``. position is an optional
+        {"x","y","z"} placement origin in mm (default 0,0,0); layer follows NX
+        convention (0 = keep the child's original layers, -1 = work layer, >0
+        a fixed layer); refset defaults to "MODEL". instance_name defaults to
+        the child file name without extension. Verification: the result reports
+        the assembly's direct child count after the add, so a silent no-op is
+        detectable by comparing calls.
+
+        After adding components run nx_save_part on the assembly root, then
+        nx_list_assembly / nx_export_bom_csv to verify the tree and BOM.
+        Paths must not contain spaces (tokenised pipe protocol, same as
+        nx_open_part). NOTE: this does NOT add mating constraints - the
+        component is placed at the given origin; constraint support is tracked
+        separately in 交接清单档案.
+        """
+        params: dict[str, Any] = {
+            "child_part": child_part,
+            "refset": refset,
+            "layer": layer,
+        }
+        if instance_name:
+            params["instance_name"] = instance_name
+        if position is not None:
+            params["position"] = {"x": position.x, "y": position.y, "z": position.z}
+        return ComponentAddResult(**await call("nx_add_component", params))
 
     @mcp.tool()
     async def nx_export_bom_csv(path: str) -> ExportResult:

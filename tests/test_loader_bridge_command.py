@@ -29,6 +29,33 @@ def test_wave_link_minimal_form_uses_timestamp_snapshot():
     assert cmd == "nx_create_wave_link C:/m/master.prt C:/m/op10.prt 1"
 
 
+def test_add_component_minimal_form():
+    cmd = _command(
+        "nx_add_component",
+        {"child_part": "C:/m/bolt.prt"},
+    )
+    # no name -> Loader defaults to the file name without extension;
+    # no refset token -> Loader defaults to MODEL (same as the MCP default)
+    assert cmd == "nx_add_component C:/m/bolt.prt"
+
+
+def test_add_component_full_form():
+    cmd = _command(
+        "nx_add_component",
+        {
+            "child_part": "C:/m/bolt.prt",
+            "instance_name": "BOLT_1",
+            "refset": "TRUE_SET",
+            "position": {"x": 100.0, "y": 0.0, "z": -5.5},
+            "layer": 15,
+        },
+    )
+    assert cmd == (
+        "nx_add_component C:/m/bolt.prt name=BOLT_1 refset=TRUE_SET"
+        " x=100 y=0 z=-5.5 layer=15"
+    )
+
+
 def test_wave_link_associative_flag():
     cmd = _command(
         "nx_create_wave_link",

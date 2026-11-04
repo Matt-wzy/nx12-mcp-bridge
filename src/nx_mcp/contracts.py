@@ -133,6 +133,20 @@ class OperationResult(BaseModel):
     message: str
 
 
+class ComponentAddResult(BaseModel):
+    """Result of nx_add_component: the new component instance plus the
+    assembly child count after the add (verification-by-counting)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["success"] = "success"
+    component_name: str = ""
+    journal_id: str = ""
+    part_path: str = ""
+    children: int = 0
+    message: str = ""
+
+
 class StatusResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
