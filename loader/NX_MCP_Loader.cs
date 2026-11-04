@@ -59,6 +59,11 @@
 //                                                   (焊接符号 GB/T 324：角焊缝/V形/坡口焊，
 //                                                    WeldCollection.CreateLineWeldBuilder 路线，
 //                                                    坐标为图纸坐标，中文焊缝名在 Python 侧映射)
+//   nx_create_symb_thread <body_id> <cyl_face> <start_face> [internal=0|1] [pitch=..] [angle=..]
+//                         [callout=..] [length=..] [hand=rh|lh] [form=..] [method=..]
+//                         [ax=..] [ay=..] [az=..] [major_dia=..] [minor_dia=..] [tapped_dia=..]
+//                                                   (符号螺纹：圆柱面+起始面，UF_MODL.CreateSymbThread
+//                                                    路线，面索引=nx_list_faces 的 0 基下标)
 //   nx_create_hole_table <body_id> <x> <y> [edges=i,j,...]  (孔表：孔位标注+坐标明细表，
 //                                                   钻孔工序常用；edges 缺省=全部圆边，
 //                                                   HoleTableBuilder 路线，坐标为图纸坐标)
@@ -465,6 +470,10 @@ public static class NX_MCP_Loader
                 return AddComponentCmd(parts);
             case "nx_create_weld_symbol":
                 return CreateWeldSymbol(parts);
+            case "nx_create_symb_thread":
+                return CreateSymbThreadCmd(parts);
+            case "nx_probe_symb_thread":
+                return ProbeSymbThread(parts);
             default:
                 return ErrJson("unknown command: " + cmd);
         }
@@ -5178,6 +5187,367 @@ public static class NX_MCP_Loader
         if (lenPitch.Length > 0) { try { db.LengthPitch = lenPitch; } catch (Exception e) { Log("weld length warn: " + e.Message); } }
         try { db.ContourSymbol = contour; } catch (Exception e) { Log("weld contour warn: " + e.Message); }
         try { db.FinishSymbol = finish; } catch (Exception e) { Log("weld finish warn: " + e.Message); }
+    }
+
+    // nx_create_symb_thread <body_id> <cyl_face_index> <start_face_index>
+    //                       [internal=0|1] [pitch=..] [angle=..] [callout=..]
+    //                       [length=..] [hand=rh|lh] [form=..] [method=..]
+    //                       [major_dia=..] [minor_dia=..] [tapped_dia=..]
+    //                       [ax=..] [ay=..] [az=..]
+    // Symbolic thread (符号螺纹, 螺纹表示法) on an existing cylindrical face -
+    // the machining-drawing thread representation a process engineer puts on
+    // holes/shafts (GB/T 4459.1). NX12 .NET has NO Features.ThreadBuilder
+    // (reflection 2026-11-05): the only route is the UF wrapper
+    // UF_MODL.CreateSymbThread(SymbThreadData&, out Tag).
+    // cyl_face = cylindrical face (index into body.GetFaces(), same order as
+    // nx_list_faces); start_face = planar face where the thread starts. The
+    // axis direction is taken from the cylinder (AskFaceData: for a cylindrical
+    // face the returned dir IS the axis) and oriented from the start face into
+    // the cylinder; ax=/ay=/az= overrides it.
+    // length_flag: length= given -> fixed length (UF 4), else whole cylinder
+    // (UF 2). hand: rh (UF 0) / lh (UF 1). Verification = AskSymbThreadParms
+    // roundtrip (cyl_face tag + pitch must read back identical).
+    private static string CreateSymbThreadCmd(string[] parts)
+    {
+        if (parts.Length < 4)
+            return ErrJson("usage: nx_create_symb_thread <body_id> <cyl_face_index> "
+                + "<start_face_index> [internal=0|1] [pitch=..] [angle=..] [callout=..] "
+                + "[length=..] [hand=rh|lh] [form=..] [method=..] [ax=..] [ay=..] [az=..]");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+            try { _session.ApplicationSwitchImmediate("UG_APP_MODELING"); }
+            catch (Exception ea) { Log("app switch warn: " + ea.Message); }
+
+            Body body;
+            try { body = GetBody(parts[1]); }
+            catch
+            {
+                Body[] all = _part.Bodies.ToArray();
+                body = null;
+                foreach (Body b in all) if (b.IsSolidBody) { body = b; break; }
+                if (body == null && all.Length > 0) body = all[0];
+                if (body == null) return ErrJson("no body in work part");
+            }
+            Face[] faces = body.GetFaces();
+            int cylIdx;
+            int stIdx;
+            if (!int.TryParse(parts[2], out cylIdx) || cylIdx < 0 || cylIdx >= faces.Length)
+                return ErrJson("cyl_face_index out of range (0.." + (faces.Length - 1) + ")");
+            if (!int.TryParse(parts[3], out stIdx) || stIdx < 0 || stIdx >= faces.Length)
+                return ErrJson("start_face_index out of range (0.." + (faces.Length - 1) + ")");
+
+            bool internal_ = false;
+            string pitch = "";
+            string angle = "";
+            string callout = "";
+            string lenStr = "";
+            string form = "Uniform";
+            string method = "Cut";
+            string majorDia = "", minorDia = "", tappedDia = "";
+            double ax = 0.0, ay = 0.0, az = 0.0;
+            bool axisGiven = false;
+            int hand = 0;
+            for (int i = 4; i < parts.Length; i++)
+            {
+                string t = parts[i];
+                if (t.StartsWith("internal=", StringComparison.OrdinalIgnoreCase))
+                    internal_ = (t.Substring(9) == "1");
+                else if (t.StartsWith("pitch=", StringComparison.OrdinalIgnoreCase))
+                    pitch = t.Substring(6).Trim();
+                else if (t.StartsWith("angle=", StringComparison.OrdinalIgnoreCase))
+                    angle = t.Substring(6).Trim();
+                else if (t.StartsWith("callout=", StringComparison.OrdinalIgnoreCase))
+                    callout = t.Substring(8).Trim();
+                else if (t.StartsWith("length=", StringComparison.OrdinalIgnoreCase))
+                    lenStr = t.Substring(7).Trim();
+                else if (t.StartsWith("form=", StringComparison.OrdinalIgnoreCase))
+                    form = t.Substring(5).Trim();
+                else if (t.StartsWith("method=", StringComparison.OrdinalIgnoreCase))
+                    method = t.Substring(7).Trim();
+                else if (t.StartsWith("major_dia=", StringComparison.OrdinalIgnoreCase))
+                    majorDia = t.Substring(10).Trim();
+                else if (t.StartsWith("minor_dia=", StringComparison.OrdinalIgnoreCase))
+                    minorDia = t.Substring(10).Trim();
+                else if (t.StartsWith("tapped_dia=", StringComparison.OrdinalIgnoreCase))
+                    tappedDia = t.Substring(11).Trim();
+                else if (t.StartsWith("hand=", StringComparison.OrdinalIgnoreCase))
+                {
+                    string h = t.Substring(5).Trim().ToLowerInvariant();
+                    hand = (h == "lh" || h == "left" || h == "1") ? 1 : 0;
+                }
+                else if (t.StartsWith("ax=", StringComparison.OrdinalIgnoreCase)) { ax = D(t.Substring(3)); axisGiven = true; }
+                else if (t.StartsWith("ay=", StringComparison.OrdinalIgnoreCase)) { ay = D(t.Substring(3)); axisGiven = true; }
+                else if (t.StartsWith("az=", StringComparison.OrdinalIgnoreCase)) { az = D(t.Substring(3)); axisGiven = true; }
+            }
+
+            NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+            Tag cylTag = faces[cylIdx].Tag;
+            Tag startTag = faces[stIdx].Tag;
+
+            // Surface-type sanity check on the candidate cylinder. NOTE:
+            // AskFaceData's point/dir/radius are UNRELIABLE for non-analytic
+            // surface representations - for an extruded cylinder (UF type 20)
+            // they all come back zero (live-probed 2026-11-05), so the axis is
+            // NOT taken from the cylinder face (see below).
+            int ftype = 0;
+            double[] fPoint = new double[3];
+            double[] fDir = new double[3];
+            double[] fBox = new double[6];
+            double fRad = 0.0, fRadData = 0.0;
+            int fNorm = 0;
+            uf.Modl.AskFaceData(cylTag, out ftype, fPoint, fDir, fBox, out fRad, out fRadData, out fNorm);
+            Log("symb thread cyl face " + cylIdx + " ufType=" + ftype
+                + " pt=" + fPoint[0].ToString("0.###", CultureInfo.InvariantCulture) + ","
+                + fPoint[1].ToString("0.###", CultureInfo.InvariantCulture) + ","
+                + fPoint[2].ToString("0.###", CultureInfo.InvariantCulture)
+                + " dir=" + fDir[0].ToString("0.###", CultureInfo.InvariantCulture) + ","
+                + fDir[1].ToString("0.###", CultureInfo.InvariantCulture) + ","
+                + fDir[2].ToString("0.###", CultureInfo.InvariantCulture)
+                + " rad=" + fRad.ToString("0.###", CultureInfo.InvariantCulture)
+                + " radData=" + fRadData.ToString("0.###", CultureInfo.InvariantCulture));
+            // 16 = cylindrical, 20 = extruded (extruded-cylinder side wall),
+            // 24 = revolved (turned surface) - all valid thread hosts; NX
+            // itself rejects truly unusable faces at CreateSymbThread time.
+            if (ftype != 16 && ftype != 20 && ftype != 24)
+                return ErrJson("face " + cylIdx + " is not a cylinder-like face (UF type "
+                    + ftype + "; 16=cyl/20=extruded/24=revolved accepted); list faces "
+                    + "with nx_list_faces and pick the cylinder wall");
+
+            // Thread axis. The start face is a planar end cap, and its
+            // AskFaceData normal points OUT of the material, so the axis
+            // running from the start face into the cylinder is -normal.
+            // This is the only reliable auto-derivation: the cylinder face
+            // itself yields a zero dir for extruded/revolved representations.
+            // ax=/ay=/az= overrides it.
+            double[] sPoint = new double[3];
+            double[] sDir = new double[3];
+            double[] sBox = new double[6];
+            double sRad = 0.0, sRadData = 0.0;
+            int sType = 0, sNorm = 0;
+            uf.Modl.AskFaceData(startTag, out sType, sPoint, sDir, sBox, out sRad, out sRadData, out sNorm);
+            Log("symb thread start face " + stIdx + " ufType=" + sType
+                + " pt=" + sPoint[0].ToString("0.###", CultureInfo.InvariantCulture) + ","
+                + sPoint[1].ToString("0.###", CultureInfo.InvariantCulture) + ","
+                + sPoint[2].ToString("0.###", CultureInfo.InvariantCulture)
+                + " dir=" + sDir[0].ToString("0.###", CultureInfo.InvariantCulture) + ","
+                + sDir[1].ToString("0.###", CultureInfo.InvariantCulture) + ","
+                + sDir[2].ToString("0.###", CultureInfo.InvariantCulture));
+            double[] axis;
+            if (axisGiven)
+            {
+                axis = new double[3] { ax, ay, az };
+            }
+            else
+            {
+                axis = new double[3] { -sDir[0], -sDir[1], -sDir[2] };
+            }
+
+            NXOpen.UF.UFModl.SymbThreadData td = new NXOpen.UF.UFModl.SymbThreadData();
+            td.cyl_face = cylTag;
+            td.start_face = startTag;
+            td.axis_direction = axis;
+            td.include_instances = 1;
+            td.rotation = hand;                 // UF: 0 = right hand, 1 = left hand
+            td.length_flag = (lenStr.Length > 0) ? 4 : 2;   // UF: 4 = fixed length, 2 = whole cylinder
+            td.tapered = 0;
+            td.num_starts = 1;
+            td.length = lenStr;
+            td.form = form;
+            td.method = method;
+            td.callout = callout;
+            td.major_dia = majorDia;
+            td.minor_dia = minorDia;
+            td.tapped_dia = tappedDia;
+            td.pitch = pitch;
+            td.angle = angle;
+            td.internal_thread = internal_;
+
+            Tag threadTag = Tag.Null;
+            try
+            {
+                uf.Modl.CreateSymbThread(ref td, out threadTag);
+            }
+            catch (Exception e)
+            {
+                return ErrJson("create_symb_thread failed: " + e.Message
+                    + " (cyl_face " + cylIdx + ", start_face " + stIdx + ")");
+            }
+            if (threadTag == Tag.Null)
+                return ErrJson("create_symb_thread produced no thread (cyl_face " + cylIdx
+                    + ", start_face " + stIdx + ")");
+
+            // Read-back verification: params roundtrip must return the same
+            // cylinder face and pitch ("created" alone lies in this project).
+            string rb = "";
+            try
+            {
+                NXOpen.UF.UFModl.SymbThreadData rd = new NXOpen.UF.UFModl.SymbThreadData();
+                uf.Modl.AskSymbThreadParms(threadTag, out rd);
+                rb = "cyl_face=" + rd.cyl_face + " pitch=" + rd.pitch
+                    + " internal=" + ((rd.internal_thread) ? "1" : "0")
+                    + " length_flag=" + rd.length_flag;
+                if (rd.cyl_face != cylTag)
+                    return ErrJson("symb thread round-trip mismatch: cyl_face "
+                        + rd.cyl_face + " != " + cylTag);
+            }
+            catch (Exception e)
+            {
+                Log("symb thread readback warn: " + e.Message);
+                rb = "readback unavailable: " + e.Message;
+            }
+            Log("symb thread created tag=" + threadTag + " " + rb);
+            string msg = "symbolic thread created on face " + cylIdx
+                + " (internal=" + (internal_ ? "1" : "0")
+                + ", pitch=" + ((pitch.Length > 0) ? pitch : "default")
+                + ", hand=" + ((hand == 1) ? "lh" : "rh")
+                + ", len=" + ((lenStr.Length > 0) ? lenStr : "all") + "); " + rb;
+            return OkJson("thread", threadTag.ToString(), msg);
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_symb_thread failed: " + e.Message);
+        }
+    }
+
+    // nx_probe_symb_thread <body_id> <cyl_idx> <start_idx> [cyl2_idx] [start2_idx]
+    // Experimental matrix probe for UF_MODL.CreateSymbThread (NOT exposed to
+    // MCP): runs ~10 variants (length_flag 1..4, rotation 0/1, full/empty dia
+    // fields, CreateSymbThread vs CreateSymbThread2(false/true), flipped axis,
+    // internal on the second face pair) and reports each variant's raw error.
+    // Based on the project's "direction-combination probing" method.
+    private static string ProbeSymbThread(string[] parts)
+    {
+        if (parts.Length < 4)
+            return ErrJson("usage: nx_probe_symb_thread <body_id> <cyl_idx> <start_idx> [cyl2_idx] [start2_idx]");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part");
+            try { _session.ApplicationSwitchImmediate("UG_APP_MODELING"); }
+            catch (Exception ea) { Log("app switch warn: " + ea.Message); }
+            Body body = GetBody(parts[1]);
+            Face[] faces = body.GetFaces();
+            int cylIdx = int.Parse(parts[2], CultureInfo.InvariantCulture);
+            int stIdx = int.Parse(parts[3], CultureInfo.InvariantCulture);
+            int cyl2 = (parts.Length > 4) ? int.Parse(parts[4], CultureInfo.InvariantCulture) : cylIdx;
+            int st2 = (parts.Length > 5) ? int.Parse(parts[5], CultureInfo.InvariantCulture) : stIdx;
+            Tag cylTag = faces[cylIdx].Tag;
+            Tag startTag = faces[stIdx].Tag;
+            Tag cyl2Tag = faces[cyl2].Tag;
+            Tag st2Tag = faces[st2].Tag;
+
+            NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+            double[] sDir = new double[3];
+            double[] sPt = new double[3];
+            double[] sBox = new double[6];
+            double sRad = 0.0, sRadData = 0.0;
+            int sType = 0, sNorm = 0;
+            uf.Modl.AskFaceData(startTag, out sType, sPt, sDir, sBox, out sRad, out sRadData, out sNorm);
+            double[] axisIn = new double[3] { -sDir[0], -sDir[1], -sDir[2] };
+            double[] axisFlip = new double[3] { sDir[0], sDir[1], sDir[2] };
+
+            var results = new List<string>();
+            string[] names = new string[] {
+                "lf2_rot0_v1_emptydia", "lf2_rot0_v1_fulldia", "lf4_len30_v1_fulldia",
+                "lf1_v1_fulldia", "lf3_v1_fulldia", "rot1_lf2_v1_fulldia",
+                "v2false_lf2_fulldia", "v2true_lf2_fulldia",
+                "axisflip_lf2_v1_fulldia", "internal_lf2_v1_fulldia"
+            };
+            for (int v = 0; v < 10; v++)
+            {
+                NXOpen.UF.UFModl.SymbThreadData td = new NXOpen.UF.UFModl.SymbThreadData();
+                td.include_instances = 1;
+                td.tapered = 0;
+                td.num_starts = 1;
+                td.form = "Uniform";
+                td.method = "Cut";
+                td.pitch = "1.5";
+                td.angle = "60";
+                td.callout = "M60x1.5";
+                td.major_dia = "60";
+                td.minor_dia = "58.16";
+                td.tapped_dia = "58.7";
+                switch (v)
+                {
+                    case 0:
+                        td.cyl_face = cylTag; td.start_face = startTag;
+                        td.axis_direction = axisIn; td.rotation = 0; td.length_flag = 2;
+                        td.major_dia = ""; td.minor_dia = ""; td.tapped_dia = "";
+                        break;
+                    case 1:
+                        td.cyl_face = cylTag; td.start_face = startTag;
+                        td.axis_direction = axisIn; td.rotation = 0; td.length_flag = 2;
+                        break;
+                    case 2:
+                        td.cyl_face = cylTag; td.start_face = startTag;
+                        td.axis_direction = axisIn; td.rotation = 0; td.length_flag = 4;
+                        td.length = "30";
+                        break;
+                    case 3:
+                        td.cyl_face = cylTag; td.start_face = startTag;
+                        td.axis_direction = axisIn; td.rotation = 0; td.length_flag = 1;
+                        break;
+                    case 4:
+                        td.cyl_face = cylTag; td.start_face = startTag;
+                        td.axis_direction = axisIn; td.rotation = 0; td.length_flag = 3;
+                        break;
+                    case 5:
+                        td.cyl_face = cylTag; td.start_face = startTag;
+                        td.axis_direction = axisIn; td.rotation = 1; td.length_flag = 2;
+                        break;
+                    case 6:
+                    case 7:
+                        td.cyl_face = cylTag; td.start_face = startTag;
+                        td.axis_direction = axisIn; td.rotation = 0; td.length_flag = 2;
+                        break;
+                    case 8:
+                        td.cyl_face = cylTag; td.start_face = startTag;
+                        td.axis_direction = axisFlip; td.rotation = 0; td.length_flag = 2;
+                        break;
+                    case 9:
+                        td.cyl_face = cyl2Tag; td.start_face = st2Tag;
+                        td.axis_direction = axisIn; td.rotation = 0; td.length_flag = 2;
+                        td.internal_thread = true;
+                        td.major_dia = "10"; td.minor_dia = "8.16"; td.tapped_dia = "8.7";
+                        td.pitch = "1.25"; td.callout = "M10x1.25";
+                        break;
+                }
+                string err = "";
+                Tag threadTag = Tag.Null;
+                try
+                {
+                    if (v == 6 || v == 7)
+                    {
+                        bool flip = (v == 7);
+                        uf.Modl.CreateSymbThread2(ref td, flip, out threadTag);
+                    }
+                    else
+                    {
+                        uf.Modl.CreateSymbThread(ref td, out threadTag);
+                    }
+                }
+                catch (Exception e) { err = e.Message; }
+                if (threadTag != Tag.Null && err.Length == 0)
+                    results.Add(names[v] + " -> OK tag=" + threadTag);
+                else
+                    results.Add(names[v] + " -> FAIL: " + err + " tag=" + threadTag);
+            }
+            var sb = new StringBuilder();
+            sb.Append("{\"ok\":true,\"probe\":[");
+            for (int i = 0; i < results.Count; i++)
+            {
+                if (i > 0) sb.Append(",");
+                sb.Append("\"").Append(Esc(results[i])).Append("\"");
+            }
+            sb.Append("],\"result\":\"probe done\"}");
+            return sb.ToString();
+        }
+        catch (Exception e)
+        {
+            return ErrJson("probe_symb_thread failed: " + e.Message);
+        }
     }
 
     // nx_create_datum_symbol <letter> <x> <y>

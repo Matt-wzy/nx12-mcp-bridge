@@ -377,6 +377,13 @@ CERTIFIED_TOOL_NAMES = {
     "nx_add_component",
     # 焊接符号（GB/T 324 焊缝标注，WeldCollection.CreateLineWeldBuilder 路线）
     "nx_create_weld_symbol",
+    # NOTE: nx_create_symb_thread is implemented (UF_MODL.CreateSymbThread route)
+    # but NOT exposed: the NX12 .NET UF wrapper's SymbThreadData struct has NO
+    # MarshalAs attributes on its Double[]/String fields (inline C arrays vs
+    # marshalled pointers), so the struct reaches NX with a garbled layout and
+    # EVERY variant fails with "未定义目标实体" (probed 2026-11-05, matrix in
+    # 受阻项调研档案 section 9). A tool that can never succeed is worse
+    # than no tool.
     # 工序卡导出（OP<nn>_<字段> 属性模板 → 结构化工艺卡片，纯 Python 侧）
     "nx_export_process_card",
     # 球标/ID 符号（装配工艺零件序号气泡，与 BOM 导出配套）
@@ -1407,6 +1414,8 @@ def create_certified_server(
                 },
             )
         )
+
+
 
     @mcp.tool()
     async def nx_delete_view(view_id: str) -> OperationResult:
