@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from nx_mcp import __version__
 from nx_mcp.contracts import (
     AssemblyListResult,
+    AttributeListResult,
     ExportResult,
     ExtrudeResult,
     MassPropertiesResult,
@@ -95,6 +96,160 @@ def _write_bom_csv(path: str, rows: list[dict[str, Any]]) -> str:
     return "exported %d BOM row(s) to %s" % (len(rows), out_abs)
 
 
+# ---- 工序卡（process card）模板 --------------------------------------------
+# Data model: the part's user attributes ARE the process card. Per-operation
+# entries follow OP<序号>_<字段> (e.g. OP10_NAME / OP10_设备), set via
+# nx_set_attribute; part-level 名称/图号/材料 come from the same attribute pool
+# as the title block. One regex extracts the ops, so the field vocabulary can
+# grow without a schema change.
+_OP_FIELDS_ORDER = ("name", "content", "machine", "fixture", "tool", "cutting", "time")
+
+_OP_FIELD_KEYS: dict[str, tuple[str, ...]] = {
+    "name": ("name", "工序名", "工序名称", "名称"),
+    "content": ("content", "工序内容", "内容"),
+    "machine": ("machine", "设备", "机床"),
+    "fixture": ("fixture", "clamp", "装夹", "装夹方式"),
+    "tool": ("tool", "刀具"),
+    "cutting": ("cutting", "切削参数", "切削用量", "切削"),
+    "time": ("time", "工时", "单件工时"),
+}
+
+_OP_FIELD_LABELS = {
+    "name": "工序名称",
+    "content": "工序内容",
+    "machine": "设备",
+    "fixture": "装夹",
+    "tool": "刀具",
+    "cutting": "切削参数",
+    "time": "单件工时",
+}
+
+_HEADER_KEYS: dict[str, tuple[str, ...]] = {
+    "name": ("名称", "name", "part_name", "零件名称"),
+    "drawing_no": ("图号", "db_part_no", "part_no", "dwg_no", "drawing_no", "件号"),
+    "material": ("material", "nx_material", "材料", "材质"),
+    "scale": ("比例", "scale"),
+}
+
+_HEADER_LABELS = {
+    "name": "零件名称",
+    "drawing_no": "图号",
+    "material": "材料",
+    "scale": "比例",
+}
+
+
+def _parse_process_ops(
+    attributes: dict[str, str],
+) -> tuple[list[tuple[int, dict[str, str]]], list[str]]:
+    """Group OP<nn>_<field> attributes into sorted ops; return (ops, unknown).
+
+    ops = [(op_number, {canonical_field: value, ...})] sorted numerically
+    (OP5 < OP10 < OP100, plain string sort would give OP10 < OP100 < OP5).
+    Bare OP<nn> keys hold an op title (no field). Unknown field tokens are
+    reported so typos like OP10_MACHNE surface instead of silently vanishing.
+    """
+    import re
+
+    ops: dict[int, dict[str, str]] = {}
+    unknown: set[str] = set()
+    lookup = {k: canon for canon, keys in _OP_FIELD_KEYS.items() for k in keys}
+    for key, value in (attributes or {}).items():
+        m = re.match(r"^OP\s*(\d+)(?:[._\-\s]+(.+))?$", str(key).strip(), re.IGNORECASE)
+        if not m:
+            continue
+        entry = ops.setdefault(int(m.group(1)), {})
+        field = (m.group(2) or "").strip()
+        if not field:
+            entry.setdefault("title", str(value))
+            continue
+        canon = lookup.get(field.lower())
+        if canon is None:
+            unknown.add(field)
+        elif str(value).strip():
+            entry[canon] = str(value).strip()
+    return sorted(ops.items()), sorted(unknown)
+
+
+def _render_process_card_text(
+    header: dict[str, str], ops: list[tuple[int, dict[str, str]]]
+) -> str:
+    lines = ["机械加工工艺卡片", "=" * 36]
+    pairs = [
+        "%s: %s" % (_HEADER_LABELS[k], header[k])
+        for k in ("name", "drawing_no", "material", "scale")
+        if header.get(k)
+    ]
+    lines.append(" | ".join(pairs) if pairs else "(零件头信息未设)")
+    lines.append("-" * 36)
+    for num, fields in ops:
+        title = fields.get("name") or fields.get("title") or ("工序 %d" % num)
+        lines.append("工序 %d  %s" % (num, title))
+        for field in _OP_FIELDS_ORDER:
+            if field == "name":
+                continue
+            value = fields.get(field)
+            if value:
+                lines.append("  %s: %s" % (_OP_FIELD_LABELS[field], value))
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _write_process_card(
+    path: str, attributes: dict[str, str], fmt: str
+) -> tuple[str, list[str]]:
+    """Write the process card as text or CSV; return (message, warnings)."""
+    import re
+
+    header = {
+        canon: str(value)
+        for canon, keys in _HEADER_KEYS.items()
+        for key, value in (attributes or {}).items()
+        if str(key).strip().lower() in keys and str(value).strip()
+    }
+    ops, unknown = _parse_process_ops(attributes)
+    if not ops:
+        raise NXToolError(
+            "NX_NO_PROCESS_OPS",
+            "no OP<n>_<field> attributes on the part; set them with "
+            "nx_set_attribute first (e.g. OP10_NAME, OP20_CONTENT, OP20_设备)",
+        )
+    warnings = [
+        "unknown field 'OP<n>_%s' (typo? accepted: %s)"
+        % (f, ",".join(_OP_FIELD_LABELS.values()))
+        for f in unknown
+    ]
+    missing = [
+        "OP%d missing %s" % (num, _OP_FIELD_LABELS[f])
+        for num, fields in ops
+        for f in ("name", "content", "machine")
+        if not fields.get(f)
+    ]
+    warnings.extend(missing)
+
+    out_abs = os.path.abspath(path)
+    outdir = os.path.dirname(out_abs)
+    if outdir:
+        os.makedirs(outdir, exist_ok=True)
+    if fmt == "csv":
+        with open(out_abs, "w", newline="", encoding="utf-8-sig") as fh:
+            writer = csv.writer(fh)
+            writer.writerow(
+                ["工序号"] + [_OP_FIELD_LABELS[f] for f in _OP_FIELDS_ORDER]
+            )
+            for num, fields in ops:
+                writer.writerow(
+                    [num] + [fields.get(f, "") for f in _OP_FIELDS_ORDER]
+                )
+    else:
+        with open(out_abs, "w", encoding="utf-8") as fh:
+            fh.write(_render_process_card_text(header, ops))
+    message = "exported %d operation(s) to %s (%s)" % (len(ops), out_abs, fmt)
+    if warnings:
+        message += "; " + "; ".join(warnings)
+    return message, warnings
+
+
 CERTIFIED_TOOL_NAMES = {
     "nx_status",
     "nx_create_part",
@@ -159,6 +314,8 @@ CERTIFIED_TOOL_NAMES = {
     # 装配树拍平 + BOM CSV 导出（工艺路线表基础）
     "nx_list_assembly",
     "nx_export_bom_csv",
+    # 工序卡导出（OP<nn>_<字段> 属性模板 → 结构化工艺卡片，纯 Python 侧）
+    "nx_export_process_card",
     # 球标/ID 符号（装配工艺零件序号气泡，与 BOM 导出配套）
     "nx_create_id_symbol",
     # 基准符号（GD&T 基准字母框，GB/T 17851；与形状公差框格配套）
@@ -856,9 +1013,15 @@ def create_certified_server(
         )
 
     @mcp.tool()
-    async def nx_list_attributes() -> OperationResult:
-        """Read back all user attributes set on the part (title-block content)."""
-        return OperationResult(**await call("nx_list_attributes", {}))
+    async def nx_list_attributes() -> AttributeListResult:
+        """Read back all user attributes set on the part (title-block content).
+
+        Returns the structured ``attributes`` dict plus count. This is both the
+        title-block readback and the data source for nx_export_process_card:
+        set per-operation entries like OP10_NAME / OP20_CONTENT via
+        nx_set_attribute, then export the card.
+        """
+        return AttributeListResult(**await call("nx_list_attributes", {}))
 
     @mcp.tool()
     async def nx_measure_distance(
@@ -1131,6 +1294,34 @@ def create_certified_server(
                 )
             )
         message = await asyncio.to_thread(_write_bom_csv, resolved, rows)
+        return ExportResult(status="success", path=resolved, message=message)
+
+    @mcp.tool()
+    async def nx_export_process_card(
+        path: str,
+        format: Literal["text", "csv"] = "text",
+    ) -> ExportResult:
+        """Export a structured process card (工序卡/工艺卡片) from part attributes.
+
+        The template lives in the part's attributes - set them with
+        nx_set_attribute, then export. Schema: ``OP<序号>_<字段>``, e.g.
+        OP10_NAME / OP10_工序名, OP10_CONTENT / OP10_内容, OP10_MACHINE / 设备,
+        OP10_FIXTURE / 装夹, OP10_TOOL / 刀具, OP10_CUTTING / 切削参数,
+        OP10_TIME / 工时; bare OP10 holds the op title. Part-level header
+        comes from 名称 / 图号 / 材料 / 比例 (same pool as the title block).
+        Ops sort numerically (OP5 < OP10 < OP100). format=text writes a
+        readable card, csv writes a UTF-8-BOM table for Excel. The message
+        lists typos (unknown fields) and ops missing name/content/machine.
+        """
+        resolved = resolve_path(path)
+        resp = await call("nx_list_attributes", {})
+        attributes: dict[str, str] = resp.get("attributes") or {}
+
+        def _write() -> str:
+            message, _ = _write_process_card(resolved, attributes, format)
+            return message
+
+        message = await asyncio.to_thread(_write)
         return ExportResult(status="success", path=resolved, message=message)
 
     @mcp.tool()

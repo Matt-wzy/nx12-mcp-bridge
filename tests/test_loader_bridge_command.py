@@ -346,3 +346,85 @@ def test_bom_csv_carries_material_and_drawing_no(tmp_path):
     assert "Q235" in lines[2] and "JX-02" in lines[2]
     # missing qty defaults to 1, empty attrs leave the cells blank
     assert lines[2].split(",")[5] == "1"
+
+
+def test_adapt_list_attributes_structured():
+    from nx_mcp.loader_bridge import _adapt
+
+    adapted = _adapt(
+        "nx_list_attributes",
+        {},
+        {
+            "ok": True,
+            "attributes": "3",
+            "attrs": {"名称": "阶梯轴", "OP10_NAME": "车", "MATERIAL": "45钢"},
+            "result": "found 3 attribute(s) [...]",
+        },
+    )
+    assert adapted["count"] == 3
+    assert adapted["attributes"]["名称"] == "阶梯轴"
+    assert adapted["attributes"]["OP10_NAME"] == "车"
+
+
+def _write_card(tmp_path, attributes, fmt="text"):
+    from nx_mcp.certified import _write_process_card
+
+    out = str(tmp_path / ("card." + ("csv" if fmt == "csv" else "txt")))
+    message, warnings = _write_process_card(out, attributes, fmt)
+    return out, open(out, encoding="utf-8-sig").read(), message, warnings
+
+
+def test_process_card_text_renders_sorted_ops(tmp_path):
+    attrs = {
+        "名称": "阶梯轴",
+        "图号": "JX-01",
+        "材料": "45钢",
+        "OP100_NAME": "磨",
+        "OP100_CONTENT": "磨外圆至图样",
+        "OP5_NAME": "备料",
+        "OP5_CONTENT": "下料 φ50×250",
+        "OP10_NAME": "车",
+        "OP10_CONTENT": "车两端面",
+        "OP10_MACHNE": "CA6140",  # typo -> warning
+        "OP20_设备": "CA6140",
+        "OP20_内容": "半精车各外圆",
+    }
+    out, text, message, warnings = _write_card(tmp_path, attrs, "text")
+    assert "exported 4 operation(s)" in message
+    # numeric op order, not string order (OP5 < OP10 < OP100)
+    assert text.index("工序 5") < text.index("工序 10") < text.index("工序 100")
+    assert "零件名称: 阶梯轴" in text and "图号: JX-01" in text and "材料: 45钢" in text
+    assert "设备: CA6140" in text  # Chinese field key
+    assert any("MACHNE" in w for w in warnings)
+    # OP20 has 设备/内容 but no NAME -> warning
+    assert any("OP20 missing 工序名称" in w for w in warnings)
+
+
+def test_process_card_csv_columns(tmp_path):
+    attrs = {
+        "OP10_NAME": "铣",
+        "OP10_CONTENT": "铣键槽",
+        "OP10_MACHINE": "X52K",
+        "OP10_装夹": "分度头",
+        "OP10_刀具": "键槽铣刀",
+        "OP10_切削参数": "n=475r/min",
+        "OP10_单件工时": "15min",
+    }
+    out, text, message, warnings = _write_card(tmp_path, attrs, "csv")
+    lines = text.strip().splitlines()
+    assert lines[0] == "工序号,工序名称,工序内容,设备,装夹,刀具,切削参数,单件工时"
+    assert lines[1] == "10,铣,铣键槽,X52K,分度头,键槽铣刀,n=475r/min,15min"
+    assert warnings == []
+
+
+def test_process_card_no_ops_errors(tmp_path):
+    import json
+
+    import pytest
+
+    from nx_mcp.contracts import NXToolError
+    from nx_mcp.certified import _write_process_card
+
+    with pytest.raises(NXToolError) as exc:
+        _write_process_card(str(tmp_path / "x.txt"), {"名称": "轴"}, "text")
+    assert "NX_NO_PROCESS_OPS" in json.dumps(exc.value.as_dict(), ensure_ascii=False)

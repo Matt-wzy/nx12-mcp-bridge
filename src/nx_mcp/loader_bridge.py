@@ -843,6 +843,22 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
             "rows": rows,
             "message": msg,
         }
+    if method == "nx_list_attributes":
+        attrs_raw = resp.get("attrs")
+        attributes: dict[str, str] = {}
+        if isinstance(attrs_raw, dict):
+            for k, v in attrs_raw.items():
+                attributes[str(k)] = str(v)
+        try:
+            count = int(resp.get("attributes", len(attributes)))
+        except (TypeError, ValueError):
+            count = len(attributes)
+        return {
+            "status": "success",
+            "count": count,
+            "attributes": attributes,
+            "message": msg,
+        }
     if method == "nx_create_section_view":
         return {"status": "success", "view": str(resp.get("view", "")), "message": msg}
     if method == "nx_add_section_segment":

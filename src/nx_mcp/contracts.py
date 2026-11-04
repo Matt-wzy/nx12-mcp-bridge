@@ -89,6 +89,17 @@ class BomRow(BaseModel):
     attributes: dict[str, str] = Field(default_factory=dict)
 
 
+class AttributeListResult(BaseModel):
+    """All string user attributes of the active part (structured)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["success"] = "success"
+    count: int = 0
+    attributes: dict[str, str] = Field(default_factory=dict)
+    message: str = ""
+
+
 class AssemblyListResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

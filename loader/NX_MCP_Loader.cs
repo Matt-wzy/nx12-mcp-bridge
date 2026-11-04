@@ -2058,6 +2058,9 @@ public static class NX_MCP_Loader
             if (_part == null) return ErrJson("no active part; run nx_create_part first");
 
             var items = new System.Collections.Generic.List<string>();
+            var attrs = new StringBuilder();
+            attrs.Append("{");
+            bool first = true;
             NXOpen.NXObject.AttributeInformation[] atts = _part.GetUserAttributes();
             if (atts != null)
             {
@@ -2069,10 +2072,19 @@ public static class NX_MCP_Loader
                     if (string.IsNullOrEmpty(v)) { try { v = a.IntegerValue.ToString(CultureInfo.InvariantCulture); } catch { } }
                     if (string.IsNullOrEmpty(v)) { try { v = a.RealValue.ToString(CultureInfo.InvariantCulture); } catch { } }
                     items.Add(t + "=" + v);
+                    // structured map alongside the human-readable result string
+                    // (process-card export parses this, not the message text)
+                    if (!first) attrs.Append(",");
+                    first = false;
+                    attrs.Append("\"").Append(Esc(t)).Append("\":\"").Append(Esc(v)).Append("\"");
                 }
             }
-            return OkJson("attributes", items.Count.ToString(CultureInfo.InvariantCulture),
-                "found " + items.Count + " attribute(s) [" + string.Join(", ", items.ToArray()) + "]");
+            attrs.Append("}");
+            return "{\"ok\":true,\"attributes\":\""
+                + items.Count.ToString(CultureInfo.InvariantCulture)
+                + "\",\"attrs\":" + attrs.ToString()
+                + ",\"result\":\"" + Esc("found " + items.Count + " attribute(s) ["
+                + string.Join(", ", items.ToArray()) + "]") + "\"}";
         }
         catch (Exception e)
         {
