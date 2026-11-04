@@ -14,6 +14,7 @@ from nx_mcp.contracts import (
     ExportResult,
     ExtrudeResult,
     MassPropertiesResult,
+    MeasureAngleResult,
     NXToolError,
     ObjectListResult,
     ObjectResult,
@@ -88,6 +89,8 @@ CERTIFIED_TOOL_NAMES = {
     # 进程外官方 translator 实现（loader_bridge._export_dwg_external）
     "nx_export_dwg",
     "nx_measure_distance",
+    # 两直线边夹角（装夹/工序定位常用）
+    "nx_measure_angle",
     # 质量属性查询（体积/表面积/重心/质量）——工艺材料定额/毛坯选用常用
     "nx_mass_properties",
     # 对称中心线（轴类零件轴线，SymmetricalCenterlineBuilder，管道实测通过）
@@ -707,10 +710,12 @@ def create_certified_server(
 
     @mcp.tool()
     async def nx_export_pdf(path: str, sheet_name: str = "") -> OperationResult:
-        """Export the current drawing display to a PDF file.
+        """Export drawings to a PDF file.
 
-        Pass sheet_name to display that sheet first (the export follows the current
-        display). Use nx_list_drawing_sheets to see available sheet names.
+        Pass sheet_name to export that one sheet; pass "ALL" to export EVERY
+        sheet of the part into ONE multi-page PDF (a full drawing package in a
+        single call); leave empty for the current sheet. Use
+        nx_list_drawing_sheets to see available sheet names.
         """
         return OperationResult(
             **await call("nx_export_pdf", {"path": path, "sheet_name": sheet_name})
@@ -800,6 +805,30 @@ def create_certified_server(
         return OperationResult(
             **await call(
                 "nx_measure_distance",
+                {
+                    "body_id": body_id,
+                    "edge_index_1": edge_index_1,
+                    "edge_index_2": edge_index_2,
+                },
+            )
+        )
+
+    @mcp.tool()
+    async def nx_measure_angle(
+        body_id: str = "",
+        edge_index_1: int = 0,
+        edge_index_2: int = 0,
+    ) -> MeasureAngleResult:
+        """Measure the angle between two STRAIGHT edges of a body.
+
+        Query only - nothing is created. Returns the angle in degrees in [0,180]
+        plus its acute complement in [0,90] (fixture/setup work usually wants the
+        acute one). Both indices are 0-based from nx_list_edges; edges must be
+        linear (the error names the types when they are not).
+        """
+        return MeasureAngleResult(
+            **await call(
+                "nx_measure_angle",
                 {
                     "body_id": body_id,
                     "edge_index_1": edge_index_1,

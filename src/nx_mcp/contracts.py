@@ -12,6 +12,7 @@ __all__ = [
     "ExportResult",
     "ExtrudeResult",
     "MassPropertiesResult",
+    "MeasureAngleResult",
     "NXToolError",
     "ObjectKind",
     "ObjectListResult",
@@ -53,6 +54,15 @@ class MassPropertiesResult(BaseModel):
     surface_area_mm2: float
     density_kg_m3: float
     center_of_gravity: Vector3D
+    message: str = ""
+
+
+class MeasureAngleResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["success"] = "success"
+    angle_deg: float
+    acute_deg: float
     message: str = ""
 
 

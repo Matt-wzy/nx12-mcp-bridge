@@ -33,6 +33,8 @@
 //   nx_fit_view
 //   nx_export_step <step-path>
 //   nx_mass_properties [density_kg_m3] [accuracy]   (体积/表面积/重心/质量，工艺常用)
+//   nx_measure_angle <body_id> <edge1> <edge2>      (两直线边夹角，装夹/工序定位常用)
+//   nx_export_pdf <path> [ALL|sheet]  (ALL = 全部图纸页导出到一个多页 PDF)
 //   nx_build_plate_test           (single-command acceptance part)
 //   nx_create_wave_link <src_master> <target> [body_index] [assoc=1] [x=..] [y=..] [z=..]   (WAVE 链接：源件为装配根，目标件作下游组件，固定时间戳记/提取几何，可选摆放偏移)
 //   create_block <w> <h> <d>      (kept for backward compatibility)
@@ -356,6 +358,8 @@ public static class NX_MCP_Loader
                 return ExportPdf(parts);
             case "nx_measure_distance":
                 return MeasureDistance(parts);
+            case "nx_measure_angle":
+                return MeasureAngle(parts);
             case "nx_mass_properties":
                 return MassProperties(parts);
             case "nx_create_centerline":
@@ -1198,40 +1202,64 @@ public static class NX_MCP_Loader
             try { _session.ApplicationSwitchImmediate("UG_APP_DRAFTING"); }
             catch (Exception ea) { Log("app switch warn: " + ea.Message); }
 
-            // Resolve the sheet to export: by name if given, else the current one.
-            DrawingSheet target = null;
+            // Resolve the sheet to export: sheet_name "ALL" exports every sheet of
+            // the part into ONE multi-page PDF (SetSheets takes an array); by name
+            // if given, else the current one.
             string want = (parts.Length > 2) ? parts[2].Trim() : "";
+            List<NXObject> sheetsToPlot = new List<NXObject>();
             try
             {
-                if (!string.IsNullOrEmpty(want))
+                if (!string.IsNullOrEmpty(want) && want.Equals("ALL", StringComparison.OrdinalIgnoreCase))
                 {
                     foreach (DrawingSheet s in _part.DrawingSheets.ToArray())
                     {
-                        string nm = "";
-                        try { nm = s.Name; } catch { }
-                        if (nm == want) { target = s; break; }
+                        try { s.Open(); } catch { }
+                        sheetsToPlot.Add(s);
                     }
+                    if (sheetsToPlot.Count == 0) return ErrJson("part has no drawing sheets");
                 }
-                if (target == null) target = _part.DrawingSheets.CurrentDrawingSheet;
-                if (target != null) { try { target.Open(); } catch { } }
+                else
+                {
+                    DrawingSheet target = null;
+                    if (!string.IsNullOrEmpty(want))
+                    {
+                        foreach (DrawingSheet s in _part.DrawingSheets.ToArray())
+                        {
+                            string nm = "";
+                            try { nm = s.Name; } catch { }
+                            if (nm == want) { target = s; break; }
+                        }
+                    }
+                    if (target == null) target = _part.DrawingSheets.CurrentDrawingSheet;
+                    if (target != null) { try { target.Open(); } catch { } }
+                    if (target != null) sheetsToPlot.Add(target);
+                }
             }
             catch { }
 
-            NXOpen.PrintPDFBuilder pb = _part.PlotManager.CreatePrintPdfbuilder();
-            try
+            // NX12's PrintPDFBuilder ignores multi-sheet SetSheets (0-page PDF,
+            // SelectedSheets has no effect either), so "ALL" loops the sheets and
+            // appends one page per Commit - no external PDF library needed.
+            if (sheetsToPlot.Count > 1)
             {
-                pb.Filename = path;
-                try { pb.Append = false; } catch { }
-                // PlotSourceBuilder.SetSheets(NXObject[]) is what actually selects the
-                // sheets to export. Without it Commit() succeeds but writes no file.
-                if (target != null)
-                {
-                    try { pb.SourceBuilder.SetSheets(new NXObject[] { target }); }
-                    catch (Exception es) { Log("set sheets warn: " + es.Message); }
-                }
-                pb.Commit();
+                try { if (File.Exists(path)) File.Delete(path); } catch { }
             }
-            finally { try { pb.Destroy(); } catch { } }
+            for (int i = 0; i < sheetsToPlot.Count; i++)
+            {
+                NXOpen.PrintPDFBuilder pb = _part.PlotManager.CreatePrintPdfbuilder();
+                try
+                {
+                    pb.Filename = path;
+                    try { pb.Append = (i > 0); } catch { }
+                    // PlotSourceBuilder.SetSheets(NXObject[]) is what actually
+                    // selects the sheet to export. Without it Commit() succeeds
+                    // but writes no file.
+                    try { pb.SourceBuilder.SetSheets(new NXObject[] { sheetsToPlot[i] }); }
+                    catch (Exception es) { Log("set sheets warn: " + es.Message); }
+                    pb.Commit();
+                }
+                finally { try { pb.Destroy(); } catch { } }
+            }
 
             bool exists = File.Exists(path);
             long size = 0;
@@ -1392,6 +1420,65 @@ public static class NX_MCP_Loader
     // nx_create_centerline
     // Auto centreline for cylindrical/conical faces - very common on shaft drawings.
     // Entry: Part.Annotations.Centerlines.CreateAutomaticCenterlineBuilder().
+    // nx_measure_angle <body_id> <edge_index_1> <edge_index_2>
+    // 3D QUERY - angle between two STRAIGHT edges of a body. Pure math on the
+    // edge direction vectors: MeasureManager.NewAngle exists but reading the
+    // value goes through Scalar/CreateEmbedded indirection, and the UF wrapper
+    // has no angle measurement either. Fixture/setup work mostly wants the
+    // angle between two profile lines, so both the [0,180] angle and its acute
+    // complement are reported.
+    private static string MeasureAngle(string[] parts)
+    {
+        if (parts.Length < 4)
+            return ErrJson("usage: nx_measure_angle <body_id> <edge_index_1> <edge_index_2>");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+
+            Body body = ResolveBody(parts[1].Trim());
+            Edge[] edges = body.GetEdges();
+            int i1 = int.Parse(parts[2], CultureInfo.InvariantCulture);
+            int i2 = int.Parse(parts[3], CultureInfo.InvariantCulture);
+            if (i1 < 0 || i1 >= edges.Length)
+                return ErrJson("edge_index_1 out of range: " + i1 + " (have " + edges.Length + ")");
+            if (i2 < 0 || i2 >= edges.Length)
+                return ErrJson("edge_index_2 out of range: " + i2 + " (have " + edges.Length + ")");
+
+            Edge e1 = edges[i1], e2 = edges[i2];
+            string t1 = "", t2 = "";
+            try { t1 = e1.SolidEdgeType.ToString(); } catch { }
+            try { t2 = e2.SolidEdgeType.ToString(); } catch { }
+            if (t1 != "Linear" || t2 != "Linear")
+                return ErrJson("angle needs two straight edges; got " + t1 + " and " + t2
+                    + " (pick line edges from nx_list_edges)");
+
+            Point3d s1 = new Point3d(), en1 = new Point3d(), s2 = new Point3d(), en2 = new Point3d();
+            e1.GetVertices(out s1, out en1);
+            e2.GetVertices(out s2, out en2);
+            double v1x = en1.X - s1.X, v1y = en1.Y - s1.Y, v1z = en1.Z - s1.Z;
+            double v2x = en2.X - s2.X, v2y = en2.Y - s2.Y, v2z = en2.Z - s2.Z;
+            double n1 = Math.Sqrt(v1x * v1x + v1y * v1y + v1z * v1z);
+            double n2 = Math.Sqrt(v2x * v2x + v2y * v2y + v2z * v2z);
+            if (n1 < 1e-9 || n2 < 1e-9) return ErrJson("degenerate (zero-length) edge");
+            double dot = (v1x * v2x + v1y * v2y + v1z * v2z) / (n1 * n2);
+            if (dot > 1.0) dot = 1.0; if (dot < -1.0) dot = -1.0;
+            double ang = Math.Acos(dot) * 180.0 / Math.PI;          // [0,180]
+            double acute = Math.Min(ang, 180.0 - ang);              // [0,90]
+
+            string res = "angle=" + F(ang) + " deg (acute " + F(acute)
+                + " deg) between edge " + i1 + " and edge " + i2;
+            return "{\"ok\":true"
+                + ",\"angle_deg\":" + F(ang)
+                + ",\"acute_deg\":" + F(acute)
+                + ",\"result\":\"" + Esc(res) + "\"}";
+        }
+        catch (Exception e)
+        {
+            return ErrJson("measure_angle failed: " + e.Message);
+        }
+    }
+
     // nx_create_centerline <view_id> <body_id> <face_index>
     // Symmetrical centreline (对称中心线) - the correct "shaft axis" annotation
     // for turned parts. AutomaticCenterlineBuilder was a dead end: Commit()
@@ -1721,25 +1808,53 @@ public static class NX_MCP_Loader
 
             NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
             Tag dvTag = Tag.Null;
-            // Rectangular boundary via AddDetailView: xy points are plain 2D
-            // doubles in the PARENT VIEW's coordinates - no smart point needed
-            // (AddCircDetailView demands smart points that are also *visible*
-            // in the member view, i.e. unobstructed - interior points of the
-            // solid fail with "点在成员视图中不可见").
-            double[] xy1 = new double[] { cx - radius, cy - radius };
-            double[] xy2 = new double[] { cx + radius, cy + radius };
-            double[] refPt = new double[] { px, py };
+            string usedRoute = "";
+            // Optional model-space height (parts[9]) for the circular-boundary
+            // smart points: the points must be VISIBLE in the parent member view
+            // (unobstructed), e.g. z = top face height or hovering above the
+            // solid for a top view. 0 (inside the block) fails with
+            // "点在成员视图中不可见".
+            double detZ = (parts.Length > 9 && !string.IsNullOrEmpty(parts[9].Trim()))
+                ? D(parts[9]) : 0.0;
             try
             {
-                uf.Draw.AddDetailView(sheet.Tag, parent.Tag, xy1, xy2,
-                    scale > 0.0 ? scale : 1.0, refPt, out dvTag);
+                // circular route first: smart points + true circular boundary
+                Tag cP = CreateSmartPoint(uf, cx, cy, detZ);
+                Tag rP = CreateSmartPoint(uf, cx + radius, cy, detZ);
+                if (cP == Tag.Null || rP == Tag.Null)
+                    throw new Exception("smart point creation failed");
+                // dwg_reference_point behaves like METRES while the xy boundary
+                // behaves like millimetres (empirically: refPt in mm places the
+                // detail view ~1000x off-sheet and the PDF shows only the parent
+                // boundary box; refPt/1000 puts it where asked).
+                double[] refPtC = new double[] { px / 1000.0, py / 1000.0 };
+                uf.Draw.AddCircDetailView(sheet.Tag, parent.Tag, cP, rP,
+                    scale > 0.0 ? scale : 1.0, refPtC, out dvTag);
+                usedRoute = "circular";
             }
-            catch (Exception eu)
+            catch (Exception ec)
             {
-                return ErrJson("AddDetailView failed: " + eu.Message);
+                Log("circ detail route failed (" + ec.Message + "); trying rectangle");
+                // rectangular fallback: plain 2D doubles in drawing coordinates
+                // (uf_draw.h: "Left lower / right upper corner of area to create
+                // detailed view, in drawing coordinates")
+                dvTag = Tag.Null;
+                try
+                {
+                    double[] xy1 = new double[] { cx - radius, cy - radius };
+                    double[] xy2 = new double[] { cx + radius, cy + radius };
+                    double[] refPt = new double[] { px / 1000.0, py / 1000.0 };
+                    uf.Draw.AddDetailView(sheet.Tag, parent.Tag, xy1, xy2,
+                        scale > 0.0 ? scale : 1.0, refPt, out dvTag);
+                    usedRoute = "rectangle";
+                }
+                catch (Exception eu)
+                {
+                    return ErrJson("AddDetailView failed: " + eu.Message);
+                }
             }
             if (dvTag == Tag.Null)
-                return ErrJson("AddDetailView returned a null view tag");
+                return ErrJson("detail view returned a null view tag");
 
             DraftingView created = null;
             try
@@ -1764,7 +1879,8 @@ public static class NX_MCP_Loader
             string id = ""; try { id = created.JournalIdentifier; } catch { }
             int count = 0;
             try { count = sheet.GetDraftingViews().Length; } catch { }
-            return OkJson("view", id, "detail view created views=" + count
+            return OkJson("view", id, "detail view created via " + usedRoute
+                + " route, views=" + count
                 + " boundary=center(" + F(cx) + "," + F(cy) + ") r=" + F(radius)
                 + " placed=(" + F(px) + "," + F(py) + ")"
                 + (scale > 0.0 ? " scale=" + F(scale) + ":1" : ""));

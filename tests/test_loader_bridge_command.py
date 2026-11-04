@@ -128,3 +128,8 @@ def test_detail_view_scale_and_name():
         },
     )
     assert cmd == "nx_create_detail_view 0 0 0 10 100 50 2 DETAIL_A"
+
+
+def test_measure_angle_wire_format():
+    cmd = _command("nx_measure_angle", {"body_id": "1", "edge_index_1": 2, "edge_index_2": 5})
+    assert cmd == "nx_measure_angle 1 2 5"

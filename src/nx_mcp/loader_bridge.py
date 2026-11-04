@@ -137,6 +137,12 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
             str(params.get("edge_index_1", params.get("first_edge_index", 0))),
             str(params.get("edge_index_2", params.get("second_edge_index", 0))),
         )
+    if method == "nx_measure_angle":
+        return "nx_measure_angle %s %s %s" % (
+            str(params.get("body_id", "")),
+            str(params.get("edge_index_1", 0)),
+            str(params.get("edge_index_2", 0)),
+        )
     if method == "nx_mass_properties":
         return "nx_mass_properties %s %s" % (
             _fmt(params.get("density_kg_m3", 7830.0)),
@@ -735,6 +741,13 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
                 "y": float(resp.get("cog_y_mm", 0.0)),
                 "z": float(resp.get("cog_z_mm", 0.0)),
             },
+            "message": msg,
+        }
+    if method == "nx_measure_angle":
+        return {
+            "status": "success",
+            "angle_deg": float(resp.get("angle_deg", 0.0)),
+            "acute_deg": float(resp.get("acute_deg", 0.0)),
             "message": msg,
         }
     return {"status": "success", "message": msg}
