@@ -207,6 +207,29 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
         )
     if method == "nx_list_assembly":
         return "nx_list_assembly"
+    if method == "nx_create_weld_symbol":
+        # Loader 语法: nx_create_weld_symbol <type> <size> <x> <y>
+        #              [side=..] [length_pitch=..] [tail=..] [contour=..] [finish=..] [std=..]
+        # weld_type/contour/finish 已在 certified.py 归一化为英文枚举名（中文
+        # 别名在那边映射，Loader 源码按 ANSI 代码页编译不能放中文）；size/
+        # length_pitch 是单 token，不能含空格；pos 为图纸坐标 mm。
+        cmd = "nx_create_weld_symbol %s %s %s %s" % (
+            str(params.get("weld_type", "")),
+            str(params.get("weld_size", "") or "").strip() or "0",
+            _fmt(float(params.get("pos_x", 0.0))),
+            _fmt(float(params.get("pos_y", 0.0))),
+        )
+        cmd += " side=" + str(params.get("side", "arrow"))
+        if params.get("length_pitch"):
+            cmd += " length_pitch=" + str(params["length_pitch"]).strip()
+        if params.get("tail") and params["tail"] != "none":
+            cmd += " tail=" + str(params["tail"])
+        if params.get("contour"):
+            cmd += " contour=" + str(params["contour"])
+        if params.get("finish"):
+            cmd += " finish=" + str(params["finish"])
+        cmd += " std=" + str(params.get("standard", "gb"))
+        return cmd
     if method == "nx_add_component":
         # Loader 语法: nx_add_component <child_prt> [name=..] [refset=..] [x=..] [y=..] [z=..] [layer=..]
         # 协议按空格分词，路径不能包含空格（与 nx_open_part 同一限制）。

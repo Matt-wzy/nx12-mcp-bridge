@@ -84,6 +84,35 @@ def test_wave_link_body_index_and_placement():
     )
 
 
+def test_weld_symbol_chinese_alias_and_options():
+    cmd = _command(
+        "nx_create_weld_symbol",
+        {
+            "weld_type": "fillet",
+            "weld_size": "5",
+            "pos_x": 30.0,
+            "pos_y": 40.0,
+            "side": "both",
+            "length_pitch": "3x50",
+            "tail": "tail",
+            "standard": "gb",
+        },
+    )
+    assert cmd == (
+        "nx_create_weld_symbol fillet 5 30 40 side=both"
+        " length_pitch=3x50 tail=tail std=gb"
+    )
+
+
+def test_weld_symbol_minimal_defaults():
+    cmd = _command(
+        "nx_create_weld_symbol",
+        {"weld_type": "vbutt", "pos_x": 0.0, "pos_y": 0.0},
+    )
+    # empty size becomes "0"; side/std always sent
+    assert cmd == "nx_create_weld_symbol vbutt 0 0 0 side=arrow std=gb"
+
+
 def test_read_sketch():
     assert (
         _command("nx_read_sketch", {"sketch_name": "SKETCH_1"})

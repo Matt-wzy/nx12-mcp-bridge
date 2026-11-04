@@ -237,6 +237,35 @@ async def test_gdt_frame_english_characteristic_passthrough():
 
 
 @pytest.mark.asyncio
+async def test_weld_symbol_maps_chinese_type_contour_finish():
+    bridge = RecordingBridge({"status": "success", "message": "created"})
+    server = create_server(bridge)
+
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "nx_create_weld_symbol",
+            {
+                "weld_type": "角焊缝",
+                "weld_size": " 5 ",
+                "pos_x": 10.0,
+                "pos_y": 20.0,
+                "contour": "凹面",
+                "finish": "打磨",
+            },
+        )
+
+    assert result.is_error is False
+    method, params = bridge.calls[0]
+    assert method == "nx_create_weld_symbol"
+    assert params["weld_type"] == "fillet"
+    assert params["weld_size"] == "5"
+    assert params["contour"] == "concave"
+    assert params["finish"] == "grinding"
+    assert params["standard"] == "gb"
+    assert params["side"] == "arrow"
+
+
+@pytest.mark.asyncio
 async def test_add_component_passes_child_and_defaults():
     bridge = RecordingBridge(
         {

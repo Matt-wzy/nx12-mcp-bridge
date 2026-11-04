@@ -64,6 +64,44 @@ _FCF_CHARACTERISTIC_ALIASES = {
 }
 
 
+# GB/T 324 中文名 -> Loader WeldSymbolType 英文枚举名（Loader 源码按 ANSI 代码
+# 页编译，中文字面量只能放这边）。X 形坡口 = 双 V，用 side="both" + vbutt 表达。
+_WELD_TYPE_ALIASES = {
+    "角焊缝": "fillet",
+    "角焊": "fillet",
+    "i形": "squarebutt",
+    "i形坡口": "squarebutt",
+    "v形": "vbutt",
+    "v形坡口": "vbutt",
+    "单边v形": "bevelbutt",
+    "单边v形坡口": "bevelbutt",
+    "k形": "kgroove",
+    "k形坡口": "kgroove",
+    "u形": "ubutt",
+    "u形坡口": "ubutt",
+    "单边u形": "jbutt",
+    "单边u形坡口": "jbutt",
+    "塞焊": "plugslot",
+    "槽焊": "plugslot",
+    "点焊": "spot",
+    "缝焊": "seam",
+    "卷边": "flarev",
+    "喇叭形": "flarebevel",
+    "封底焊": "backing",
+}
+
+# 焊缝表面形状（ContourSymbolType）与加工方法（FinishSymbolType）中文名
+_WELD_CONTOUR_ALIASES = {"凸面": "convex", "凹面": "concave", "平面": "flat", "平齐": "flush"}
+_WELD_FINISH_ALIASES = {
+    "去毛刺": "chipping",
+    "打磨": "grinding",
+    "锤击": "hammering",
+    "机加工": "machining",
+    "滚压": "rolling",
+    "敲击": "peening",
+}
+
+
 def _pick_attr(attrs: dict[str, Any], keys: tuple[str, ...]) -> str:
     """Return the first attribute value matching any key (case-insensitive)."""
     lowered = {str(k).strip().lower(): str(v) for k, v in (attrs or {}).items()}
@@ -337,6 +375,8 @@ CERTIFIED_TOOL_NAMES = {
     "nx_export_bom_csv",
     # 装配添加组件（工序装配/合件建模；装配工艺路线第一步）
     "nx_add_component",
+    # 焊接符号（GB/T 324 焊缝标注，WeldCollection.CreateLineWeldBuilder 路线）
+    "nx_create_weld_symbol",
     # 工序卡导出（OP<nn>_<字段> 属性模板 → 结构化工艺卡片，纯 Python 侧）
     "nx_export_process_card",
     # 球标/ID 符号（装配工艺零件序号气泡，与 BOM 导出配套）
@@ -1311,6 +1351,59 @@ def create_certified_server(
                     "datum_tertiary": datum_tertiary.strip().upper(),
                     "zone_shape": zone_shape,
                     "material_modifier": material_modifier,
+                },
+            )
+        )
+
+    @mcp.tool()
+    async def nx_create_weld_symbol(
+        weld_type: str,
+        pos_x: float,
+        pos_y: float,
+        weld_size: str = "",
+        side: Literal["arrow", "other", "both"] = "arrow",
+        length_pitch: str = "",
+        tail: Literal["none", "tail", "box"] = "none",
+        contour: str = "",
+        finish: str = "",
+        standard: Literal["gb", "iso", "ansi", "din", "jis", "eskd"] = "gb",
+    ) -> OperationResult:
+        """Create a welding symbol (焊接符号, GB/T 324 / ISO 2553) on the sheet.
+
+        weld_type accepts Chinese GB names (角焊缝 / I形 / V形 / 单边V形 /
+        K形 / U形 / 单边U形 / 塞焊 / 槽焊 / 点焊 / 缝焊 / 卷边 / 封底焊) or
+        English enum names (fillet, squarebutt, vbutt, bevelbutt, kgroove,
+        ubutt, jbutt, plugslot, spot, seam, flarev, flarebevel, backing, ...).
+        weld_size is the fillet/groove size text, e.g. "5" (⌒5 in the symbol).
+        side selects which leg of the reference line carries the symbol:
+        arrow (箭头侧) / other (非箭头侧) / both - an X-groove (X形坡口) is
+        side="both" with weld_type="vbutt". length_pitch adds the intermittent
+        weld data, e.g. "3x50" (3 段 x 每段 50). tail=tail adds the reference
+        tail for notes; contour 凸面/凹面/平面 and finish 打磨/机加工/锤击
+        accept Chinese or English names. standard defaults to gb (GB/T 324);
+        pos_x/pos_y are sheet coordinates (mm), standalone placement like the
+        GD&T frame (no leader). weld_size / length_pitch must not contain
+        spaces (tokenised pipe protocol).
+        """
+        wtype = _WELD_TYPE_ALIASES.get(weld_type.strip())
+        if wtype is None:
+            wtype = weld_type.strip().lower().replace(" ", "")
+        contour_key = _WELD_CONTOUR_ALIASES.get(contour.strip()) or contour.strip().lower()
+        finish_key = _WELD_FINISH_ALIASES.get(finish.strip()) or finish.strip().lower()
+        return OperationResult(
+            **await call(
+                "nx_create_weld_symbol",
+                {
+                    "weld_type": wtype,
+                    "weld_size": weld_size.strip(),
+                    "pos_x": pos_x,
+                    "pos_y": pos_y,
+                    "side": side,
+                    "length_pitch": length_pitch.strip(),
+                    "tail": tail,
+                    "contour": contour_key,
+                    "finish": finish_key,
+                    "standard": standard,
                 },
             )
         )

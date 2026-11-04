@@ -54,6 +54,11 @@
 //                                                   (形位公差框 GD&T，GB/T 1182 特征项目+公差值+
 //                                                   基准字母；DraftingFeatureControlFrameBuilder
 //                                                   路线，坐标为图纸坐标，中文特征名在 Python 侧映射)
+//   nx_create_weld_symbol <type> <size> <x> <y> [side=arrow|other|both] [length_pitch=nxp]
+//                         [tail=none|tail|box] [contour=..] [finish=..] [std=gb|iso|ansi]
+//                                                   (焊接符号 GB/T 324：角焊缝/V形/坡口焊，
+//                                                    WeldCollection.CreateLineWeldBuilder 路线，
+//                                                    坐标为图纸坐标，中文焊缝名在 Python 侧映射)
 //   nx_create_hole_table <body_id> <x> <y> [edges=i,j,...]  (孔表：孔位标注+坐标明细表，
 //                                                   钻孔工序常用；edges 缺省=全部圆边，
 //                                                   HoleTableBuilder 路线，坐标为图纸坐标)
@@ -458,6 +463,8 @@ public static class NX_MCP_Loader
                 return ListAssembly(parts);
             case "nx_add_component":
                 return AddComponentCmd(parts);
+            case "nx_create_weld_symbol":
+                return CreateWeldSymbol(parts);
             default:
                 return ErrJson("unknown command: " + cmd);
         }
@@ -4988,6 +4995,189 @@ public static class NX_MCP_Loader
         {
             return ErrJson("create_id_symbol failed: " + e.Message);
         }
+    }
+
+    // nx_create_weld_symbol <type> <size> <x> <y> [side=arrow|other|both]
+    //                       [length_pitch=nxp] [tail=none|tail|box]
+    //                       [contour=none|convex|flat|concave]
+    //                       [finish=none|chipping|grinding|hammering|machining|rolling|peening]
+    //                       [std=gb|iso|ansi|din|jis|eskd]
+    // Weld symbol (焊接符号) - GB/T 324 / ISO 2553 welding symbols on process
+    // drawings. Route (reflection, 2026-11-05):
+    //   AnnotationManager.Welds.CreateLineWeldBuilder(null)   (factory on WeldCollection)
+    // ArrowSideWeldData / OtherSideWeldData (LineWeldDataBuilder) hold the
+    // per-side symbol (WeldSymbolType nested enum), size and length*pitch.
+    // Standalone sheet-coordinate placement like the datum/FCF symbols; the
+    // counter that moves is Annotations.Welds (WeldCollection.ToArray()).
+    // std= switches the part's weld notation standard (enum has Gb, the
+    // GB/T 324 Chinese standard, first-class). Chinese type names map Python-side.
+    private static string CreateWeldSymbol(string[] parts)
+    {
+        if (parts.Length < 5)
+            return ErrJson("usage: nx_create_weld_symbol <type> <size> <x> <y> "
+                + "[side=arrow|other|both] [length_pitch=nxp] [tail=none|tail|box] "
+                + "[contour=..] [finish=..] [std=gb|iso|ansi]");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+            try { _session.ApplicationSwitchImmediate("UG_APP_DRAFTING"); }
+            catch (Exception ea) { Log("app switch warn: " + ea.Message); }
+
+            string typeTok = parts[1].Trim();
+            string size = parts[2].Trim();
+            double posx = D(parts[3]);
+            double posy = D(parts[4]);
+
+            NXOpen.Annotations.LineWeldDataBuilder.WeldSymbolType wsym;
+            try
+            {
+                wsym = (NXOpen.Annotations.LineWeldDataBuilder.WeldSymbolType)
+                    Enum.Parse(typeof(NXOpen.Annotations.LineWeldDataBuilder.WeldSymbolType),
+                               typeTok, true);
+            }
+            catch
+            {
+                return ErrJson("unknown weld type '" + typeTok + "' (e.g. fillet, "
+                    + "vbutt, bevelbutt, ubutt, jbutt, squarebutt, plugslot, spot, seam; "
+                    + "chinese names are mapped on the python side)");
+            }
+
+            string side = "arrow";
+            string lenPitch = "";
+            string tailTok = "none";
+            string contourTok = "";
+            string finishTok = "";
+            string stdTok = "";
+            for (int i = 5; i < parts.Length; i++)
+            {
+                string t = parts[i];
+                if (t.StartsWith("side=", StringComparison.OrdinalIgnoreCase))
+                    side = t.Substring(5).Trim().ToLowerInvariant();
+                else if (t.StartsWith("length_pitch=", StringComparison.OrdinalIgnoreCase))
+                    lenPitch = t.Substring(13).Trim();
+                else if (t.StartsWith("tail=", StringComparison.OrdinalIgnoreCase))
+                    tailTok = t.Substring(5).Trim().ToLowerInvariant();
+                else if (t.StartsWith("contour=", StringComparison.OrdinalIgnoreCase))
+                    contourTok = t.Substring(8).Trim();
+                else if (t.StartsWith("finish=", StringComparison.OrdinalIgnoreCase))
+                    finishTok = t.Substring(7).Trim();
+                else if (t.StartsWith("std=", StringComparison.OrdinalIgnoreCase))
+                    stdTok = t.Substring(4).Trim();
+            }
+            if (side != "arrow" && side != "other" && side != "both")
+                return ErrJson("side= must be arrow|other|both, got '" + side + "'");
+
+            NXOpen.Annotations.LineWeldDataBuilder.ContourSymbolType contour =
+                NXOpen.Annotations.LineWeldDataBuilder.ContourSymbolType.None;
+            if (contourTok.Length > 0)
+            {
+                try
+                {
+                    contour = (NXOpen.Annotations.LineWeldDataBuilder.ContourSymbolType)
+                        Enum.Parse(typeof(NXOpen.Annotations.LineWeldDataBuilder.ContourSymbolType),
+                                   contourTok, true);
+                }
+                catch
+                {
+                    return ErrJson("unknown contour '" + contourTok + "' (none|convex|flat|concave)");
+                }
+            }
+            NXOpen.Annotations.LineWeldDataBuilder.FinishSymbolType finish =
+                NXOpen.Annotations.LineWeldDataBuilder.FinishSymbolType.None;
+            if (finishTok.Length > 0)
+            {
+                try
+                {
+                    finish = (NXOpen.Annotations.LineWeldDataBuilder.FinishSymbolType)
+                        Enum.Parse(typeof(NXOpen.Annotations.LineWeldDataBuilder.FinishSymbolType),
+                                   finishTok, true);
+                }
+                catch
+                {
+                    return ErrJson("unknown finish '" + finishTok + "' (none|chipping|grinding|"
+                        + "hammering|machining|rolling|peening)");
+                }
+            }
+            NXOpen.Annotations.LineWeldBuilder.TailType tail =
+                NXOpen.Annotations.LineWeldBuilder.TailType.NoTail;
+            if (tailTok == "tail") tail = NXOpen.Annotations.LineWeldBuilder.TailType.Tail;
+            else if (tailTok == "box") tail = NXOpen.Annotations.LineWeldBuilder.TailType.Box;
+            else if (tailTok != "none")
+                return ErrJson("tail= must be none|tail|box, got '" + tailTok + "'");
+            if (stdTok.Length > 0)
+            {
+                try
+                {
+                    _part.Annotations.WeldStandard =
+                        (NXOpen.Annotations.WeldStandard)
+                        Enum.Parse(typeof(NXOpen.Annotations.WeldStandard), stdTok, true);
+                }
+                catch
+                {
+                    return ErrJson("unknown std '" + stdTok + "' (gb|iso|ansi|din|jis|eskd)");
+                }
+            }
+
+            int before = 0;
+            try { before = _part.Annotations.Welds.ToArray().Length; } catch { }
+
+            NXOpen.Annotations.LineWeldBuilder wb =
+                _part.Annotations.Welds.CreateLineWeldBuilder(null);
+            string jid = "";
+            try
+            {
+                FillWeldSide(wb.ArrowSideWeldData, wsym, size, lenPitch, contour, finish,
+                             side != "other");
+                FillWeldSide(wb.OtherSideWeldData, wsym, size, lenPitch, contour, finish,
+                             side != "arrow");
+                wb.Tail = tail;
+                wb.Origin.OriginPoint = new Point3d(posx, posy, 0.0);
+                NXOpen.Annotations.LineWeld sym = (NXOpen.Annotations.LineWeld)wb.Commit();
+                if (sym != null)
+                {
+                    try { sym.SetName("MCP_WELD_" + typeTok); } catch { }
+                    try { jid = sym.JournalIdentifier; } catch { }
+                }
+            }
+            finally { try { wb.Destroy(); } catch { } }
+
+            int after = 0;
+            try { after = _part.Annotations.Welds.ToArray().Length; } catch { }
+            if (string.IsNullOrEmpty(jid) && after <= before)
+                return ErrJson("weld symbol created nothing (welds " + before + " -> "
+                    + after + ", committed object null or untracked)");
+            try { _part.DrawingSheets.RefreshCurrentSheet(); } catch { }
+            string msg = "weld '" + typeTok + "' " + side + " side" +
+                ((lenPitch.Length > 0) ? " length_pitch=" + lenPitch : "") +
+                " created (welds " + before + " -> " + after + ")";
+            return OkJson("weld", jid, msg);
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_weld_symbol failed: " + e.Message);
+        }
+    }
+
+    // One side of a line-weld symbol; enabled=false leaves the side empty.
+    private static void FillWeldSide(
+        NXOpen.Annotations.LineWeldDataBuilder db,
+        NXOpen.Annotations.LineWeldDataBuilder.WeldSymbolType wsym,
+        string size, string lenPitch,
+        NXOpen.Annotations.LineWeldDataBuilder.ContourSymbolType contour,
+        NXOpen.Annotations.LineWeldDataBuilder.FinishSymbolType finish,
+        bool enabled)
+    {
+        if (!enabled)
+        {
+            db.WeldSymbol = NXOpen.Annotations.LineWeldDataBuilder.WeldSymbolType.None;
+            return;
+        }
+        db.WeldSymbol = wsym;
+        if (size.Length > 0) { try { db.WeldSize = size; } catch (Exception e) { Log("weld size warn: " + e.Message); } }
+        if (lenPitch.Length > 0) { try { db.LengthPitch = lenPitch; } catch (Exception e) { Log("weld length warn: " + e.Message); } }
+        try { db.ContourSymbol = contour; } catch (Exception e) { Log("weld contour warn: " + e.Message); }
+        try { db.FinishSymbol = finish; } catch (Exception e) { Log("weld finish warn: " + e.Message); }
     }
 
     // nx_create_datum_symbol <letter> <x> <y>
