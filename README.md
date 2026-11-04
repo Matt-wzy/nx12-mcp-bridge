@@ -34,7 +34,7 @@ AI（自然语言）
 - 修复 `ShellBuilder` 相关 CS1061（改用 `ReplaceRules`）
 - 迁移 `Update.AddToDeleteList` → `AddObjectsToDeleteList`（NX12.0.0 弃用）
 
-### 新增能力（共 65 个 MCP 工具）
+### 新增能力（共 66 个 MCP 工具）
 
 | 类别 | 命令 |
 |---|---|
@@ -51,6 +51,7 @@ AI（自然语言）
 | 删图纸视图 | `nx_delete_view`（改图前删旧视图；剖视图连带删剖切线） |
 | 装配 / BOM | `nx_list_assembly`（装配树拍平 + qty 合计数量 + 跨部件属性）+ `nx_export_bom_csv`（CSV 明细表，含 material/drawing_no 列，Excel 直接开）+ `nx_create_id_symbol`（零件序号球标，与 BOM 配套） |
 | 基准符号 | `nx_create_datum_symbol`（GD&T 基准字母框，GB/T 17851，与形状公差标注配套） |
+| 形位公差框 | `nx_create_gdt_frame`（GD&T 特征控制框，GB/T 1182：14 种特征中文名直认 + 公差值 + 三基准字母 + Ø 公差带 + Ⓜ/Ⓛ，PDF 实测渲染） |
 | 工序卡 | `nx_export_process_card`（OP\<nn\>_字段 属性模板 → 结构化工艺卡片，text/CSV 双格式，缺字段/typo 警告） |
 | 全套图纸 PDF | `nx_export_pdf <路径> ALL`（全部图纸页合成一个多页 PDF） |
 | 标题栏 | `nx_create_title_block` |

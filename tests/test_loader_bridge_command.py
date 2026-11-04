@@ -204,6 +204,38 @@ def test_datum_symbol_wire_format():
     ) == "nx_create_datum_symbol b 12.5 0"
 
 
+def test_gdt_frame_wire_format():
+    cmd = _command(
+        "nx_create_gdt_frame",
+        {
+            "characteristic": "flatness",
+            "tolerance": "0.02",
+            "pos_x": 60.0,
+            "pos_y": 30.0,
+            "datum_primary": "A",
+        },
+    )
+    assert cmd == "nx_create_gdt_frame flatness 0.02 60 30 d1=A"
+    cmd2 = _command(
+        "nx_create_gdt_frame",
+        {
+            "characteristic": "position",
+            "tolerance": "0.05",
+            "pos_x": 10.5,
+            "pos_y": 0.0,
+            "datum_primary": "A",
+            "datum_secondary": "B",
+            "datum_tertiary": "C",
+            "zone_shape": "diameter",
+            "material_modifier": "mmc",
+        },
+    )
+    assert cmd2 == (
+        "nx_create_gdt_frame position 0.05 10.5 0"
+        " d1=A d2=B d3=C shape=diameter mat=mmc"
+    )
+
+
 def test_add_section_segment_wire_format():
     cmd = _command(
         "nx_add_section_segment",

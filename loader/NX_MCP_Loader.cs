@@ -46,6 +46,10 @@
 //                                                   装配工艺零件序号气泡，type 见 CreateIdSymbol)
 //   nx_create_datum_symbol <letter> <x> <y>        (基准符号 GD&T，GB/T 17851 基准字母框，
 //                                                   GdtDatumCollection 路线，坐标为图纸坐标)
+//   nx_create_gdt_frame <char> <tol> <x> <y> [d1=A] [d2=B] [d3=C] [shape=...] [mat=...]
+//                                                   (形位公差框 GD&T，GB/T 1182 特征项目+公差值+
+//                                                   基准字母；DraftingFeatureControlFrameBuilder
+//                                                   路线，坐标为图纸坐标，中文特征名在 Python 侧映射)
 //   nx_export_pdf <path> [ALL|sheet]  (ALL = 全部图纸页导出到一个多页 PDF)
 //   nx_build_plate_test           (single-command acceptance part)
 //   nx_create_wave_link <src_master> <target> [body_index] [assoc=1] [x=..] [y=..] [z=..]   (WAVE 链接：源件为装配根，目标件作下游组件，固定时间戳记/提取几何，可选摆放偏移)
@@ -68,6 +72,12 @@ using System.Threading;
 using System.Windows.Forms;
 using NXOpen;
 using NXOpen.Features;
+// ZoneShape/FCF enums share their names with same-named builder properties, so
+// in expression contexts the compiler resolves the PROPERTY and fails CS0120.
+// Using-aliases resolve in type-only contexts where the nested type wins.
+using FcfZoneShape = NXOpen.Annotations.FeatureControlFrameDataBuilder.ToleranceZoneShape;
+using FcfMatMod = NXOpen.Annotations.FeatureControlFrameDataBuilder.ToleranceMaterialModifier;
+using FcfChar = NXOpen.Annotations.FeatureControlFrameBuilder.FcfCharacteristic;
 using NXOpen.GeometricUtilities;
 using NXOpen.Drawings;
 using NXOpen.Annotations;
@@ -423,6 +433,8 @@ public static class NX_MCP_Loader
                 return CreateIdSymbol(parts);
             case "nx_create_datum_symbol":
                 return CreateDatumSymbol(parts);
+            case "nx_create_gdt_frame":
+                return CreateGdtFrame(parts);
             case "nx_create_wave_link":
                 return CreateWaveLink(parts);
             case "nx_create_section_view":
@@ -4940,6 +4952,199 @@ public static class NX_MCP_Loader
         catch (Exception e)
         {
             return ErrJson("create_datum_symbol failed: " + e.Message);
+        }
+    }
+
+    // nx_create_gdt_frame <char> <tol> <x> <y> [d1=A] [d2=B] [d3=C] [shape=...] [mat=...]
+    // Feature control frame (形位公差框) - the geometric-tolerance frame of
+    // process drawings (GB/T 1182 / ISO 1101): characteristic symbol + tolerance
+    // value + up to three datum letters. Route (reflection, 2026-11-05):
+    // AnnotationManager.CreateDraftingFeatureControlFrameBuilder(null) plus a
+    // CreateFeatureControlFrameDataBuilder(null) row appended into
+    // FeatureControlFrameDataList; the counter that moves is
+    // Annotations.Fcfs (FcfCollection.ToArray() -> Fcf[]). Characteristic
+    // accepts English enum names here; Chinese GB/T names (平面度 etc.) are
+    // mapped Python-side because this source is read by csc with the ANSI
+    // codepage and non-ASCII string literals would garble (UTF-8 no BOM).
+    // Standalone sheet-coordinate placement like the datum symbol; no leader.
+    private static string CreateGdtFrame(string[] parts)
+    {
+        if (parts.Length < 5)
+            return ErrJson("usage: nx_create_gdt_frame <char> <tol> <x> <y> "
+                + "[d1=A] [d2=B] [d3=C] [shape=diameter|none|spherical|square] [mat=mmc|lmc|rfs]");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+            try { _session.ApplicationSwitchImmediate("UG_APP_DRAFTING"); }
+            catch (Exception ea) { Log("app switch warn: " + ea.Message); }
+
+            string charTok = parts[1].Trim();
+            string tol = parts[2].Trim();
+            double posx = D(parts[3]);
+            double posy = D(parts[4]);
+
+            FcfChar ch;
+            if (!TryMapFcfCharacteristic(charTok, out ch))
+                return ErrJson("unknown geometric characteristic '" + charTok
+                    + "' (english names e.g. flatness/position/circularrunout; "
+                    + "chinese names are mapped on the python side)");
+
+            string d1 = "", d2 = "", d3 = "";
+            FcfZoneShape zone =
+                FcfZoneShape.None;
+            FcfMatMod mat =
+                FcfMatMod.None;
+            for (int i = 5; i < parts.Length; i++)
+            {
+                string tok = parts[i];
+                if (tok.StartsWith("d1=", StringComparison.OrdinalIgnoreCase))
+                {
+                    d1 = tok.Substring(3).Trim().ToUpperInvariant();
+                }
+                else if (tok.StartsWith("d2=", StringComparison.OrdinalIgnoreCase))
+                {
+                    d2 = tok.Substring(3).Trim().ToUpperInvariant();
+                }
+                else if (tok.StartsWith("d3=", StringComparison.OrdinalIgnoreCase))
+                {
+                    d3 = tok.Substring(3).Trim().ToUpperInvariant();
+                }
+                else if (tok.StartsWith("shape=", StringComparison.OrdinalIgnoreCase))
+                {
+                    string s = tok.Substring(6).Trim().ToLowerInvariant();
+                    if (s == "diameter" || s == "dia") zone =
+                        FcfZoneShape.Diameter;
+                    else if (s == "spherical" || s == "sph") zone =
+                        FcfZoneShape.SphericalDiameter;
+                    else if (s == "square" || s == "sq") zone =
+                        FcfZoneShape.Square;
+                    else zone =
+                        FcfZoneShape.None;
+                }
+                else if (tok.StartsWith("mat=", StringComparison.OrdinalIgnoreCase))
+                {
+                    string s = tok.Substring(4).Trim().ToLowerInvariant();
+                    if (s == "mmc") mat =
+                        FcfMatMod.MaximumMaterialCondition;
+                    else if (s == "lmc") mat =
+                        FcfMatMod.LeastMaterialCondition;
+                    else if (s == "rfs") mat =
+                        FcfMatMod.RegardlessOfFeatureSize;
+                }
+            }
+            if (d1.Length > 1 || d2.Length > 1 || d3.Length > 1)
+                return ErrJson("datum letters must be single characters, got '"
+                    + d1 + "/" + d2 + "/" + d3 + "'");
+
+            // FcfCollection is the counter for drafting FCFs; Gdts also moves
+            // (DraftingFeatureControlFrame : Gdt) - report both on failure.
+            int before = 0, gdtBefore = 0;
+            try { before = _part.Annotations.Fcfs.ToArray().Length; } catch { }
+            try { gdtBefore = _part.Gdts.ToArray().Length; } catch { }
+
+            NXOpen.Annotations.DraftingFeatureControlFrameBuilder fb =
+                _part.Annotations.CreateDraftingFeatureControlFrameBuilder(null);
+            string jid = "";
+            try
+            {
+                fb.Characteristic = ch;
+                // SingleFrame style renders ONLY the builder's initial first row;
+                // an appended second row is silently ignored (default value then
+                // shows as "0.0"). So configure the existing row 0 in place.
+                NXOpen.Annotations.FeatureControlFrameDataBuilder[] rows0 =
+                    fb.FeatureControlFrameDataList.GetContents();
+                NXOpen.Annotations.FeatureControlFrameDataBuilder row =
+                    (rows0.Length > 0)
+                        ? rows0[0]
+                        : _part.Annotations.CreateFeatureControlFrameDataBuilder(null);
+                row.ToleranceValue = tol;
+                if (zone != FcfZoneShape.None)
+                    row.ZoneShape = zone;
+                if (mat != FcfMatMod.None)
+                    row.MaterialModifier = mat;
+                SetDatumRef(row.PrimaryDatumReference, d1);
+                SetDatumRef(row.SecondaryDatumReference, d2);
+                SetDatumRef(row.TertiaryDatumReference, d3);
+                if (rows0.Length == 0)
+                    fb.FeatureControlFrameDataList.Append(row);
+
+                fb.Origin.OriginPoint = new Point3d(posx, posy, 0.0);
+                // Commit returns NXObject (the concrete DraftingFeatureControlFrame
+                // type name is absent from the NX12 assembly); no cast needed -
+                // JournalIdentifier/SetName live on the base class.
+                NXObject obj = fb.Commit();
+                if (obj != null)
+                {
+                    try { obj.SetName("MCP_GDT"); } catch { }
+                    try { jid = obj.JournalIdentifier; } catch { }
+                }
+            }
+            finally { try { fb.Destroy(); } catch { } }
+
+            int after = 0, gdtAfter = 0;
+            try { after = _part.Annotations.Fcfs.ToArray().Length; } catch { }
+            try { gdtAfter = _part.Gdts.ToArray().Length; } catch { }
+            if (string.IsNullOrEmpty(jid) && after <= before && gdtAfter <= gdtBefore)
+                return ErrJson("gdt frame created nothing (fcfs "
+                    + before + " -> " + after + ", gdts " + gdtBefore + " -> " + gdtAfter + ")");
+            try { _part.DrawingSheets.RefreshCurrentSheet(); } catch { }
+            string prefix = (zone == FcfZoneShape.Diameter ? "dia " : "")
+                + (zone == FcfZoneShape.SphericalDiameter ? "S " : "")
+                + (zone == FcfZoneShape.Square ? "sq " : "");
+            string dstr = (d1.Length > 0 ? "|" + d1 : "")
+                + (d2.Length > 0 ? "|" + d2 : "")
+                + (d3.Length > 0 ? "|" + d3 : "");
+            if (mat == FcfMatMod.MaximumMaterialCondition)
+                dstr += " (M)";
+            else if (mat == FcfMatMod.LeastMaterialCondition)
+                dstr += " (L)";
+            return OkJson("gdt_frame", jid,
+                "gdt frame '" + charTok + "' tol " + prefix + tol + dstr
+                + " created (gdts " + gdtBefore + " -> " + gdtAfter + ")");
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_gdt_frame failed: " + e.Message);
+        }
+    }
+
+    // Sets a datum letter on an FCF row's reference sub-builder; the fresh-row
+    // references can be null (NX12) - skip instead of throwing, the caller
+    // reports which references were missing via the loader log.
+    private static void SetDatumRef(NXOpen.Annotations.DatumReferenceBuilder rb, string letter)
+    {
+        if (letter == null || letter.Length == 0) return;
+        if (rb == null) { Log("gdt datum ref null, letter '" + letter + "' skipped"); return; }
+        rb.Letter = letter;
+    }
+
+    // Maps an English characteristic token to FcfCharacteristic. Full enum
+    // names (case-insensitive) plus the short forms process engineers type.
+    private static bool TryMapFcfCharacteristic(
+        string token,
+        out FcfChar ch)
+    {
+        string s = token.Trim().ToLowerInvariant();
+        switch (s)
+        {
+            case "straightness": ch = FcfChar.Straightness; return true;
+            case "flatness": case "flat": ch = FcfChar.Flatness; return true;
+            case "circularity": case "circ": case "roundness":
+                ch = FcfChar.Circularity; return true;
+            case "cylindricity": case "cyl": ch = FcfChar.Cylindricity; return true;
+            case "profileofaline": case "lineprofile": ch = FcfChar.ProfileOfALine; return true;
+            case "profileofasurface": case "surfaceprofile": case "profile":
+                ch = FcfChar.ProfileOfASurface; return true;
+            case "angularity": case "ang": ch = FcfChar.Angularity; return true;
+            case "perpendicularity": case "perp": ch = FcfChar.Perpendicularity; return true;
+            case "parallelism": case "par": ch = FcfChar.Parallelism; return true;
+            case "position": case "pos": ch = FcfChar.Position; return true;
+            case "concentricity": ch = FcfChar.Concentricity; return true;
+            case "symmetry": case "sym": ch = FcfChar.Symmetry; return true;
+            case "circularrunout": case "runout": ch = FcfChar.CircularRunout; return true;
+            case "totalrunout": ch = FcfChar.TotalRunout; return true;
+            default: ch = FcfChar.Straightness; return false;
         }
     }
 

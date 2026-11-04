@@ -421,6 +421,30 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
             _fmt(float(params["target_size"])),
             _fmt(float(params["new_value"])),
         )
+    if method == "nx_create_gdt_frame":
+        # Loader 语法: nx_create_gdt_frame <char> <tol> <x> <y>
+        #              [d1=A] [d2=B] [d3=C] [shape=..] [mat=..]
+        # characteristic 已在 certified.py 归一化为英文枚举名（中文别名
+        # 平面度/位置度等在那边映射，Loader 源码按 ANSI 代码页编译不能放中文）。
+        cmd = "nx_create_gdt_frame %s %s %s %s" % (
+            str(params.get("characteristic", "")),
+            str(params.get("tolerance", "")),
+            _fmt(float(params.get("pos_x", 0.0))),
+            _fmt(float(params.get("pos_y", 0.0))),
+        )
+        for slot, key in (("d1", "datum_primary"),
+                          ("d2", "datum_secondary"),
+                          ("d3", "datum_tertiary")):
+            d = str(params.get(key, "") or "").strip()
+            if d:
+                cmd += " %s=%s" % (slot, d)
+        zone = str(params.get("zone_shape", "none") or "none").strip().lower()
+        if zone and zone != "none":
+            cmd += " shape=" + zone
+        mat = str(params.get("material_modifier", "none") or "none").strip().lower()
+        if mat and mat != "none":
+            cmd += " mat=" + mat
+        return cmd
     return None  # unsupported by the phase-1 Loader
 
 

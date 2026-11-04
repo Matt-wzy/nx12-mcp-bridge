@@ -43,6 +43,26 @@ class BridgeCaller(Protocol):
     async def call(self, method: str, params: dict[str, Any]) -> dict[str, Any]: ...
 
 
+# GB/T 1182 中文名 -> Loader 英文枚举名（Loader 源码按 ANSI 代码页编译，
+# 中文字面量只能放这边）。键不含空格，值小写英文枚举名。
+_FCF_CHARACTERISTIC_ALIASES = {
+    "直线度": "straightness",
+    "平面度": "flatness",
+    "圆度": "circularity",
+    "圆柱度": "cylindricity",
+    "线轮廓度": "profileofaline",
+    "面轮廓度": "profileofasurface",
+    "倾斜度": "angularity",
+    "垂直度": "perpendicularity",
+    "平行度": "parallelism",
+    "位置度": "position",
+    "同轴度": "concentricity",
+    "对称度": "symmetry",
+    "圆跳动": "circularrunout",
+    "全跳动": "totalrunout",
+}
+
+
 def _pick_attr(attrs: dict[str, Any], keys: tuple[str, ...]) -> str:
     """Return the first attribute value matching any key (case-insensitive)."""
     lowered = {str(k).strip().lower(): str(v) for k, v in (attrs or {}).items()}
@@ -320,6 +340,8 @@ CERTIFIED_TOOL_NAMES = {
     "nx_create_id_symbol",
     # 基准符号（GD&T 基准字母框，GB/T 17851；与形状公差框格配套）
     "nx_create_datum_symbol",
+    # 形位公差框（GD&T 特征控制框，GB/T 1182；与基准符号配套，工艺图刚需）
+    "nx_create_gdt_frame",
     # 对称中心线（轴类零件轴线，SymmetricalCenterlineBuilder，管道实测通过）
     "nx_create_centerline",
     "nx_create_roughness",
@@ -1239,6 +1261,54 @@ def create_certified_server(
             **await call(
                 "nx_create_datum_symbol",
                 {"letter": letter, "pos_x": pos_x, "pos_y": pos_y},
+            )
+        )
+
+    @mcp.tool()
+    async def nx_create_gdt_frame(
+        characteristic: str,
+        tolerance: str,
+        pos_x: float,
+        pos_y: float,
+        datum_primary: str = "",
+        datum_secondary: str = "",
+        datum_tertiary: str = "",
+        zone_shape: Literal["none", "diameter", "spherical", "square"] = "none",
+        material_modifier: Literal["none", "mmc", "lmc", "rfs"] = "none",
+    ) -> OperationResult:
+        """Create a feature control frame (形位公差框, GD&T) on the drawing sheet.
+
+        The geometric-tolerance frame of process drawings (GB/T 1182 /
+        ISO 1101): characteristic symbol + tolerance value + up to three datum
+        letters, e.g. |⏀|Ø0.05|A|B(C)|. characteristic accepts the 14 GB/T
+        names in Chinese (直线度/平面度/圆度/圆柱度/线轮廓度/面轮廓度/倾斜度/
+        垂直度/平行度/位置度/同轴度/对称度/圆跳动/全跳动) or English enum
+        names (case-insensitive, e.g. flatness, position, totalrunout).
+        tolerance is the value text, e.g. "0.02". zone_shape=diameter puts the
+        Ø symbol in front of the value (axial holes/axis zones); material
+        modifier applies to the tolerance ( mmc/lmc ). Datum letters are
+        uppercased single characters, e.g. datum_primary="A". pos_x/pos_y are
+        sheet coordinates (mm); placement is standalone (no leader) - put it
+        under the dimension line it controls, then pair it with
+        nx_create_datum_symbol for referenced datums.
+        """
+        key = _FCF_CHARACTERISTIC_ALIASES.get(characteristic.strip())
+        if key is None:
+            key = characteristic.strip().lower().replace(" ", "")
+        return OperationResult(
+            **await call(
+                "nx_create_gdt_frame",
+                {
+                    "characteristic": key,
+                    "tolerance": tolerance.strip(),
+                    "pos_x": pos_x,
+                    "pos_y": pos_y,
+                    "datum_primary": datum_primary.strip().upper(),
+                    "datum_secondary": datum_secondary.strip().upper(),
+                    "datum_tertiary": datum_tertiary.strip().upper(),
+                    "zone_shape": zone_shape,
+                    "material_modifier": material_modifier,
+                },
             )
         )
 

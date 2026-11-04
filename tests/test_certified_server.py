@@ -185,3 +185,52 @@ async def test_nonfinite_values_fail_before_bridge_call(tmp_path, value, tool):
         result = await client.call_tool(tool, params)
     assert result.is_error
     assert bridge.calls == []
+
+
+@pytest.mark.asyncio
+async def test_gdt_frame_maps_chinese_characteristic_and_passes_through():
+    bridge = RecordingBridge({"status": "success", "message": "created"})
+    server = create_server(bridge)
+
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "nx_create_gdt_frame",
+            {
+                "characteristic": "位置度",
+                "tolerance": " 0.05 ",
+                "pos_x": 60.0,
+                "pos_y": 30.0,
+                "datum_primary": "A",
+                "datum_secondary": "b",
+                "zone_shape": "diameter",
+                "material_modifier": "mmc",
+            },
+        )
+
+    assert result.is_error is False
+    method, params = bridge.calls[0]
+    assert method == "nx_create_gdt_frame"
+    # 中文特征名归一化为英文枚举名；基准字母大写；tolerance 去空白
+    assert params["characteristic"] == "position"
+    assert params["tolerance"] == "0.05"
+    assert params["datum_primary"] == "A"
+    assert params["datum_secondary"] == "B"
+    assert params["zone_shape"] == "diameter"
+    assert params["material_modifier"] == "mmc"
+
+
+@pytest.mark.asyncio
+async def test_gdt_frame_english_characteristic_passthrough():
+    bridge = RecordingBridge({"status": "success", "message": "created"})
+    server = create_server(bridge)
+
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "nx_create_gdt_frame",
+            {"characteristic": "Circular Runout", "tolerance": "0.03",
+             "pos_x": 0.0, "pos_y": 0.0},
+        )
+
+    assert result.is_error is False
+    _, params = bridge.calls[0]
+    assert params["characteristic"] == "circularrunout"
