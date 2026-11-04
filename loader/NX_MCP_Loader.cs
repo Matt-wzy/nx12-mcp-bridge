@@ -50,6 +50,9 @@
 //                                                   (形位公差框 GD&T，GB/T 1182 特征项目+公差值+
 //                                                   基准字母；DraftingFeatureControlFrameBuilder
 //                                                   路线，坐标为图纸坐标，中文特征名在 Python 侧映射)
+//   nx_create_hole_table <body_id> <x> <y> [edges=i,j,...]  (孔表：孔位标注+坐标明细表，
+//                                                   钻孔工序常用；edges 缺省=全部圆边，
+//                                                   HoleTableBuilder 路线，坐标为图纸坐标)
 //   nx_export_pdf <path> [ALL|sheet]  (ALL = 全部图纸页导出到一个多页 PDF)
 //   nx_build_plate_test           (single-command acceptance part)
 //   nx_create_wave_link <src_master> <target> [body_index] [assoc=1] [x=..] [y=..] [z=..]   (WAVE 链接：源件为装配根，目标件作下游组件，固定时间戳记/提取几何，可选摆放偏移)
@@ -435,6 +438,8 @@ public static class NX_MCP_Loader
                 return CreateDatumSymbol(parts);
             case "nx_create_gdt_frame":
                 return CreateGdtFrame(parts);
+            case "nx_create_hole_table":
+                return CreateHoleTable(parts);
             case "nx_create_wave_link":
                 return CreateWaveLink(parts);
             case "nx_create_section_view":
@@ -5232,6 +5237,181 @@ public static class NX_MCP_Loader
             case "circularrunout": case "runout": ch = FcfChar.CircularRunout; return true;
             case "totalrunout": ch = FcfChar.TotalRunout; return true;
             default: ch = FcfChar.Straightness; return false;
+        }
+    }
+
+    // nx_create_hole_table <body_id> <x> <y> [edges=i,j,...]
+    // Hole table (孔表) for drilling/process drawings: labels every selected
+    // hole in the views and places a coordinate table at the sheet position.
+    // Route (reflection, 2026-11-05): HoleTableCollection.CreateHoleTableBuilder
+    // + SelectedObjects (hole edges) + Origin. Counter = Annotations.HoleTables.
+    // Without edges= all circular edges are picked, deduped by rim position +
+    // circumference (a through hole has coincident top/bottom edges); the
+    // builder's own hole filter is the second line of defence.
+    private static string CreateHoleTable(string[] parts)
+    {
+        if (parts.Length < 4)
+            return ErrJson("usage: nx_create_hole_table <body_id> <x> <y> [edges=i,j,...] [view=<view_id>]");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+            try { _session.ApplicationSwitchImmediate("UG_APP_DRAFTING"); }
+            catch (Exception ea) { Log("app switch warn: " + ea.Message); }
+
+            Body body = ResolveBody(parts[1].Trim());
+            double posx = D(parts[2]);
+            double posy = D(parts[3]);
+            int[] pick = null;
+            string viewTok = "";
+            for (int i = 4; i < parts.Length; i++)
+            {
+                if (parts[i].StartsWith("edges=", StringComparison.OrdinalIgnoreCase))
+                    pick = ParseIndices(parts[i].Substring(6));
+                else if (parts[i].StartsWith("view=", StringComparison.OrdinalIgnoreCase))
+                    viewTok = parts[i].Substring(5).Trim();
+            }
+            // the hole table measures hole coordinates against the view origin,
+            // so an associated drafting view is required (plain sheet origin
+            // fails Commit with "孔表的坐标原点无效")
+            DraftingView htView = null;
+            DrawingSheet htSheet = null;
+            if (viewTok.Length > 0)
+            {
+                try { htView = ResolveViewAnySheet(viewTok, out htSheet); }
+                catch (Exception ev) { return ErrJson("view '" + viewTok + "' not found: " + ev.Message); }
+            }
+
+            Edge[] edges = body.GetEdges();
+            List<NXObject> sel = new List<NXObject>();
+            if (pick != null)
+            {
+                foreach (int ix in pick)
+                {
+                    if (ix < 0 || ix >= edges.Length)
+                        return ErrJson("edge_index out of range: " + ix + " (have " + edges.Length + ")");
+                    sel.Add(edges[ix]);
+                }
+            }
+            else
+            {
+                var seen = new HashSet<string>();
+                foreach (Edge e in edges)
+                {
+                    string ctype = "";
+                    try { ctype = e.SolidEdgeType.ToString(); } catch { }
+                    // nx_hole builds circles as equal-radii ellipses, so NX
+                    // reports the hole rim edges as "Elliptical"
+                    if (ctype != "Circular" && ctype != "Elliptical") continue;
+                    Point3d s = new Point3d(), en = new Point3d();
+                    try { e.GetVertices(out s, out en); } catch { }
+                    double len = 0.0;
+                    try { len = e.GetLength(); } catch { }
+                    // rim x/y + circumference identify the hole (a through hole
+                    // has coincident top/bottom rims; z is dropped so both
+                    // collapse to one hole)
+                    string key = Math.Round((s.X + en.X) / 2.0, 2) + ","
+                        + Math.Round((s.Y + en.Y) / 2.0, 2) + ","
+                        + Math.Round(len, 2);
+                    if (!seen.Add(key)) continue;
+                    sel.Add(e);
+                }
+            }
+            if (sel.Count == 0)
+                return ErrJson("no hole edges selected (pass edges= indices from nx_list_edges,"
+                    + " usually SolidEdgeType=Circular)");
+
+            int before = 0;
+            try { before = _part.Annotations.HoleTables.ToArray().Length; } catch { }
+
+            NXOpen.Annotations.HoleTableBuilder hb =
+                _part.Annotations.HoleTables.CreateHoleTableBuilder(null);
+            string jid = "";
+            int added = 0;
+            try
+            {
+                foreach (NXObject o in sel)
+                {
+                    try
+                    {
+                        if (htView != null)
+                        {
+                            // hole rims must carry the view association, else
+                            // Commit reports "孔表的所选对象无效"
+                            Edge se = o as Edge;
+                            Point3d ss = new Point3d(), sen = new Point3d();
+                            if (se != null) { try { se.GetVertices(out ss, out sen); } catch { } }
+                            hb.SelectedObjects.Add(o, htView, new Point3d(
+                                (ss.X + sen.X) / 2.0, (ss.Y + sen.Y) / 2.0, (ss.Z + sen.Z) / 2.0));
+                        }
+                        else
+                        {
+                            hb.SelectedObjects.Add(o);
+                        }
+                        added++;
+                    }
+                    catch (Exception eo) { Log("hole table select warn: " + eo.Message); }
+                }
+                if (htView != null)
+                {
+                    try
+                    {
+                        hb.Origin.AnnotationView.SetValue(htView, htView,
+                            new Point3d(posx, posy, 0.0));
+                    }
+                    catch (Exception ev) { Log("hole table view warn: " + ev.Message); }
+                    // the ordinate origin (measurement datum) must be a POINT
+                    // object in the view - a bare edge assoc did not satisfy the
+                    // origin check ("孔表的坐标原点无效")
+                    try
+                    {
+                        foreach (Edge oe in edges)
+                        {
+                            string octype = "";
+                            try { octype = oe.SolidEdgeType.ToString(); } catch { }
+                            if (octype != "Linear") continue;
+                            Point3d os = new Point3d(), oen = new Point3d();
+                            oe.GetVertices(out os, out oen);
+                            Point3d corner = new Point3d(os.X, os.Y, os.Z);
+                            NXOpen.Point pt = null;
+                            try { pt = _part.Points.CreatePoint(corner); } catch (Exception ep) { Log("point create warn: " + ep.Message); }
+                            if (pt != null)
+                            {
+                                hb.OrdinateOrigin.SetValue(pt, htView, corner);
+                            }
+                            else
+                            {
+                                hb.OrdinateOrigin.SetValue(oe, htView, corner);
+                            }
+                            break;
+                        }
+                    }
+                    catch (Exception ev) { Log("hole table ordinate origin warn: " + ev.Message); }
+                }
+                hb.Origin.OriginPoint = new Point3d(posx, posy, 0.0);
+                NXObject obj = hb.Commit();
+                if (obj != null)
+                {
+                    try { obj.SetName("MCP_HOLE_TABLE"); } catch { }
+                    try { jid = obj.JournalIdentifier; } catch { }
+                }
+            }
+            finally { try { hb.Destroy(); } catch { } }
+
+            int after = 0;
+            try { after = _part.Annotations.HoleTables.ToArray().Length; } catch { }
+            if (string.IsNullOrEmpty(jid) && after <= before)
+                return ErrJson("hole table created nothing (hole tables "
+                    + before + " -> " + after + ", selected " + added + " edges)");
+            try { _part.DrawingSheets.RefreshCurrentSheet(); } catch { }
+            return OkJson("hole_table", jid,
+                "hole table created at " + posx + "," + posy + " ("
+                + added + " hole edges selected, hole tables " + before + " -> " + after
+                + "); open a view to see the hole labels");
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_hole_table failed: " + e.Message);
         }
     }
 
