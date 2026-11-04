@@ -133,3 +133,107 @@ def test_detail_view_scale_and_name():
 def test_measure_angle_wire_format():
     cmd = _command("nx_measure_angle", {"body_id": "1", "edge_index_1": 2, "edge_index_2": 5})
     assert cmd == "nx_measure_angle 1 2 5"
+
+
+def test_mass_properties_per_body_flag():
+    cmd = _command(
+        "nx_mass_properties",
+        {"density_kg_m3": 2700.0, "accuracy": 0.99, "per_body": True},
+    )
+    assert cmd == "nx_mass_properties 2700 0.99 per=1"
+
+
+def test_section_view_minimal_wire_format():
+    cmd = _command(
+        "nx_create_section_view",
+        {
+            "parent_view_id": "0",
+            "cut_x1": 20.0, "cut_y1": 30.0,
+            "cut_x2": 120.0, "cut_y2": 30.0,
+            "pos_x": 200.0, "pos_y": 100.0,
+        },
+    )
+    assert cmd == "nx_create_section_view 0 20 30 120 30 200 100"
+
+
+def test_section_view_full_wire_format():
+    cmd = _command(
+        "nx_create_section_view",
+        {
+            "parent_view_id": "TOP",
+            "cut_x1": 20.0, "cut_y1": 30.0,
+            "cut_x2": 120.0, "cut_y2": 30.0,
+            "pos_x": 200.0, "pos_y": 100.0,
+            "scale": 2.0,
+            "arrow_dx": 0.0, "arrow_dy": -1.0,
+            "step_dx": 0.0, "step_dy": 1.0,
+            "view_name": "SECTION_A",
+        },
+    )
+    assert cmd == (
+        "nx_create_section_view TOP 20 30 120 30 200 100"
+        " scale=2 arrow=0,-1 step=0,1 name=SECTION_A"
+    )
+
+
+def test_delete_view_wire_format():
+    assert _command("nx_delete_view", {"view_id": "SECTION_A"}) == "nx_delete_view SECTION_A"
+
+
+def test_list_assembly_wire_format():
+    assert _command("nx_list_assembly", {}) == "nx_list_assembly"
+
+
+def test_adapt_mass_properties_carries_per_body_rows():
+    from nx_mcp.loader_bridge import _adapt
+
+    adapted = _adapt(
+        "nx_mass_properties",
+        {},
+        {
+            "ok": True,
+            "body_count": 2,
+            "mass_kg": 1.0,
+            "volume_mm3": 1000.0,
+            "surface_area_mm2": 600.0,
+            "density_kg_m3": 7830.0,
+            "cog_x_mm": 1.0,
+            "cog_y_mm": 2.0,
+            "cog_z_mm": 3.0,
+            "per_body": [
+                {
+                    "body_id": "Block",
+                    "volume_mm3": 1000.0,
+                    "surface_area_mm2": 600.0,
+                    "mass_kg": 1.0,
+                    "cog_x_mm": 1.0,
+                    "cog_y_mm": 2.0,
+                    "cog_z_mm": 3.0,
+                }
+            ],
+            "result": "ok",
+        },
+    )
+    assert adapted["bodies"][0]["body_id"] == "Block"
+    assert adapted["bodies"][0]["center_of_gravity"] == {"x": 1.0, "y": 2.0, "z": 3.0}
+
+
+def test_adapt_list_assembly_maps_rows():
+    from nx_mcp.loader_bridge import _adapt
+
+    adapted = _adapt(
+        "nx_list_assembly",
+        {},
+        {
+            "ok": True,
+            "count": 2,
+            "rows": [
+                {"level": 1, "name": "OP10", "display": "OP10", "part": "C:/m/op10.prt", "children": 1},
+                {"level": 2, "name": "COMP_2", "display": "COMP_2", "part": "", "children": 0},
+            ],
+            "result": "assembly has 2 component instance(s)",
+        },
+    )
+    assert adapted["count"] == 2
+    assert adapted["rows"][0]["part_path"] == "C:/m/op10.prt"
+    assert adapted["rows"][1]["display_name"] == "COMP_2"

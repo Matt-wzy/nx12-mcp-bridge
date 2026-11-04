@@ -34,7 +34,7 @@ AI（自然语言）
 - 修复 `ShellBuilder` 相关 CS1061（改用 `ReplaceRules`）
 - 迁移 `Update.AddToDeleteList` → `AddObjectsToDeleteList`（NX12.0.0 弃用）
 
-### 新增能力（共 57 个 MCP 工具）
+### 新增能力（共 61 个 MCP 工具）
 
 | 类别 | 命令 |
 |---|---|
@@ -47,6 +47,9 @@ AI（自然语言）
 | 对称中心线 | `nx_create_centerline`（轴类零件轴线，SymmetricalCenterlineBuilder） |
 | DXF/DWG 导出 | `nx_export_dwg`（进程外官方 translator，激光切割/套料用 .dxf） |
 | 角度测量 | `nx_measure_angle`（两直线边夹角 + 锐角补角） |
+| 剖视图 | `nx_create_section_view`（UFUN CreateSimpleSxview，剖切线 + A-A 箭头 + 剖面线，PDF 实测渲染） |
+| 删图纸视图 | `nx_delete_view`（改图前删旧视图；剖视图连带删剖切线） |
+| 装配 / BOM | `nx_list_assembly`（装配树拍平）+ `nx_export_bom_csv`（CSV 明细表，Excel 直接开） |
 | 全套图纸 PDF | `nx_export_pdf <路径> ALL`（全部图纸页合成一个多页 PDF） |
 | 标题栏 | `nx_create_title_block` |
 | 部件属性 | `nx_set_attribute` / `nx_list_attributes`（**标题栏内容来源**） |
@@ -129,12 +132,12 @@ MCP 配置示例（`~/.workbuddy/mcp.json`）：
 
 | 功能 | 状态 |
 |---|---|
-| 中心线 | `AutomaticCenterlineBuilder.Commit()` 报错 |
-| DWG/DXF 导出 | `Commit()` 成功但不出文件 |
-| 剖视图 | `SectionLineBuilder` 在 NX10 弃用，替代路径断档 |
-| 局部放大 | 报"用于定义边界的点不能相同" |
+| 局部放大 | 视图/边界/标签可创建，但放大几何不渲染（UFUN 三条路线已探明，差最后一步） |
 | 图框边框线 | `NXOpen.Diagramming` 属图表应用，不适用于制图图纸页 |
 | 真实螺纹 | 上游亦不支持 |
+
+~~中心线 / DWG-DXF 导出 / 剖视图~~ 已分别于 2026-11 攻克
+（`nx_create_centerline`、`nx_export_dwg`、`nx_create_section_view`）。
 
 上表各项的**详细调研过程**（入口 API、已试组合、排除项、错误原文、下一步建议）
 由维护者另行整理，欢迎开 issue 认领其中任意一项——这些是最有价值的待攻克点。

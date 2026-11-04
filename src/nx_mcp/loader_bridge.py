@@ -144,10 +144,36 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
             str(params.get("edge_index_2", 0)),
         )
     if method == "nx_mass_properties":
-        return "nx_mass_properties %s %s" % (
+        cmd = "nx_mass_properties %s %s" % (
             _fmt(params.get("density_kg_m3", 7830.0)),
             _fmt(params.get("accuracy", 0.99)),
         )
+        if params.get("per_body"):
+            cmd += " per=1"
+        return cmd
+    if method == "nx_create_section_view":
+        # Loader 语法: nx_create_section_view <view> <x1> <y1> <x2> <y2> <px> <py> [k=v]
+        # 全部坐标均为图纸坐标（mm）；k=v: scale= / arrow=dx,dy / step=dx,dy / name=
+        cmd = "nx_create_section_view %s %s %s %s %s %s %s" % (
+            str(params.get("parent_view_id", "")),
+            _fmt(float(params["cut_x1"])), _fmt(float(params["cut_y1"])),
+            _fmt(float(params["cut_x2"])), _fmt(float(params["cut_y2"])),
+            _fmt(float(params["pos_x"])), _fmt(float(params["pos_y"])),
+        )
+        if params.get("scale"):
+            cmd += " scale=" + _fmt(float(params["scale"]))
+        if params.get("arrow_dx") is not None and params.get("arrow_dy") is not None:
+            cmd += " arrow=%s,%s" % (_fmt(float(params["arrow_dx"])), _fmt(float(params["arrow_dy"])))
+        if params.get("step_dx") is not None and params.get("step_dy") is not None:
+            cmd += " step=%s,%s" % (_fmt(float(params["step_dx"])), _fmt(float(params["step_dy"])))
+        name = str(params.get("view_name", "") or "")
+        if name:
+            cmd += " name=" + name
+        return cmd
+    if method == "nx_delete_view":
+        return "nx_delete_view " + str(params.get("view_id", ""))
+    if method == "nx_list_assembly":
+        return "nx_list_assembly"
     if method == "nx_create_centerline":
         return "nx_create_centerline %s %s %s" % (
             str(params.get("view_id", "")),
@@ -729,6 +755,21 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
             "message": msg,
         }
     if method == "nx_mass_properties":
+        bodies = []
+        for b in resp.get("per_body") or []:
+            bodies.append(
+                {
+                    "body_id": str(b.get("body_id", "")),
+                    "mass_kg": float(b.get("mass_kg", 0.0)),
+                    "volume_mm3": float(b.get("volume_mm3", 0.0)),
+                    "surface_area_mm2": float(b.get("surface_area_mm2", 0.0)),
+                    "center_of_gravity": {
+                        "x": float(b.get("cog_x_mm", 0.0)),
+                        "y": float(b.get("cog_y_mm", 0.0)),
+                        "z": float(b.get("cog_z_mm", 0.0)),
+                    },
+                }
+            )
         return {
             "status": "success",
             "body_count": int(resp.get("body_count", 0)),
@@ -741,8 +782,31 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
                 "y": float(resp.get("cog_y_mm", 0.0)),
                 "z": float(resp.get("cog_z_mm", 0.0)),
             },
+            "bodies": bodies,
             "message": msg,
         }
+    if method == "nx_list_assembly":
+        rows = []
+        for r in resp.get("rows") or []:
+            rows.append(
+                {
+                    "level": int(r.get("level", 1)),
+                    "name": str(r.get("name", "")),
+                    "display_name": str(r.get("display", "")),
+                    "part_path": str(r.get("part", "")),
+                    "children": int(r.get("children", 0)),
+                }
+            )
+        return {
+            "status": "success",
+            "count": int(resp.get("count", len(rows))),
+            "rows": rows,
+            "message": msg,
+        }
+    if method == "nx_create_section_view":
+        return {"status": "success", "view": str(resp.get("view", "")), "message": msg}
+    if method == "nx_delete_view":
+        return {"status": "success", "message": msg}
     if method == "nx_measure_angle":
         return {
             "status": "success",

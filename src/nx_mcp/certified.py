@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
+import csv
 import json
+import os
 from typing import Annotated, Any, Literal, Protocol
 
 from mcp.server.mcpserver import MCPServer
@@ -11,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from nx_mcp import __version__
 from nx_mcp.contracts import (
+    AssemblyListResult,
     ExportResult,
     ExtrudeResult,
     MassPropertiesResult,
@@ -36,6 +40,32 @@ class Point3D(BaseModel):
 
 class BridgeCaller(Protocol):
     async def call(self, method: str, params: dict[str, Any]) -> dict[str, Any]: ...
+
+
+def _write_bom_csv(path: str, rows: list[dict[str, Any]]) -> str:
+    """Write flattened assembly rows as a CSV bill of materials.
+
+    utf-8-sig so Excel opens Chinese part names correctly; one row per
+    component instance (level/name/display_name/part_path/children).
+    """
+    out_abs = os.path.abspath(path)
+    outdir = os.path.dirname(out_abs)
+    if outdir:
+        os.makedirs(outdir, exist_ok=True)
+    with open(out_abs, "w", newline="", encoding="utf-8-sig") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(["level", "name", "display_name", "part_path", "children"])
+        for row in rows:
+            writer.writerow(
+                [
+                    int(row.get("level", 1)),
+                    str(row.get("name", "")),
+                    str(row.get("display_name", "")),
+                    str(row.get("part_path", "")),
+                    int(row.get("children", 0)),
+                ]
+            )
+    return "exported %d BOM row(s) to %s" % (len(rows), out_abs)
 
 
 CERTIFIED_TOOL_NAMES = {
@@ -93,6 +123,13 @@ CERTIFIED_TOOL_NAMES = {
     "nx_measure_angle",
     # 质量属性查询（体积/表面积/重心/质量）——工艺材料定额/毛坯选用常用
     "nx_mass_properties",
+    # 简单剖视图（UFUN CreateSimpleSxview 路线，工艺图纸核心刚需）
+    "nx_create_section_view",
+    # 删图纸视图（改图前必用）
+    "nx_delete_view",
+    # 装配树拍平 + BOM CSV 导出（工艺路线表基础）
+    "nx_list_assembly",
+    "nx_export_bom_csv",
     # 对称中心线（轴类零件轴线，SymmetricalCenterlineBuilder，管道实测通过）
     "nx_create_centerline",
     "nx_create_roughness",
@@ -841,6 +878,7 @@ def create_certified_server(
     async def nx_mass_properties(
         density_kg_m3: float = 7830.0,
         accuracy: float = 0.99,
+        per_body: bool = False,
     ) -> MassPropertiesResult:
         """Compute mass properties of all solid bodies in the active part.
 
@@ -849,13 +887,117 @@ def create_certified_server(
         override for the actual material (e.g. 2700 aluminium, 7190 cast iron,
         8940 copper, 1150 nylon). Useful for material quoting, blank (毛坯)
         selection and fixture/hoisting planning.
+
+        With per_body=True the ``bodies`` list additionally reports each solid
+        separately (multi-cavity dies / multi-operation parts need per-part
+        values, not just the sum).
         """
         return MassPropertiesResult(
             **await call(
                 "nx_mass_properties",
-                {"density_kg_m3": density_kg_m3, "accuracy": accuracy},
+                {
+                    "density_kg_m3": density_kg_m3,
+                    "accuracy": accuracy,
+                    "per_body": per_body,
+                },
             )
         )
+
+    @mcp.tool()
+    async def nx_create_section_view(
+        parent_view_id: str,
+        cut_x1: float,
+        cut_y1: float,
+        cut_x2: float,
+        cut_y2: float,
+        pos_x: float,
+        pos_y: float,
+        scale: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 1.0,
+        arrow_dx: float | None = None,
+        arrow_dy: float | None = None,
+        step_dx: float | None = None,
+        step_dy: float | None = None,
+        view_name: str = "",
+    ) -> OperationResult:
+        """Create a simple (straight) SECTION view of a parent view (剖视图).
+
+        The cut segment runs from (cut_x1, cut_y1) to (cut_x2, cut_y2) in SHEET
+        coordinates (mm, origin bottom-left) across the parent view - it is
+        drawn as a member-view line, then UF_DRAW_create_simple_sxview builds
+        the section line + view. The section view is placed at (pos_x, pos_y)
+        on the sheet. Defaults (verified live): step direction = the cut-line
+        direction, arrow direction = the perpendicular viewing direction
+        (pointing left of the x1,y1 -> x2,y2 run). Override arrow_dx/dy (or
+        step_dx/dy) to flip the viewing side; NX rejects parallel step/arrow
+        vectors, so never set both to the cut-line direction. scale is
+        relative to the parent view (1.0 = same).
+        """
+        params: dict[str, Any] = {
+            "parent_view_id": parent_view_id,
+            "cut_x1": cut_x1,
+            "cut_y1": cut_y1,
+            "cut_x2": cut_x2,
+            "cut_y2": cut_y2,
+            "pos_x": pos_x,
+            "pos_y": pos_y,
+        }
+        if scale != 1.0:
+            params["scale"] = scale
+        if arrow_dx is not None and arrow_dy is not None:
+            params["arrow_dx"], params["arrow_dy"] = arrow_dx, arrow_dy
+        if step_dx is not None and step_dy is not None:
+            params["step_dx"], params["step_dy"] = step_dx, step_dy
+        if view_name:
+            params["view_name"] = view_name
+        return OperationResult(**await call("nx_create_section_view", params))
+
+    @mcp.tool()
+    async def nx_delete_view(view_id: str) -> OperationResult:
+        """Delete a drafting view from its sheet (removes the view itself).
+
+        view_id follows nx_list_drafting_views conventions (index, name or
+        journal id). Section views also lose their section line. Use before
+        re-placing or re-annotating a drawing - NX keeps no recycle bin, so
+        verify the view_id first.
+        """
+        return OperationResult(**await call("nx_delete_view", {"view_id": view_id}))
+
+    @mcp.tool()
+    async def nx_list_assembly() -> AssemblyListResult:
+        """List the active part's component assembly tree, flattened.
+
+        One row per component INSTANCE: level (1 = top), instance name,
+        display name, child part file path (when loaded) and number of own
+        children. This is the raw BOM / 明细表 data a process routing table
+        (工艺路线表) is built from; use nx_export_bom_csv to write it out.
+        """
+        return AssemblyListResult(**await call("nx_list_assembly", {}))
+
+    @mcp.tool()
+    async def nx_export_bom_csv(path: str) -> ExportResult:
+        """Export the active part's assembly as a CSV bill of materials.
+
+        Writes one row per component instance (level, name, display_name,
+        part_path, children) into the workspace file ``path`` (UTF-8 BOM, so
+        Excel opens Chinese names correctly). The part must be an assembly;
+        plain parts export an empty table and error out - check with
+        nx_list_assembly first.
+        """
+        resolved = resolve_path(path)
+        resp = await call("nx_list_assembly", {})
+        rows = resp.get("rows") or []
+        if not rows:
+            raise MCPToolError(
+                json.dumps(
+                    NXToolError(
+                        "NX_EMPTY_ASSEMBLY",
+                        "the active part has no components; BOM export needs an assembly",
+                    ).as_dict(),
+                    ensure_ascii=False,
+                )
+            )
+        message = await asyncio.to_thread(_write_bom_csv, resolved, rows)
+        return ExportResult(status="success", path=resolved, message=message)
 
     @mcp.tool()
     async def nx_create_centerline(

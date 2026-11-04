@@ -32,8 +32,13 @@
 //   nx_linear_pattern <body_id> <X|Y|Z> <count> <spacing> [reverse=0|1]
 //   nx_fit_view
 //   nx_export_step <step-path>
-//   nx_mass_properties [density_kg_m3] [accuracy]   (体积/表面积/重心/质量，工艺常用)
+//   nx_mass_properties [density_kg_m3] [accuracy] [per=1]  (体积/表面积/重心/质量，工艺常用；per=1 逐体返回)
 //   nx_measure_angle <body_id> <edge1> <edge2>      (两直线边夹角，装夹/工序定位常用)
+//   nx_create_section_view <view> <x1> <y1> <x2> <y2> <px> <py> [scale=f] [arrow=dx,dy] [step=dx,dy] [name=t]
+//                                                   (简单剖视图，UFUN CreateSimpleSxview，坐标均为图纸坐标；
+//                                                    step=剖切线方向 arrow=视向，二者平行则 NX 报零矢量错误)
+//   nx_delete_view <view_id>                        (删除图纸视图，GTAC 路线 UF_OBJ_delete_object)
+//   nx_list_assembly                                (装配树拍平 -> BOM 行，工艺路线表数据源)
 //   nx_export_pdf <path> [ALL|sheet]  (ALL = 全部图纸页导出到一个多页 PDF)
 //   nx_build_plate_test           (single-command acceptance part)
 //   nx_create_wave_link <src_master> <target> [body_index] [assoc=1] [x=..] [y=..] [z=..]   (WAVE 链接：源件为装配根，目标件作下游组件，固定时间戳记/提取几何，可选摆放偏移)
@@ -409,6 +414,12 @@ public static class NX_MCP_Loader
                 return CreateBlock(parts);
             case "nx_create_wave_link":
                 return CreateWaveLink(parts);
+            case "nx_create_section_view":
+                return CreateSectionView(parts);
+            case "nx_delete_view":
+                return DeleteViewCmd(parts);
+            case "nx_list_assembly":
+                return ListAssembly(parts);
             default:
                 return ErrJson("unknown command: " + cmd);
         }
@@ -1352,6 +1363,13 @@ public static class NX_MCP_Loader
             if (density <= 0.0) return ErrJson("density must be > 0 (kg/m^3)");
             if (accuracy <= 0.0 || accuracy >= 1.0) accuracy = 0.99;
 
+            // optional trailing "per=1": also report per-body values (multi-cavity
+            // dies / multi-operation parts need each solid, not just the sum)
+            bool perBody = false;
+            for (int i = 3; i < parts.Length; i++)
+                if (parts[i].Trim().Equals("per=1", StringComparison.OrdinalIgnoreCase))
+                    perBody = true;
+
             List<Body> solids = new List<Body>();
             foreach (Body b in _part.Bodies.ToArray())
                 if (b.IsSolidBody) solids.Add(b);
@@ -1400,6 +1418,54 @@ public static class NX_MCP_Loader
                 + "  (density " + F(density) + " kg/m^3)"
                 + "  cog=(" + F(cog.X) + "," + F(cog.Y) + "," + F(cog.Z) + ") mm";
 
+            // per-body array (only when per=1 was passed)
+            string perJson = "";
+            if (perBody)
+            {
+                var sbp = new StringBuilder();
+                sbp.Append(",\"per_body\":[");
+                int idx = 0;
+                foreach (Body b in solids)
+                {
+                    MeasureBodies mb = null;
+                    try
+                    {
+                        try
+                        {
+                            mb = _part.MeasureManager.NewMassProperties(
+                                new Unit[] { massU, lenU, volU }, accuracy, new Body[] { b });
+                        }
+                        catch
+                        {
+                            mb = _part.MeasureManager.NewMassProperties(
+                                new Unit[] { massU, lenU }, accuracy, new Body[] { b });
+                        }
+                    }
+                    catch (Exception eb)
+                    {
+                        Log("massprops per-body ERR: " + eb.Message);
+                        continue;
+                    }
+                    double bvol = mb.Volume;
+                    double bmass = bvol * density * 1e-9;
+                    Point3d bcog = mb.Centroid;
+                    string bid = ""; try { bid = b.Name; } catch { }
+                    if (string.IsNullOrEmpty(bid)) { try { bid = b.JournalIdentifier; } catch { } }
+                    if (idx > 0) sbp.Append(",");
+                    sbp.Append("{\"body_id\":\"").Append(Esc(bid)).Append("\"");
+                    sbp.Append(",\"volume_mm3\":").Append(bvol.ToString("R", CultureInfo.InvariantCulture));
+                    sbp.Append(",\"surface_area_mm2\":").Append(mb.Area.ToString("R", CultureInfo.InvariantCulture));
+                    sbp.Append(",\"mass_kg\":").Append(bmass.ToString("R", CultureInfo.InvariantCulture));
+                    sbp.Append(",\"cog_x_mm\":").Append(F(bcog.X));
+                    sbp.Append(",\"cog_y_mm\":").Append(F(bcog.Y));
+                    sbp.Append(",\"cog_z_mm\":").Append(F(bcog.Z));
+                    sbp.Append("}");
+                    idx++;
+                }
+                sbp.Append("]");
+                perJson = sbp.ToString();
+            }
+
             return "{\"ok\":true"
                 + ",\"body_count\":" + solids.Count
                 + ",\"volume_mm3\":" + volume.ToString("R", CultureInfo.InvariantCulture)
@@ -1409,6 +1475,7 @@ public static class NX_MCP_Loader
                 + ",\"cog_x_mm\":" + F(cog.X)
                 + ",\"cog_y_mm\":" + F(cog.Y)
                 + ",\"cog_z_mm\":" + F(cog.Z)
+                + perJson
                 + ",\"result\":\"" + Esc(res) + "\"}";
         }
         catch (Exception e)
@@ -4322,6 +4389,289 @@ public static class NX_MCP_Loader
         }
         sb.Append("],\"message\":\"Found ").Append(names.Count).Append(" ").Append(kind).Append("(s).\"}");
         return sb.ToString();
+    }
+
+    // nx_create_section_view <parent_view_id> <x1> <y1> <x2> <y2> <pos_x> <pos_y> [k=v ...]
+    // Simple (straight) section view via UFUN UF_DRAW_create_simple_sxview - the
+    // .NET SectionLineBuilder route is deprecated on NX10 and its suggested
+    // replacement is a nested type, i.e. a dead end (受阻项调研档案 §3).
+    // The cut segment is a line created INSIDE the expanded parent view (a
+    // member-view curve) at absolute drawing coordinates, associated through a
+    // UFDrf.Object (the .NET wrapper of UF_DRF_object_t; assoc type DwgPos).
+    // The new view is placed at (pos_x, pos_y) in drawing coordinates.
+    // Optional key=value overrides:
+    //   scale=<f>       section view scale (default 1.0)
+    //   arrow=<dx,dy>   arrow (viewing) direction in drawing coords
+    //                   (default: perpendicular to the cut line, left of x1->x2)
+    //   step=<dx,dy>    step direction in drawing coords
+    //                   (default: the cut line direction - parallel steps make
+    //                   NX fail with "截面线零矢量错误")
+    //   name=<token>    name for the created section view
+    private static string CreateSectionView(string[] parts)
+    {
+        if (parts.Length < 8)
+            return ErrJson("usage: nx_create_section_view <parent_view_id> <x1> <y1> <x2> <y2> <pos_x> <pos_y>"
+                + " [scale=<f>] [arrow=<dx,dy>] [step=<dx,dy>] [name=<token>] (all coords are drawing coords)");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+            try { _session.ApplicationSwitchImmediate("UG_APP_DRAFTING"); }
+            catch (Exception ea) { Log("app switch warn: " + ea.Message); }
+
+            DrawingSheet sheet;
+            DraftingView parent = ResolveViewAnySheet(parts[1].Trim(), out sheet);
+            try { sheet.Open(); } catch { }
+
+            double x1 = D(parts[2]), y1 = D(parts[3]);
+            double x2 = D(parts[4]), y2 = D(parts[5]);
+            double px = D(parts[6]), py = D(parts[7]);
+            if (Math.Abs(x2 - x1) < 1e-9 && Math.Abs(y2 - y1) < 1e-9)
+                return ErrJson("cut segment is degenerate: (x1,y1) == (x2,y2)");
+
+            // Direction semantics (verified live 2026-11-05): step_dir = the cut
+            // line direction, arrow_dir = the viewing direction perpendicular to
+            // it. When both point the same way NX fails with "截面线零矢量错误"
+            // (their cross product collapses) - that was the whole puzzle.
+            double cdx = x2 - x1, cdy = y2 - y1;
+            double cn = Math.Sqrt(cdx * cdx + cdy * cdy);
+            double sdx = cdx / cn, sdy = cdy / cn;    // step: along the cut line
+            double adx = -cdy / cn, ady = cdx / cn;   // arrow: perpendicular, left of x1->x2
+            double scale = 1.0;
+            string name = "";
+            for (int i = 8; i < parts.Length; i++)
+            {
+                string tok = parts[i].Trim();
+                int eq = tok.IndexOf('=');
+                if (eq <= 0) continue;
+                string k = tok.Substring(0, eq).ToLowerInvariant();
+                string v = tok.Substring(eq + 1);
+                if (k == "scale")
+                {
+                    scale = D(v);
+                }
+                else if (k == "arrow" || k == "step")
+                {
+                    string[] xy = v.Split(',');
+                    if (xy.Length != 2)
+                        return ErrJson(k + " must be <dx,dy>, got '" + v + "'");
+                    double vx = D(xy[0].Trim()), vy = D(xy[1].Trim());
+                    double vn = Math.Sqrt(vx * vx + vy * vy);
+                    if (vn < 1e-9) return ErrJson(k + " direction is zero-length");
+                    vx /= vn; vy /= vn;
+                    if (k == "arrow") { adx = vx; ady = vy; }
+                    else { sdx = vx; sdy = vy; }
+                }
+                else if (k == "name") { name = v; }
+            }
+            if (scale <= 0.0) return ErrJson("scale must be > 0");
+
+            int before = 0;
+            try { before = sheet.GetDraftingViews().Length; } catch { }
+
+            // the cut segment must be a member-view curve of the parent view:
+            // expand the view, draw the line at sheet coordinates, then collapse
+            // via the application-switch round trip (NX12 has no deactivate call)
+            bool activated = false;
+            try
+            {
+                if (!parent.IsActiveForSketching) { parent.ActivateForSketching(); activated = true; }
+            }
+            catch (Exception ea) { Log("activate warn: " + ea.Message); }
+
+            Tag sxTag = Tag.Null;
+            string stage = "cut line";
+            try
+            {
+                NXOpen.Line cutLine = _part.Curves.CreateLine(
+                    new Point3d(x1, y1, 0.0), new Point3d(x2, y2, 0.0));
+                if (cutLine == null)
+                    return ErrJson("failed to create the cut segment line inside the parent view");
+
+                stage = "CreateSimpleSxview";
+                var cutObj = new NXOpen.UF.UFDrf.Object();
+                cutObj.object_tag = cutLine.Tag;
+                cutObj.object_view_tag = parent.Tag;
+                cutObj.object_assoc_type = NXOpen.UF.UFDrf.AssocType.DwgPos;
+                cutObj.object_assoc_modifier = 0;
+                cutObj.object2_tag = Tag.Null;
+                cutObj.assoc_dwg_pos = new double[] { (x1 + x2) / 2.0, (y1 + y2) / 2.0 };
+
+                NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+                // the .NET wrapper signature is actually strongly typed:
+                // CreateSimpleSxview(..., ref UFDrf.Object cut_object, double[] place, out Tag)
+                uf.Draw.CreateSimpleSxview(sheet.Tag, scale,
+                    new double[] { sdx, sdy, 0.0 }, new double[] { adx, ady, 0.0 },
+                    parent.Tag, ref cutObj, new double[] { px, py }, out sxTag);
+            }
+            catch (Exception ex)
+            {
+                return ErrJson("create_section_view failed at " + stage + ": " + ex.Message);
+            }
+            finally
+            {
+                if (activated)
+                {
+                    try
+                    {
+                        _session.ApplicationSwitchImmediate("UG_APP_MODELING");
+                        _session.ApplicationSwitchImmediate("UG_APP_DRAFTING");
+                    }
+                    catch (Exception ea) { Log("app switch back warn: " + ea.Message); }
+                }
+            }
+
+            if (sxTag == Tag.Null)
+                return ErrJson("section view returned a null view tag");
+            DraftingView created = null;
+            try { created = NXOpen.Utilities.NXObjectManager.Get(sxTag) as DraftingView; }
+            catch { }
+            if (created == null)
+            {
+                DraftingView[] viewsNow = sheet.GetDraftingViews();
+                if (viewsNow.Length > before) created = viewsNow[viewsNow.Length - 1];
+            }
+            if (created == null)
+                return ErrJson("section view tag did not resolve to a DraftingView");
+            if (!string.IsNullOrEmpty(name)) { try { created.SetName(name); } catch { } }
+            try { ForceUpdateSheet(sheet); } catch { }
+
+            string id = ""; try { id = created.JournalIdentifier; } catch { }
+            int count = 0;
+            try { count = sheet.GetDraftingViews().Length; } catch { }
+            return "{\"ok\":true,\"view\":\"" + Esc(id)
+                + "\",\"result\":\"" + Esc("section view created views=" + count
+                    + " (scale " + F(scale) + ", parent '" + parent.Name + "')")
+                + "\"}";
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_section_view failed: " + e.Message);
+        }
+    }
+
+    // nx_delete_view <view_id>
+    // Deletes a drafting view from its sheet. NX 12 .NET has no
+    // DraftingView.Delete(); the GTAC route is UF_OBJ_delete_object on the view
+    // tag. For section views SetDeleteSectionLine(true) also removes the
+    // section line. Deletion is verified by the view count dropping.
+    private static string DeleteViewCmd(string[] parts)
+    {
+        if (parts.Length < 2)
+            return ErrJson("usage: nx_delete_view <view_id>");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+
+            string token = parts[1].Trim();
+            DrawingSheet sheet;
+            DraftingView v = ResolveViewAnySheet(token, out sheet);
+            string nm = "", ji = "";
+            try { nm = v.Name; } catch { }
+            try { ji = v.JournalIdentifier; } catch { }
+            try { sheet.Open(); } catch { }
+
+            int before = 0;
+            try { before = sheet.GetDraftingViews().Length; } catch { }
+
+            try { v.SetDeleteSectionLine(true); }
+            catch (Exception es) { Log("set delete-section-line warn: " + es.Message); }
+
+            NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+            uf.Obj.DeleteObject(v.Tag);
+
+            // a zero return does not guarantee deletion - verify by count + id
+            int after = before;
+            bool stillThere = false;
+            try
+            {
+                DraftingView[] views = sheet.GetDraftingViews();
+                after = views.Length;
+                foreach (DraftingView w in views)
+                {
+                    string wj = ""; try { wj = w.JournalIdentifier; } catch { }
+                    if (ji.Length > 0 && wj == ji) { stillThere = true; break; }
+                }
+            }
+            catch (Exception ev) { Log("verify delete warn: " + ev.Message); }
+            if (stillThere || after >= before)
+                return ErrJson("view '" + nm + "' was not deleted (views " + before
+                    + " -> " + after + "); it may be a dependent base/section view");
+            return OkJson("deleted", ji,
+                "drafting view '" + nm + "' deleted (views " + before + " -> " + after + ")");
+        }
+        catch (Exception e)
+        {
+            return ErrJson("delete_view failed: " + e.Message);
+        }
+    }
+
+    // nx_list_assembly
+    // Flattens the component assembly tree of the active part - the data source
+    // for BOM / 明细表 / process routing tables. One JSON row per component
+    // INSTANCE: {level, name, display, part, children}; 'part' is the child
+    // part file path when the component is loaded in session.
+    private static void WalkComponent(NXOpen.Assemblies.Component comp, int level,
+        List<string> rows, ref int total)
+    {
+        NXOpen.Assemblies.Component[] children = comp.GetChildren();
+        foreach (NXOpen.Assemblies.Component child in children)
+        {
+            total++;
+            if (rows.Count < 5000)
+            {
+                string nm = "", disp = "", part = "";
+                int kids = 0;
+                try { nm = child.Name; } catch { }
+                try { disp = child.DisplayName; } catch { }
+                try { kids = child.GetChildren().Length; } catch { }
+                try
+                {
+                    NXOpen.BasePart proto = child.Prototype as NXOpen.BasePart;
+                    if (proto != null) part = proto.FullPath;
+                }
+                catch { }
+                var sb = new StringBuilder();
+                sb.Append("{\"level\":").Append(level);
+                sb.Append(",\"name\":\"").Append(Esc(nm)).Append("\"");
+                sb.Append(",\"display\":\"").Append(Esc(disp)).Append("\"");
+                sb.Append(",\"part\":\"").Append(Esc(part)).Append("\"");
+                sb.Append(",\"children\":").Append(kids).Append("}");
+                rows.Add(sb.ToString());
+            }
+            WalkComponent(child, level + 1, rows, ref total);
+        }
+    }
+
+    private static string ListAssembly(string[] parts)
+    {
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+            var rows = new List<string>();
+            int total = 0;
+            NXOpen.Assemblies.Component root = _part.ComponentAssembly.RootComponent;
+            if (root == null)
+                return OkJsonList("rows", rows, "part has no components (not an assembly)");
+            WalkComponent(root, 1, rows, ref total);
+            var sb = new StringBuilder();
+            sb.Append("{\"ok\":true,\"rows\":[");
+            for (int i = 0; i < rows.Count; i++)
+            {
+                if (i > 0) sb.Append(",");
+                sb.Append(rows[i]);
+            }
+            sb.Append("],\"count\":").Append(total);
+            sb.Append(",\"result\":\"").Append(Esc("assembly has " + total + " component instance(s)"));
+            sb.Append("\"}");
+            return sb.ToString();
+        }
+        catch (Exception e)
+        {
+            return ErrJson("list_assembly failed: " + e.Message);
+        }
     }
 
     private static string Undo()

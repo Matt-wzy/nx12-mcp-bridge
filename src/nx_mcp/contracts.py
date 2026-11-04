@@ -9,6 +9,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from nx_mcp.runtime import NXToolError, ObjectKind, ObjectRef
 
 __all__ = [
+    "AssemblyListResult",
+    "BodyMassProperties",
+    "BomRow",
     "ExportResult",
     "ExtrudeResult",
     "MassPropertiesResult",
@@ -44,6 +47,18 @@ class Vector3D(BaseModel):
     z: float = Field(allow_inf_nan=False)
 
 
+class BodyMassProperties(BaseModel):
+    """Per-body mass properties (nx_mass_properties with per_body=True)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    body_id: str = ""
+    mass_kg: float = 0.0
+    volume_mm3: float = 0.0
+    surface_area_mm2: float = 0.0
+    center_of_gravity: Vector3D = Field(default_factory=lambda: Vector3D(x=0.0, y=0.0, z=0.0))
+
+
 class MassPropertiesResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -54,6 +69,28 @@ class MassPropertiesResult(BaseModel):
     surface_area_mm2: float
     density_kg_m3: float
     center_of_gravity: Vector3D
+    bodies: list[BodyMassProperties] = Field(default_factory=list)
+    message: str = ""
+
+
+class BomRow(BaseModel):
+    """One flattened component instance of the assembly tree (BOM data)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    level: int = 1
+    name: str = ""
+    display_name: str = ""
+    part_path: str = ""
+    children: int = 0
+
+
+class AssemblyListResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["success"] = "success"
+    count: int = 0
+    rows: list[BomRow] = Field(default_factory=list)
     message: str = ""
 
 
