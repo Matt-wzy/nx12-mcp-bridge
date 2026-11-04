@@ -4619,6 +4619,47 @@ public static class NX_MCP_Loader
             if (Math.Abs(x2 - x1) < 1e-9 && Math.Abs(y2 - y1) < 1e-9)
                 return ErrJson("cut segment is degenerate: (x1,y1) == (x2,y2)");
 
+            // leg=2 marks the second leg of a REVOLVED section line (旋转剖);
+            // leg=1 (default) appends a stepped-section cut segment. The revolved
+            // pivot is the shared endpoint of the two legs. rotpt=x,y pins the
+            // rotation point with MoveSxlineRotpt; assoc=start puts the segment's
+            // association point on the shared (pivot) end instead of the middle.
+            NXOpen.UF.UFDraw.SxlineLeg leg = NXOpen.UF.UFDraw.SxlineLeg.SxlineLeg1;
+            double rotptX = double.NaN, rotptY = double.NaN;
+            double angleDeg = double.NaN;
+            bool assocStart = false;
+            for (int i = 6; i < parts.Length; i++)
+            {
+                if (parts[i].StartsWith("leg=", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (parts[i].Substring(4).Trim() == "2")
+                        leg = NXOpen.UF.UFDraw.SxlineLeg.SxlineLeg2;
+                }
+                else if (parts[i].StartsWith("rotpt=", StringComparison.OrdinalIgnoreCase))
+                {
+                    string[] rp = parts[i].Substring(6).Split(',');
+                    if (rp.Length == 2)
+                    {
+                        rotptX = D(rp[0]);
+                        rotptY = D(rp[1]);
+                    }
+                }
+                else if (parts[i].StartsWith("angle=", StringComparison.OrdinalIgnoreCase))
+                {
+                    angleDeg = D(parts[i].Substring(6));
+                }
+                else if (parts[i].StartsWith("assoc=", StringComparison.OrdinalIgnoreCase))
+                {
+                    assocStart = parts[i].Substring(6).Trim().ToLowerInvariant() == "start";
+                }
+            }
+            bool hasAngle = !double.IsNaN(angleDeg);
+            if (leg == NXOpen.UF.UFDraw.SxlineLeg.SxlineLeg2 && !assocStart)
+            {
+                // a revolved second leg hangs on the pivot end of leg 1
+                assocStart = true;
+            }
+
             NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
 
             Tag sxline = Tag.Null;
@@ -4666,16 +4707,49 @@ public static class NX_MCP_Loader
                 if (cutLine == null)
                     return ErrJson("failed to create the cut segment line inside the parent view");
 
-                stage = "AddSxlineSxseg";
                 var cutObj = new NXOpen.UF.UFDrf.Object();
                 cutObj.object_tag = cutLine.Tag;
                 cutObj.object_view_tag = parent.Tag;
                 cutObj.object_assoc_type = NXOpen.UF.UFDrf.AssocType.DwgPos;
                 cutObj.object_assoc_modifier = 0;
                 cutObj.object2_tag = Tag.Null;
-                cutObj.assoc_dwg_pos = new double[] { (x1 + x2) / 2.0, (y1 + y2) / 2.0 };
-                uf.Draw.AddSxlineSxseg(sxline, NXOpen.UF.UFDraw.SxsegType.SxsegCut,
-                    NXOpen.UF.UFDraw.SxlineLeg.SxlineLeg1, ref cutObj, out segTag);
+                cutObj.assoc_dwg_pos = assocStart
+                    ? new double[] { x1, y1 }
+                    : new double[] { (x1 + x2) / 2.0, (y1 + y2) / 2.0 };
+
+                if (hasAngle)
+                {
+                    // Unfolded/revolved angled segment: AddSxseg carries the
+                    // segment angle in the SxlineSxsegs struct.
+                    stage = "AddSxseg(angle)";
+                    var segsDef = new NXOpen.UF.UFDraw.SxlineSxsegs();
+                    segsDef.sxseg_type = NXOpen.UF.UFDraw.SxsegType.SxsegCut;
+                    segsDef.sxseg_object = new NXOpen.UF.UFDrf.Object[] { cutObj };
+                    segsDef.sxseg_angle = angleDeg;
+                    uf.Draw.AddSxseg(sxline, ref segsDef, out segTag);
+                }
+                else
+                {
+                    stage = "AddSxlineSxseg";
+                    uf.Draw.AddSxlineSxseg(sxline, NXOpen.UF.UFDraw.SxsegType.SxsegCut,
+                        leg, ref cutObj, out segTag);
+                    if (segTag != Tag.Null && !double.IsNaN(rotptX) && !double.IsNaN(rotptY))
+                    {
+                        // Pin the revolved pivot AFTER the second leg exists:
+                        // on a SimpleSxline MoveSxlineRotpt reports "type wrong"
+                        // (a simple line has no rotpt); on the two-leg line NX
+                        // may accept it and convert the line to revolved.
+                        stage = "MoveSxlineRotpt";
+                        var rotObj = new NXOpen.UF.UFDrf.Object();
+                        rotObj.object_tag = cutLine.Tag;
+                        rotObj.object_view_tag = parent.Tag;
+                        rotObj.object_assoc_type = NXOpen.UF.UFDrf.AssocType.DwgPos;
+                        rotObj.object_assoc_modifier = 0;
+                        rotObj.object2_tag = Tag.Null;
+                        rotObj.assoc_dwg_pos = new double[] { rotptX, rotptY };
+                        uf.Draw.MoveSxlineRotpt(sxline, ref rotObj);
+                    }
+                }
             }
             catch (Exception ex)
             {
@@ -4695,10 +4769,23 @@ public static class NX_MCP_Loader
             }
             if (segTag == Tag.Null)
                 return ErrJson("AddSxlineSxseg returned a null segment tag");
+            // Report how the section line evolved (simple -> stepped/revolved):
+            // callers need this to confirm a leg=2 segment actually produced a
+            // revolved section line instead of silently extending leg 1.
+            string sxType = "";
+            try
+            {
+                NXOpen.UF.UFDraw.SxlineType stype;
+                uf.Draw.AskSxlineType(sxline, out stype);
+                sxType = stype.ToString();
+            }
+            catch (Exception et) { Log("ask sxline type warn: " + et.Message); }
             try { ForceUpdateSheet(sheet); } catch { }
             return OkJson("segment", segTag.ToString(),
-                "cut segment added to section line of '" + sxview.Name
-                + "' (bend system-generated; check the updated view)");
+                "cut segment (leg=" + (leg == NXOpen.UF.UFDraw.SxlineLeg.SxlineLeg2 ? "2" : "1")
+                + ") added to section line of '" + sxview.Name
+                + "'; sxline type now " + (sxType.Length > 0 ? sxType : "unknown")
+                + " (bend system-generated; check the updated view)");
         }
         catch (Exception e)
         {
