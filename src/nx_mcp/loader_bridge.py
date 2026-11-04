@@ -178,6 +178,24 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
             _fmt(float(params["cut_x1"])), _fmt(float(params["cut_y1"])),
             _fmt(float(params["cut_x2"])), _fmt(float(params["cut_y2"])),
         )
+    if method == "nx_create_id_symbol":
+        # Loader 语法: nx_create_id_symbol <type> <x> <y> [size=k] [lower=t] [upper text...]
+        # 上部文字放最后可含空格；图纸坐标
+        cmd = "nx_create_id_symbol %s %s %s" % (
+            str(params.get("symbol_type", "circle")),
+            _fmt(float(params.get("pos_x", 0.0))),
+            _fmt(float(params.get("pos_y", 0.0))),
+        )
+        size = params.get("size", 10.0)
+        if size and float(size) != 10.0:
+            cmd += " size=" + _fmt(float(size))
+        lower = str(params.get("lower_text", "") or "")
+        if lower:
+            cmd += " lower=" + lower
+        upper = str(params.get("upper_text", "") or "")
+        if upper:
+            cmd += " " + upper
+        return cmd
     if method == "nx_delete_view":
         return "nx_delete_view " + str(params.get("view_id", ""))
     if method == "nx_list_assembly":

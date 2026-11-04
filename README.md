@@ -34,7 +34,7 @@ AI（自然语言）
 - 修复 `ShellBuilder` 相关 CS1061（改用 `ReplaceRules`）
 - 迁移 `Update.AddToDeleteList` → `AddObjectsToDeleteList`（NX12.0.0 弃用）
 
-### 新增能力（共 62 个 MCP 工具）
+### 新增能力（共 63 个 MCP 工具）
 
 | 类别 | 命令 |
 |---|---|
@@ -49,7 +49,7 @@ AI（自然语言）
 | 角度测量 | `nx_measure_angle`（两直线边夹角 + 锐角补角） |
 | 剖视图 | `nx_create_section_view`（UFUN CreateSimpleSxview，剖切线 + A-A 箭头 + 剖面线，PDF 实测渲染）+ `nx_add_section_segment`（阶梯剖，追加割段自动转折） |
 | 删图纸视图 | `nx_delete_view`（改图前删旧视图；剖视图连带删剖切线） |
-| 装配 / BOM | `nx_list_assembly`（装配树拍平）+ `nx_export_bom_csv`（CSV 明细表，Excel 直接开） |
+| 装配 / BOM | `nx_list_assembly`（装配树拍平）+ `nx_export_bom_csv`（CSV 明细表，Excel 直接开）+ `nx_create_id_symbol`（零件序号球标，与 BOM 配套） |
 | 全套图纸 PDF | `nx_export_pdf <路径> ALL`（全部图纸页合成一个多页 PDF） |
 | 标题栏 | `nx_create_title_block` |
 | 部件属性 | `nx_set_attribute` / `nx_list_attributes`（**标题栏内容来源**） |

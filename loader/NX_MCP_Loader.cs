@@ -42,6 +42,8 @@
 //   nx_create_auxiliary_view <parent_view> <hx1> <hy1> <hx2> <hy2> <px> <py>  (辅助视图，试验性)
 //   nx_delete_view <view_id>                        (删除图纸视图，GTAC 路线 UF_OBJ_delete_object)
 //   nx_list_assembly                                (装配树拍平 -> BOM 行，工艺路线表数据源)
+//   nx_create_id_symbol <type> <x> <y> [size=k] [lower=t] [upper text...]  (球标/ID 符号，
+//                                                   装配工艺零件序号气泡，type 见 CreateIdSymbol)
 //   nx_export_pdf <path> [ALL|sheet]  (ALL = 全部图纸页导出到一个多页 PDF)
 //   nx_build_plate_test           (single-command acceptance part)
 //   nx_create_wave_link <src_master> <target> [body_index] [assoc=1] [x=..] [y=..] [z=..]   (WAVE 链接：源件为装配根，目标件作下游组件，固定时间戳记/提取几何，可选摆放偏移)
@@ -415,6 +417,8 @@ public static class NX_MCP_Loader
                 return BuildPlateTest();
             case "create_block":
                 return CreateBlock(parts);
+            case "nx_create_id_symbol":
+                return CreateIdSymbol(parts);
             case "nx_create_wave_link":
                 return CreateWaveLink(parts);
             case "nx_create_section_view":
@@ -4763,6 +4767,100 @@ public static class NX_MCP_Loader
         catch (Exception e)
         {
             return ErrJson("create_auxiliary_view failed: " + e.Message);
+        }
+    }
+
+    // nx_create_id_symbol <type> <x> <y> [size=k] [lower=<token>] [upper text...]
+    // ID symbol (球标) - the part-number balloon of assembly process drawings.
+    // type: circle|divcir|tri|triup|square|divsqr|hexagon|divhex|quadrant|roundbox|underline
+    // Position is sheet coordinates (mm). upper text = all trailing tokens
+    // (spaces allowed), lower text via lower=<token> (single token).
+    // NXOpen IdSymbolBuilder route (same pattern as CreateRoughness).
+    private static string CreateIdSymbol(string[] parts)
+    {
+        if (parts.Length < 4)
+            return ErrJson("usage: nx_create_id_symbol <type> <x> <y> [size=k] [lower=<token>] [upper text...]");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+            try { _session.ApplicationSwitchImmediate("UG_APP_DRAFTING"); }
+            catch (Exception ea) { Log("app switch warn: " + ea.Message); }
+
+            string typeTok = parts[1].Trim().ToLowerInvariant();
+            NXOpen.Annotations.IdSymbolBuilder.SymbolTypes st;
+            switch (typeTok)
+            {
+                case "circle": st = NXOpen.Annotations.IdSymbolBuilder.SymbolTypes.Circle; break;
+                case "divcir": st = NXOpen.Annotations.IdSymbolBuilder.SymbolTypes.DividedCircle; break;
+                case "tri": st = NXOpen.Annotations.IdSymbolBuilder.SymbolTypes.Triangle; break;
+                case "triup": st = NXOpen.Annotations.IdSymbolBuilder.SymbolTypes.TriangleUp; break;
+                case "square": st = NXOpen.Annotations.IdSymbolBuilder.SymbolTypes.Square; break;
+                case "divsqr": st = NXOpen.Annotations.IdSymbolBuilder.SymbolTypes.DividedSquare; break;
+                case "hexagon": st = NXOpen.Annotations.IdSymbolBuilder.SymbolTypes.Hexagon; break;
+                case "divhex": st = NXOpen.Annotations.IdSymbolBuilder.SymbolTypes.DividedHexagon; break;
+                case "quadrant": st = NXOpen.Annotations.IdSymbolBuilder.SymbolTypes.QuadrantCircle; break;
+                case "roundbox": st = NXOpen.Annotations.IdSymbolBuilder.SymbolTypes.RoundedBox; break;
+                case "underline": st = NXOpen.Annotations.IdSymbolBuilder.SymbolTypes.Underline; break;
+                default:
+                    return ErrJson("type must be circle|divcir|tri|triup|square|divsqr|hexagon|divhex|quadrant|roundbox|underline, got '" + typeTok + "'");
+            }
+
+            double posx = D(parts[2]);
+            double posy = D(parts[3]);
+            double size = 10.0;
+            string lower = "";
+            var upper = new List<string>();
+            for (int i = 4; i < parts.Length; i++)
+            {
+                string tok = parts[i];
+                if (tok.StartsWith("size=", StringComparison.OrdinalIgnoreCase) && tok.Length > 5)
+                {
+                    size = D(tok.Substring(5));
+                }
+                else if (tok.StartsWith("lower=", StringComparison.OrdinalIgnoreCase))
+                {
+                    lower = tok.Substring(6);
+                }
+                else
+                {
+                    upper.Add(tok);
+                }
+            }
+            string upperText = string.Join(" ", upper.ToArray()).Trim();
+
+            int before = 0;
+            try { before = _part.Annotations.IdSymbols.ToArray().Length; } catch { }
+
+            NXOpen.Annotations.IdSymbolBuilder ib =
+                _part.Annotations.IdSymbols.CreateIdSymbolBuilder(null);
+            string jid = "";
+            try
+            {
+                ib.Type = st;
+                ib.Size = size;
+                ib.Origin.OriginPoint = new Point3d(posx, posy, 0.0);
+                if (upperText.Length > 0) ib.UpperText = upperText;
+                if (lower.Length > 0) ib.LowerText = lower;
+                NXOpen.Annotations.IdSymbol sym = (NXOpen.Annotations.IdSymbol)ib.Commit();
+                try { sym.SetName("MCP_ID_" + typeTok.ToUpperInvariant()); } catch { }
+                try { jid = sym.JournalIdentifier; } catch { }
+            }
+            finally { try { ib.Destroy(); } catch { } }
+
+            int after = 0;
+            try { after = _part.Annotations.IdSymbols.ToArray().Length; } catch { }
+            if (after <= before)
+                return ErrJson("id symbol created nothing (id symbols " + before + " -> " + after + ")");
+            try { _part.DrawingSheets.RefreshCurrentSheet(); } catch { }
+            return OkJson("id_symbol", jid,
+                "id symbol '" + typeTok + "' created (id symbols " + before + " -> " + after
+                + (upperText.Length > 0 ? ", text '" + upperText + "'" : "")
+                + (lower.Length > 0 ? "/" + lower : "") + ")");
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_id_symbol failed: " + e.Message);
         }
     }
 

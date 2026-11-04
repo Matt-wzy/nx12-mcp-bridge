@@ -176,6 +176,25 @@ def test_section_view_full_wire_format():
     )
 
 
+def test_id_symbol_wire_format():
+    cmd = _command(
+        "nx_create_id_symbol",
+        {"symbol_type": "circle", "pos_x": 40.0, "pos_y": 50.0, "upper_text": "3"},
+    )
+    assert cmd == "nx_create_id_symbol circle 40 50 3"
+    cmd2 = _command(
+        "nx_create_id_symbol",
+        {
+            "symbol_type": "divcir",
+            "pos_x": 40.0, "pos_y": 50.0,
+            "size": 8.0,
+            "upper_text": "OP 10",
+            "lower_text": "A2",
+        },
+    )
+    assert cmd2 == "nx_create_id_symbol divcir 40 50 size=8 lower=A2 OP 10"
+
+
 def test_add_section_segment_wire_format():
     cmd = _command(
         "nx_add_section_segment",

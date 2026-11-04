@@ -132,6 +132,8 @@ CERTIFIED_TOOL_NAMES = {
     # 装配树拍平 + BOM CSV 导出（工艺路线表基础）
     "nx_list_assembly",
     "nx_export_bom_csv",
+    # 球标/ID 符号（装配工艺零件序号气泡，与 BOM 导出配套）
+    "nx_create_id_symbol",
     # 对称中心线（轴类零件轴线，SymmetricalCenterlineBuilder，管道实测通过）
     "nx_create_centerline",
     "nx_create_roughness",
@@ -981,6 +983,49 @@ def create_certified_server(
                 },
             )
         )
+
+    @mcp.tool()
+    async def nx_create_id_symbol(
+        symbol_type: Literal[
+            "circle",
+            "divcir",
+            "tri",
+            "triup",
+            "square",
+            "divsqr",
+            "hexagon",
+            "divhex",
+            "quadrant",
+            "roundbox",
+            "underline",
+        ] = "circle",
+        pos_x: float = 20.0,
+        pos_y: float = 20.0,
+        size: Annotated[float, Field(gt=0, allow_inf_nan=False)] = 10.0,
+        upper_text: str = "",
+        lower_text: str = "",
+    ) -> OperationResult:
+        """Create an ID symbol (球标/零件序号气泡) on the current drawing sheet.
+
+        ``circle`` (divided=divcir), triangles (tri/triup), squares, hexagons,
+        rounded box... - the part-callout balloon of assembly process drawings;
+        pair it with nx_list_assembly / nx_export_bom_csv so the balloon number
+        and the BOM row agree. Position is sheet coordinates (mm), size is the
+        symbol diameter/width (mm, default 10). upper_text goes into the upper
+        slot (spaces allowed), lower_text into the lower slot (single token).
+        """
+        params: dict[str, Any] = {
+            "symbol_type": symbol_type,
+            "pos_x": pos_x,
+            "pos_y": pos_y,
+        }
+        if size != 10.0:
+            params["size"] = size
+        if upper_text:
+            params["upper_text"] = upper_text
+        if lower_text:
+            params["lower_text"] = lower_text
+        return OperationResult(**await call("nx_create_id_symbol", params))
 
     @mcp.tool()
     async def nx_delete_view(view_id: str) -> OperationResult:
