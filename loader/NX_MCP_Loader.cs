@@ -44,6 +44,8 @@
 //   nx_list_assembly                                (装配树拍平 -> BOM 行，工艺路线表数据源)
 //   nx_create_id_symbol <type> <x> <y> [size=k] [lower=t] [upper text...]  (球标/ID 符号，
 //                                                   装配工艺零件序号气泡，type 见 CreateIdSymbol)
+//   nx_create_datum_symbol <letter> <x> <y>        (基准符号 GD&T，GB/T 17851 基准字母框，
+//                                                   GdtDatumCollection 路线，坐标为图纸坐标)
 //   nx_export_pdf <path> [ALL|sheet]  (ALL = 全部图纸页导出到一个多页 PDF)
 //   nx_build_plate_test           (single-command acceptance part)
 //   nx_create_wave_link <src_master> <target> [body_index] [assoc=1] [x=..] [y=..] [z=..]   (WAVE 链接：源件为装配根，目标件作下游组件，固定时间戳记/提取几何，可选摆放偏移)
@@ -419,6 +421,8 @@ public static class NX_MCP_Loader
                 return CreateBlock(parts);
             case "nx_create_id_symbol":
                 return CreateIdSymbol(parts);
+            case "nx_create_datum_symbol":
+                return CreateDatumSymbol(parts);
             case "nx_create_wave_link":
                 return CreateWaveLink(parts);
             case "nx_create_section_view":
@@ -4864,6 +4868,69 @@ public static class NX_MCP_Loader
         }
     }
 
+    // nx_create_datum_symbol <letter> <x> <y>
+    // Datum feature symbol (基准符号) - the GD&T datum-letter frame of process
+    // drawings (GB/T 17851 / ISO 5459). Entry is
+    // GdtDatumCollection.CreateDraftingDatumFeatureSymbolBuilder(null) - there
+    // is no factory on AnnotationManager; found by reflection. Letter is the
+    // datum letter (uppercased), position is sheet coordinates (mm).
+    // Placement is standalone (no leader/attachment); the frame renders where
+    // it is put, and NX verifies the datum count via GdtDatumCollection.
+    private static string CreateDatumSymbol(string[] parts)
+    {
+        if (parts.Length < 4)
+            return ErrJson("usage: nx_create_datum_symbol <letter> <x> <y>");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+            try { _session.ApplicationSwitchImmediate("UG_APP_DRAFTING"); }
+            catch (Exception ea) { Log("app switch warn: " + ea.Message); }
+
+            string letter = parts[1].Trim().ToUpperInvariant();
+            if (letter.Length == 0 || letter.Length > 2)
+                return ErrJson("datum letter must be 1-2 characters, got '" + letter + "'");
+            double posx = D(parts[2]);
+            double posy = D(parts[3]);
+
+            // DraftingDatum : BaseDatum : Gdt, so the part-level Gdt collection
+            // (_part.Gdts) is the counter that moves; Annotations.Datums did NOT
+            // change (0 -> 0) even when the commit produced a real object.
+            int before = 0;
+            try { before = _part.Gdts.ToArray().Length; } catch { }
+
+            NXOpen.Annotations.DraftingDatumFeatureSymbolBuilder db =
+                _part.Annotations.Datums.CreateDraftingDatumFeatureSymbolBuilder(null);
+            string jid = "";
+            try
+            {
+                db.Letter = letter;
+                db.Origin.OriginPoint = new Point3d(posx, posy, 0.0);
+                NXOpen.Annotations.DraftingDatum sym =
+                    (NXOpen.Annotations.DraftingDatum)db.Commit();
+                if (sym != null)
+                {
+                    try { sym.SetName("MCP_DATUM_" + letter); } catch { }
+                    try { jid = sym.JournalIdentifier; } catch { }
+                }
+            }
+            finally { try { db.Destroy(); } catch { } }
+
+            int after = 0;
+            try { after = _part.Gdts.ToArray().Length; } catch { }
+            if (string.IsNullOrEmpty(jid) && after <= before)
+                return ErrJson("datum symbol created nothing (gdts "
+                    + before + " -> " + after + ", committed object null or untracked)");
+            try { _part.DrawingSheets.RefreshCurrentSheet(); } catch { }
+            return OkJson("datum_symbol", jid,
+                "datum '" + letter + "' created (gdts " + before + " -> " + after + ")");
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_datum_symbol failed: " + e.Message);
+        }
+    }
+
     // nx_delete_view <view_id>
     // Deletes a drafting view from its sheet. NX 12 .NET has no
     // DraftingView.Delete(); the GTAC route is UF_OBJ_delete_object on the view
@@ -4926,35 +4993,112 @@ public static class NX_MCP_Loader
     // for BOM / 明细表 / process routing tables. One JSON row per component
     // INSTANCE: {level, name, display, part, children}; 'part' is the child
     // part file path when the component is loaded in session.
-    private static void WalkComponent(NXOpen.Assemblies.Component comp, int level,
-        List<string> rows, ref int total)
+    // Each row also carries "qty" (total instances of the same prototype part
+    // across the whole assembly) and "attrs" (the prototype part's user
+    // attributes - material / drawing number for the BOM). qty comes from a
+    // pre-pass (CountParts); attrs reads the prototype part only when loaded.
+    private static void CountParts(NXOpen.Assemblies.Component comp,
+        Dictionary<string, int> counts)
     {
-        NXOpen.Assemblies.Component[] children = comp.GetChildren();
+        NXOpen.Assemblies.Component[] children = null;
+        try { children = comp.GetChildren(); }
+        catch { return; } // broken component tree - nothing to count here
+        if (children == null) return;
+        foreach (NXOpen.Assemblies.Component child in children)
+        {
+            string p = "";
+            try
+            {
+                NXOpen.BasePart proto = child.Prototype as NXOpen.BasePart;
+                if (proto != null) p = proto.FullPath;
+            }
+            catch { }
+            if (p.Length > 0)
+            {
+                if (!counts.ContainsKey(p)) counts[p] = 0;
+                counts[p] = counts[p] + 1;
+            }
+            CountParts(child, counts);
+        }
+    }
+
+    private static string PartAttributesJson(NXOpen.BasePart proto)
+    {
+        // String-valued user attributes of the prototype part (material,
+        // drawing number...). Non-string / empty values are skipped; the part
+        // must be loaded in session or this returns "{}".
+        var asb = new StringBuilder();
+        asb.Append("{");
+        try
+        {
+            NXOpen.NXObject.AttributeInformation[] infos = proto.GetUserAttributes();
+            bool first = true;
+            foreach (NXOpen.NXObject.AttributeInformation ai in infos)
+            {
+                if (ai.StringValue == null || ai.StringValue.Length == 0) continue;
+                if (!first) asb.Append(",");
+                first = false;
+                asb.Append("\"").Append(Esc(ai.Title)).Append("\":\"")
+                    .Append(Esc(ai.StringValue)).Append("\"");
+            }
+        }
+        catch { }
+        asb.Append("}");
+        return asb.ToString();
+    }
+
+    private static void WalkComponent(NXOpen.Assemblies.Component comp, int level,
+        List<string> rows, ref int total, Dictionary<string, int> qty)
+    {
+        NXOpen.Assemblies.Component[] children;
+        try { children = comp.GetChildren(); }
+        catch (Exception gc)
+        {
+            // broken component (e.g. dangling instance after a failed wave
+            // link) - report it as a row instead of killing the whole listing
+            Log("walk component warn: " + gc.Message);
+            if (rows.Count < 5000)
+            {
+                var eb = new StringBuilder();
+                eb.Append("{\"level\":").Append(level);
+                eb.Append(",\"name\":\"<broken>\"");
+                eb.Append(",\"display\":\"").Append(Esc(gc.Message)).Append("\"");
+                eb.Append(",\"part\":\"\",\"children\":0,\"qty\":1,\"attrs\":{}}");
+                rows.Add(eb.ToString());
+            }
+            return;
+        }
         foreach (NXOpen.Assemblies.Component child in children)
         {
             total++;
             if (rows.Count < 5000)
             {
                 string nm = "", disp = "", part = "";
-                int kids = 0;
+                int kids = 0, n = 1;
                 try { nm = child.Name; } catch { }
                 try { disp = child.DisplayName; } catch { }
                 try { kids = child.GetChildren().Length; } catch { }
+                NXOpen.BasePart proto = null;
                 try
                 {
-                    NXOpen.BasePart proto = child.Prototype as NXOpen.BasePart;
+                    proto = child.Prototype as NXOpen.BasePart;
                     if (proto != null) part = proto.FullPath;
                 }
                 catch { }
+                if (part.Length > 0 && qty.ContainsKey(part)) n = qty[part];
                 var sb = new StringBuilder();
                 sb.Append("{\"level\":").Append(level);
                 sb.Append(",\"name\":\"").Append(Esc(nm)).Append("\"");
                 sb.Append(",\"display\":\"").Append(Esc(disp)).Append("\"");
                 sb.Append(",\"part\":\"").Append(Esc(part)).Append("\"");
-                sb.Append(",\"children\":").Append(kids).Append("}");
+                sb.Append(",\"children\":").Append(kids);
+                sb.Append(",\"qty\":").Append(n);
+                sb.Append(",\"attrs\":")
+                  .Append(proto != null ? PartAttributesJson(proto) : "{}");
+                sb.Append("}");
                 rows.Add(sb.ToString());
             }
-            WalkComponent(child, level + 1, rows, ref total);
+            WalkComponent(child, level + 1, rows, ref total, qty);
         }
     }
 
@@ -4969,7 +5113,9 @@ public static class NX_MCP_Loader
             NXOpen.Assemblies.Component root = _part.ComponentAssembly.RootComponent;
             if (root == null)
                 return OkJsonList("rows", rows, "part has no components (not an assembly)");
-            WalkComponent(root, 1, rows, ref total);
+            var qty = new Dictionary<string, int>();
+            CountParts(root, qty);
+            WalkComponent(root, 1, rows, ref total, qty);
             var sb = new StringBuilder();
             sb.Append("{\"ok\":true,\"rows\":[");
             for (int i = 0; i < rows.Count; i++)

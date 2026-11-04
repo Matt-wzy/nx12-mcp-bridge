@@ -198,6 +198,13 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
         return cmd
     if method == "nx_delete_view":
         return "nx_delete_view " + str(params.get("view_id", ""))
+    if method == "nx_create_datum_symbol":
+        # Loader 语法: nx_create_datum_symbol <letter> <x> <y>（图纸坐标 mm）
+        return "nx_create_datum_symbol %s %s %s" % (
+            str(params.get("letter", "")),
+            _fmt(float(params.get("pos_x", 0.0))),
+            _fmt(float(params.get("pos_y", 0.0))),
+        )
     if method == "nx_list_assembly":
         return "nx_list_assembly"
     if method == "nx_create_centerline":
@@ -814,6 +821,11 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
     if method == "nx_list_assembly":
         rows = []
         for r in resp.get("rows") or []:
+            attrs_raw = r.get("attrs")
+            attrs: dict[str, str] = {}
+            if isinstance(attrs_raw, dict):
+                for k, v in attrs_raw.items():
+                    attrs[str(k)] = str(v)
             rows.append(
                 {
                     "level": int(r.get("level", 1)),
@@ -821,6 +833,8 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
                     "display_name": str(r.get("display", "")),
                     "part_path": str(r.get("part", "")),
                     "children": int(r.get("children", 0)),
+                    "qty": int(r.get("qty", 1)),
+                    "attributes": attrs,
                 }
             )
         return {

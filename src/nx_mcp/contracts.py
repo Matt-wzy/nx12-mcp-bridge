@@ -83,6 +83,10 @@ class BomRow(BaseModel):
     display_name: str = ""
     part_path: str = ""
     children: int = 0
+    # total instances of the same prototype part across the whole assembly
+    qty: int = 1
+    # prototype part's string user attributes (MATERIAL/材料, DB_PART_NO/图号...)
+    attributes: dict[str, str] = Field(default_factory=dict)
 
 
 class AssemblyListResult(BaseModel):

@@ -42,11 +42,23 @@ class BridgeCaller(Protocol):
     async def call(self, method: str, params: dict[str, Any]) -> dict[str, Any]: ...
 
 
+def _pick_attr(attrs: dict[str, Any], keys: tuple[str, ...]) -> str:
+    """Return the first attribute value matching any key (case-insensitive)."""
+    lowered = {str(k).strip().lower(): str(v) for k, v in (attrs or {}).items()}
+    for key in keys:
+        val = lowered.get(key.lower())
+        if val:
+            return val
+    return ""
+
+
 def _write_bom_csv(path: str, rows: list[dict[str, Any]]) -> str:
     """Write flattened assembly rows as a CSV bill of materials.
 
     utf-8-sig so Excel opens Chinese part names correctly; one row per
-    component instance (level/name/display_name/part_path/children).
+    component instance. qty totals the instances of the same prototype part;
+    material / drawing_no are pulled from the prototype part's user
+    attributes (MATERIAL/材料, DB_PART_NO/图号/PART_NO/DWG_NO/名称).
     """
     out_abs = os.path.abspath(path)
     outdir = os.path.dirname(out_abs)
@@ -54,8 +66,20 @@ def _write_bom_csv(path: str, rows: list[dict[str, Any]]) -> str:
         os.makedirs(outdir, exist_ok=True)
     with open(out_abs, "w", newline="", encoding="utf-8-sig") as fh:
         writer = csv.writer(fh)
-        writer.writerow(["level", "name", "display_name", "part_path", "children"])
+        writer.writerow(
+            ["level", "name", "display_name", "part_path", "children",
+             "qty", "material", "drawing_no"]
+        )
         for row in rows:
+            attrs = row.get("attributes") or {}
+            # NX renames a user "MATERIAL" attribute to "NX_Material" on save,
+            # so both spellings (and the Chinese 材料/材质) are looked up.
+            material = _pick_attr(
+                attrs, ("MATERIAL", "NX_MATERIAL", "材料", "MATERIAL_SPEC", "材质")
+            )
+            drawing_no = _pick_attr(
+                attrs, ("DB_PART_NO", "图号", "PART_NO", "DWG_NO", "DRAWING_NO", "件号")
+            )
             writer.writerow(
                 [
                     int(row.get("level", 1)),
@@ -63,6 +87,9 @@ def _write_bom_csv(path: str, rows: list[dict[str, Any]]) -> str:
                     str(row.get("display_name", "")),
                     str(row.get("part_path", "")),
                     int(row.get("children", 0)),
+                    int(row.get("qty", 1)),
+                    material,
+                    drawing_no,
                 ]
             )
     return "exported %d BOM row(s) to %s" % (len(rows), out_abs)
@@ -134,6 +161,8 @@ CERTIFIED_TOOL_NAMES = {
     "nx_export_bom_csv",
     # 球标/ID 符号（装配工艺零件序号气泡，与 BOM 导出配套）
     "nx_create_id_symbol",
+    # 基准符号（GD&T 基准字母框，GB/T 17851；与形状公差框格配套）
+    "nx_create_datum_symbol",
     # 对称中心线（轴类零件轴线，SymmetricalCenterlineBuilder，管道实测通过）
     "nx_create_centerline",
     "nx_create_roughness",
@@ -1028,6 +1057,29 @@ def create_certified_server(
         return OperationResult(**await call("nx_create_id_symbol", params))
 
     @mcp.tool()
+    async def nx_create_datum_symbol(
+        letter: Annotated[str, Field(min_length=1, max_length=2)],
+        pos_x: float,
+        pos_y: float,
+    ) -> OperationResult:
+        """Create a datum feature symbol (基准符号) on the current drawing sheet.
+
+        The GD&T datum-letter frame (GB/T 17851 / ISO 5459): a square box with
+        the datum letter, e.g. [A]. Pair it with form/position tolerance
+        annotations - a datum is meaningless without a tolerance frame that
+        references it. letter is uppercased (1-2 characters), pos_x/pos_y are
+        sheet coordinates (mm). Placement is standalone (no leader): put it on
+        the extension line of a dimension or next to the surface edge; NX does
+        not attach it to geometry in this route.
+        """
+        return OperationResult(
+            **await call(
+                "nx_create_datum_symbol",
+                {"letter": letter, "pos_x": pos_x, "pos_y": pos_y},
+            )
+        )
+
+    @mcp.tool()
     async def nx_delete_view(view_id: str) -> OperationResult:
         """Delete a drafting view from its sheet (removes the view itself).
 
@@ -1043,9 +1095,13 @@ def create_certified_server(
         """List the active part's component assembly tree, flattened.
 
         One row per component INSTANCE: level (1 = top), instance name,
-        display name, child part file path (when loaded) and number of own
-        children. This is the raw BOM / 明细表 data a process routing table
-        (工艺路线表) is built from; use nx_export_bom_csv to write it out.
+        display name, child part file path (when loaded), number of own
+        children, qty (total instances of the same prototype part in the
+        whole assembly) and attributes (the prototype part's string user
+        attributes - set 材料/MATERIAL or 图号/DB_PART_NO via nx_set_attribute
+        on each child part first). This is the raw BOM / 明细表 data a
+        process routing table (工艺路线表) is built from; use
+        nx_export_bom_csv to write it out.
         """
         return AssemblyListResult(**await call("nx_list_assembly", {}))
 
@@ -1054,10 +1110,12 @@ def create_certified_server(
         """Export the active part's assembly as a CSV bill of materials.
 
         Writes one row per component instance (level, name, display_name,
-        part_path, children) into the workspace file ``path`` (UTF-8 BOM, so
-        Excel opens Chinese names correctly). The part must be an assembly;
-        plain parts export an empty table and error out - check with
-        nx_list_assembly first.
+        part_path, children, qty, material, drawing_no) into the workspace
+        file ``path`` (UTF-8 BOM, so Excel opens Chinese names correctly).
+        material/drawing_no come from the prototype part's user attributes
+        (MATERIAL/材料, DB_PART_NO/图号) when those parts are loaded; empty
+        otherwise. The part must be an assembly; plain parts export an empty
+        table and error out - check with nx_list_assembly first.
         """
         resolved = resolve_path(path)
         resp = await call("nx_list_assembly", {})

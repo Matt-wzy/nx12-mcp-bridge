@@ -195,6 +195,15 @@ def test_id_symbol_wire_format():
     assert cmd2 == "nx_create_id_symbol divcir 40 50 size=8 lower=A2 OP 10"
 
 
+def test_datum_symbol_wire_format():
+    assert _command(
+        "nx_create_datum_symbol", {"letter": "A", "pos_x": 100.0, "pos_y": 40.0}
+    ) == "nx_create_datum_symbol A 100 40"
+    assert _command(
+        "nx_create_datum_symbol", {"letter": "b", "pos_x": 12.5, "pos_y": 0.0}
+    ) == "nx_create_datum_symbol b 12.5 0"
+
+
 def test_add_section_segment_wire_format():
     cmd = _command(
         "nx_add_section_segment",
@@ -264,3 +273,76 @@ def test_adapt_list_assembly_maps_rows():
     assert adapted["count"] == 2
     assert adapted["rows"][0]["part_path"] == "C:/m/op10.prt"
     assert adapted["rows"][1]["display_name"] == "COMP_2"
+
+
+def test_adapt_list_assembly_maps_qty_and_attributes():
+    from nx_mcp.loader_bridge import _adapt
+
+    adapted = _adapt(
+        "nx_list_assembly",
+        {},
+        {
+            "ok": True,
+            "count": 1,
+            "rows": [
+                {
+                    "level": 1,
+                    "name": "BOLT_M8",
+                    "display": "BOLT_M8",
+                    "part": "C:/m/bolt.prt",
+                    "children": 0,
+                    "qty": 4,
+                    "attrs": {"MATERIAL": "45钢", "图号": "JX-01", "NOTE": "42钢代用"},
+                }
+            ],
+            "result": "assembly has 1 component instance(s)",
+        },
+    )
+    row = adapted["rows"][0]
+    assert row["qty"] == 4
+    assert row["attributes"]["MATERIAL"] == "45钢"
+    assert row["attributes"]["图号"] == "JX-01"
+    # legacy rows without attrs/qty still work
+    legacy = _adapt(
+        "nx_list_assembly",
+        {},
+        {"ok": True, "count": 1, "rows": [{"level": 1, "name": "X"}]},
+    )
+    assert legacy["rows"][0]["qty"] == 1
+    assert legacy["rows"][0]["attributes"] == {}
+
+
+def test_bom_csv_carries_material_and_drawing_no(tmp_path):
+    from nx_mcp.certified import _write_bom_csv
+
+    out = str(tmp_path / "bom.csv")
+    msg = _write_bom_csv(
+        out,
+        [
+            {
+                "level": 1,
+                "name": "BOLT_M8",
+                "display_name": "BOLT_M8",
+                "part_path": "C:/m/bolt.prt",
+                "children": 0,
+                "qty": 4,
+                "attributes": {"MATERIAL": "45钢", "DB_PART_NO": "JX-01"},
+            },
+            {
+                "level": 1,
+                "name": "PLATE",
+                "display_name": "PLATE",
+                "part_path": "C:/m/plate.prt",
+                "children": 2,
+                "attributes": {"材料": "Q235", "图号": "JX-02"},
+            },
+        ],
+    )
+    assert "2 BOM row(s)" in msg
+    text = open(out, encoding="utf-8-sig").read()
+    lines = text.strip().splitlines()
+    assert lines[0] == "level,name,display_name,part_path,children,qty,material,drawing_no"
+    assert "45钢" in lines[1] and "JX-01" in lines[1]
+    assert "Q235" in lines[2] and "JX-02" in lines[2]
+    # missing qty defaults to 1, empty attrs leave the cells blank
+    assert lines[2].split(",")[5] == "1"
