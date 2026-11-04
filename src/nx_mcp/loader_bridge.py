@@ -170,6 +170,14 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
         if name:
             cmd += " name=" + name
         return cmd
+    if method == "nx_add_section_segment":
+        # Loader 语法: nx_add_section_segment <section_view> <x1> <y1> <x2> <y2>
+        # 图纸坐标；向剖切线追加割段（阶梯剖），NX 自动生成转折并更新视图
+        return "nx_add_section_segment %s %s %s %s %s" % (
+            str(params.get("view_id", "")),
+            _fmt(float(params["cut_x1"])), _fmt(float(params["cut_y1"])),
+            _fmt(float(params["cut_x2"])), _fmt(float(params["cut_y2"])),
+        )
     if method == "nx_delete_view":
         return "nx_delete_view " + str(params.get("view_id", ""))
     if method == "nx_list_assembly":
@@ -805,6 +813,8 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
         }
     if method == "nx_create_section_view":
         return {"status": "success", "view": str(resp.get("view", "")), "message": msg}
+    if method == "nx_add_section_segment":
+        return {"status": "success", "message": msg}
     if method == "nx_delete_view":
         return {"status": "success", "message": msg}
     if method == "nx_measure_angle":

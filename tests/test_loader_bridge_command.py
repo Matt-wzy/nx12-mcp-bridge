@@ -176,6 +176,14 @@ def test_section_view_full_wire_format():
     )
 
 
+def test_add_section_segment_wire_format():
+    cmd = _command(
+        "nx_add_section_segment",
+        {"view_id": "SEC_A", "cut_x1": 210.0, "cut_y1": 80.0, "cut_x2": 210.0, "cut_y2": 220.0},
+    )
+    assert cmd == "nx_add_section_segment SEC_A 210 80 210 220"
+
+
 def test_delete_view_wire_format():
     assert _command("nx_delete_view", {"view_id": "SECTION_A"}) == "nx_delete_view SECTION_A"
 

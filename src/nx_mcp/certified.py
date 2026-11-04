@@ -125,6 +125,8 @@ CERTIFIED_TOOL_NAMES = {
     "nx_mass_properties",
     # 简单剖视图（UFUN CreateSimpleSxview 路线，工艺图纸核心刚需）
     "nx_create_section_view",
+    # 阶梯剖（向剖切线追加割段，NX 自动转折更新；多孔零件工艺图常用）
+    "nx_add_section_segment",
     # 删图纸视图（改图前必用）
     "nx_delete_view",
     # 装配树拍平 + BOM CSV 导出（工艺路线表基础）
@@ -950,6 +952,35 @@ def create_certified_server(
         if view_name:
             params["view_name"] = view_name
         return OperationResult(**await call("nx_create_section_view", params))
+
+    @mcp.tool()
+    async def nx_add_section_segment(
+        view_id: str,
+        cut_x1: float,
+        cut_y1: float,
+        cut_x2: float,
+        cut_y2: float,
+    ) -> OperationResult:
+        """Add one more cut segment to a section view's section line (阶梯剖).
+
+        Turns an existing simple section view (from nx_create_section_view)
+        into a stepped section: the new cut runs from (cut_x1, cut_y1) to
+        (cut_x2, cut_y2) in SHEET coordinates across the parent view, and NX
+        auto-inserts the bend and updates the section view. Add segments in
+        the order the plate is cut through; arrows follow the original view.
+        """
+        return OperationResult(
+            **await call(
+                "nx_add_section_segment",
+                {
+                    "view_id": view_id,
+                    "cut_x1": cut_x1,
+                    "cut_y1": cut_y1,
+                    "cut_x2": cut_x2,
+                    "cut_y2": cut_y2,
+                },
+            )
+        )
 
     @mcp.tool()
     async def nx_delete_view(view_id: str) -> OperationResult:

@@ -37,6 +37,9 @@
 //   nx_create_section_view <view> <x1> <y1> <x2> <y2> <px> <py> [scale=f] [arrow=dx,dy] [step=dx,dy] [name=t]
 //                                                   (简单剖视图，UFUN CreateSimpleSxview，坐标均为图纸坐标；
 //                                                    step=剖切线方向 arrow=视向，二者平行则 NX 报零矢量错误)
+//   nx_add_section_segment <section_view> <x1> <y1> <x2> <y2>  (向剖切线追加割段=阶梯剖，
+//                                                   AskSxlineOfSxview + AddSxlineSxseg，NX 自动生成转折)
+//   nx_create_auxiliary_view <parent_view> <hx1> <hy1> <hx2> <hy2> <px> <py>  (辅助视图，试验性)
 //   nx_delete_view <view_id>                        (删除图纸视图，GTAC 路线 UF_OBJ_delete_object)
 //   nx_list_assembly                                (装配树拍平 -> BOM 行，工艺路线表数据源)
 //   nx_export_pdf <path> [ALL|sheet]  (ALL = 全部图纸页导出到一个多页 PDF)
@@ -416,6 +419,10 @@ public static class NX_MCP_Loader
                 return CreateWaveLink(parts);
             case "nx_create_section_view":
                 return CreateSectionView(parts);
+            case "nx_add_section_segment":
+                return AddSectionSegment(parts);
+            case "nx_create_auxiliary_view":
+                return CreateAuxiliaryView(parts);
             case "nx_delete_view":
                 return DeleteViewCmd(parts);
             case "nx_list_assembly":
@@ -4547,6 +4554,215 @@ public static class NX_MCP_Loader
         catch (Exception e)
         {
             return ErrJson("create_section_view failed: " + e.Message);
+        }
+    }
+
+    // nx_add_section_segment <section_view_id> <x1> <y1> <x2> <y2>
+    // Stepped section (阶梯剖): adds one more CUT segment to an existing simple
+    // section view's section line. NX 12's UF wrapper has no
+    // CreateSteppedSxview, but AskSxlineOfSxview + AddSxlineSxseg achieve it:
+    // "Adds a segment to a section line, then updates all of its associated
+    // section views". The bend between the two cuts is system-generated (same
+    // rule the C docs give for create_stepped_sxview). The new cut line is a
+    // member-view curve of the PARENT view (retrieved via AskSimpleSxline's
+    // pview output), drawn at sheet coordinates like the first cut.
+    private static string AddSectionSegment(string[] parts)
+    {
+        if (parts.Length < 6)
+            return ErrJson("usage: nx_add_section_segment <section_view_id> <x1> <y1> <x2> <y2>"
+                + " (drawing coordinates)");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+            try { _session.ApplicationSwitchImmediate("UG_APP_DRAFTING"); }
+            catch (Exception ea) { Log("app switch warn: " + ea.Message); }
+
+            DrawingSheet sheet;
+            DraftingView sxview = ResolveViewAnySheet(parts[1].Trim(), out sheet);
+            try { sheet.Open(); } catch { }
+
+            double x1 = D(parts[2]), y1 = D(parts[3]);
+            double x2 = D(parts[4]), y2 = D(parts[5]);
+            if (Math.Abs(x2 - x1) < 1e-9 && Math.Abs(y2 - y1) < 1e-9)
+                return ErrJson("cut segment is degenerate: (x1,y1) == (x2,y2)");
+
+            NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+
+            Tag sxline = Tag.Null;
+            try { uf.Draw.AskSxlineOfSxview(sxview.Tag, out sxline); }
+            catch (Exception es)
+            {
+                return ErrJson("view '" + sxview.Name + "' has no section line (not a section view?): " + es.Message);
+            }
+            if (sxline == Tag.Null)
+                return ErrJson("AskSxlineOfSxview returned a null section line");
+
+            // parent view from the simple-sxline query (first Tag output after
+            // the two direction arrays; per uf_draw.h UF_DRAW_ask_simple_sxline)
+            Tag pviewTag = Tag.Null;
+            try
+            {
+                double[] cutDir = new double[3];
+                double[] arrowDir = new double[3];
+                int numSegs = 0, numArrows = 0;
+                Tag[] segs = null, arrows = null;
+                NXOpen.UF.UFDraw.SxlineStatus st;
+                uf.Draw.AskSimpleSxline(sxline, cutDir, arrowDir,
+                    out pviewTag, out numSegs, out segs, out numArrows, out arrows, out st);
+            }
+            catch (Exception eq) { Log("ask simple sxline warn: " + eq.Message); }
+            if (pviewTag == Tag.Null)
+                return ErrJson("could not read the parent view of the section line"
+                    + " (revolved/stepped lines are not simple; use their own tools)");
+            DraftingView parent = NXOpen.Utilities.NXObjectManager.Get(pviewTag) as DraftingView;
+            if (parent == null) return ErrJson("section line parent did not resolve to a DraftingView");
+
+            bool activated = false;
+            try
+            {
+                if (!parent.IsActiveForSketching) { parent.ActivateForSketching(); activated = true; }
+            }
+            catch (Exception ea) { Log("activate warn: " + ea.Message); }
+
+            Tag segTag = Tag.Null;
+            string stage = "cut line";
+            try
+            {
+                NXOpen.Line cutLine = _part.Curves.CreateLine(
+                    new Point3d(x1, y1, 0.0), new Point3d(x2, y2, 0.0));
+                if (cutLine == null)
+                    return ErrJson("failed to create the cut segment line inside the parent view");
+
+                stage = "AddSxlineSxseg";
+                var cutObj = new NXOpen.UF.UFDrf.Object();
+                cutObj.object_tag = cutLine.Tag;
+                cutObj.object_view_tag = parent.Tag;
+                cutObj.object_assoc_type = NXOpen.UF.UFDrf.AssocType.DwgPos;
+                cutObj.object_assoc_modifier = 0;
+                cutObj.object2_tag = Tag.Null;
+                cutObj.assoc_dwg_pos = new double[] { (x1 + x2) / 2.0, (y1 + y2) / 2.0 };
+                uf.Draw.AddSxlineSxseg(sxline, NXOpen.UF.UFDraw.SxsegType.SxsegCut,
+                    NXOpen.UF.UFDraw.SxlineLeg.SxlineLeg1, ref cutObj, out segTag);
+            }
+            catch (Exception ex)
+            {
+                return ErrJson("add_section_segment failed at " + stage + ": " + ex.Message);
+            }
+            finally
+            {
+                if (activated)
+                {
+                    try
+                    {
+                        _session.ApplicationSwitchImmediate("UG_APP_MODELING");
+                        _session.ApplicationSwitchImmediate("UG_APP_DRAFTING");
+                    }
+                    catch (Exception ea) { Log("app switch back warn: " + ea.Message); }
+                }
+            }
+            if (segTag == Tag.Null)
+                return ErrJson("AddSxlineSxseg returned a null segment tag");
+            try { ForceUpdateSheet(sheet); } catch { }
+            return OkJson("segment", segTag.ToString(),
+                "cut segment added to section line of '" + sxview.Name
+                + "' (bend system-generated; check the updated view)");
+        }
+        catch (Exception e)
+        {
+            return ErrJson("add_section_segment failed: " + e.Message);
+        }
+    }
+
+    // nx_create_auxiliary_view <parent_view_id> <hx1> <hy1> <hx2> <hy2> <px> <py>
+    // Auxiliary view (辅助视图) via UFDraw.AddAuxiliaryView(drawing, parent,
+    // hinge_line, ref_xy[2], out view). The docs demand a "smart hinge line";
+    // we first try a plain member-view line drawn in the expanded parent (the
+    // route that worked for section cuts) - if NX rejects it with the smart
+    // object error, the command reports it and the route stays experimental.
+    private static string CreateAuxiliaryView(string[] parts)
+    {
+        if (parts.Length < 8)
+            return ErrJson("usage: nx_create_auxiliary_view <parent_view_id> <hx1> <hy1> <hx2> <hy2> <px> <py>"
+                + " (hinge line + placement, all drawing coordinates)");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+            try { _session.ApplicationSwitchImmediate("UG_APP_DRAFTING"); }
+            catch (Exception ea) { Log("app switch warn: " + ea.Message); }
+
+            DrawingSheet sheet;
+            DraftingView parent = ResolveViewAnySheet(parts[1].Trim(), out sheet);
+            try { sheet.Open(); } catch { }
+
+            double x1 = D(parts[2]), y1 = D(parts[3]);
+            double x2 = D(parts[4]), y2 = D(parts[5]);
+            double px = D(parts[6]), py = D(parts[7]);
+            if (Math.Abs(x2 - x1) < 1e-9 && Math.Abs(y2 - y1) < 1e-9)
+                return ErrJson("hinge line is degenerate: (x1,y1) == (x2,y2)");
+
+            int before = 0;
+            try { before = sheet.GetDraftingViews().Length; } catch { }
+
+            bool activated = false;
+            try
+            {
+                if (!parent.IsActiveForSketching) { parent.ActivateForSketching(); activated = true; }
+            }
+            catch (Exception ea) { Log("activate warn: " + ea.Message); }
+
+            Tag auxTag = Tag.Null;
+            string stage = "hinge line";
+            try
+            {
+                NXOpen.Line hinge = _part.Curves.CreateLine(
+                    new Point3d(x1, y1, 0.0), new Point3d(x2, y2, 0.0));
+                if (hinge == null)
+                    return ErrJson("failed to create the hinge line inside the parent view");
+                stage = "AddAuxiliaryView";
+                NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+                uf.Draw.AddAuxiliaryView(sheet.Tag, parent.Tag, hinge.Tag,
+                    new double[] { px, py }, out auxTag);
+            }
+            catch (Exception ex)
+            {
+                return ErrJson("create_auxiliary_view failed at " + stage + ": " + ex.Message);
+            }
+            finally
+            {
+                if (activated)
+                {
+                    try
+                    {
+                        _session.ApplicationSwitchImmediate("UG_APP_MODELING");
+                        _session.ApplicationSwitchImmediate("UG_APP_DRAFTING");
+                    }
+                    catch (Exception ea) { Log("app switch back warn: " + ea.Message); }
+                }
+            }
+            if (auxTag == Tag.Null)
+                return ErrJson("auxiliary view returned a null view tag");
+            DraftingView created = null;
+            try { created = NXOpen.Utilities.NXObjectManager.Get(auxTag) as DraftingView; } catch { }
+            if (created == null)
+            {
+                DraftingView[] now = sheet.GetDraftingViews();
+                if (now.Length > before) created = now[now.Length - 1];
+            }
+            if (created == null)
+                return ErrJson("auxiliary view tag did not resolve to a DraftingView");
+            try { ForceUpdateSheet(sheet); } catch { }
+            string id = ""; try { id = created.JournalIdentifier; } catch { }
+            int count = 0;
+            try { count = sheet.GetDraftingViews().Length; } catch { }
+            return "{\"ok\":true,\"view\":\"" + Esc(id)
+                + "\",\"result\":\"" + Esc("auxiliary view created views=" + count)
+                + "\"}";
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_auxiliary_view failed: " + e.Message);
         }
     }
 
