@@ -103,6 +103,28 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
     if method == "nx_list_holes":
         body_id = str(params.get("body_id", "") or "")
         return ("nx_list_holes " + body_id) if body_id else "nx_list_holes"
+    # ---- assembly explosion (爆炸视图, 装配工艺卡配图) -----------------------
+    if method == "nx_create_explosion":
+        name = str(params.get("name", "") or "")
+        return ("nx_create_explosion " + name) if name else "nx_create_explosion"
+    if method == "nx_explode_component":
+        return "nx_explode_component %s %s %s %s %s" % (
+            str(params.get("explosion", "")),
+            str(params.get("component", "")),
+            _fmt(float(params.get("dx", 0.0))),
+            _fmt(float(params.get("dy", 0.0))),
+            _fmt(float(params.get("dz", 0.0))),
+        )
+    if method == "nx_unexplode_component":
+        return "nx_unexplode_component %s %s" % (
+            str(params.get("explosion", "")),
+            str(params.get("component", "")),
+        )
+    if method == "nx_list_explosions":
+        return "nx_list_explosions"
+    if method == "nx_refset_add_bodies":
+        name = str(params.get("name", "") or "")
+        return ("nx_refset_add_bodies " + name) if name else "nx_refset_add_bodies"
     if method == "nx_undo":
         return "nx_undo"
     if method == "nx_release":
@@ -135,6 +157,9 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
             cmd += " " + parent
             if name:
                 cmd += " " + name
+        # explosion=<name> must be the LAST token (after the positional name)
+        if params.get("explosion"):
+            cmd += " explosion=" + str(params["explosion"])
         return cmd
     if method == "nx_create_note":
         # text goes last so it may contain spaces; '|' marks a line break;
@@ -1026,6 +1051,21 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
             "children": int(resp.get("children", 0)),
             "message": msg,
         }
+    if method == "nx_create_explosion":
+        return {"status": "success", "name": str(resp.get("explosion", "")), "message": msg}
+    if method == "nx_explode_component":
+        return {"status": "success", "component": str(resp.get("component", "")), "message": msg}
+    if method == "nx_unexplode_component":
+        return {"status": "success", "component": str(resp.get("component", "")), "message": msg}
+    if method == "nx_list_explosions":
+        return {
+            "status": "success",
+            "count": int(resp.get("count", 0)),
+            "explosions": resp.get("explosions") or [],
+            "message": msg,
+        }
+    if method == "nx_refset_add_bodies":
+        return {"status": "success", "name": str(resp.get("refset", "")), "message": msg}
     if method == "nx_create_section_view":
         return {"status": "success", "view": str(resp.get("view", "")), "message": msg}
     if method == "nx_add_section_segment":

@@ -77,6 +77,16 @@
 //   nx_create_hole_table <body_id> <x> <y> [edges=i,j,...]  (孔表：孔位标注+坐标明细表，
 //                                                   钻孔工序常用；edges 缺省=全部圆边，
 //                                                   HoleTableBuilder 路线，坐标为图纸坐标)
+//   nx_refset_add_bodies [name=MODEL] (把全部实体加入指定引用集（缺省新建 MODEL）；
+//                                     子件体不在引用集里=装配组件显示为空，
+//                                     出图空白——nx_add_component 前对子件调用并保存)
+//   nx_create_explosion [name]       (创建爆炸视图状态，装配工艺卡配图；
+//                                     部件须为装配体，名字须唯一)
+//   nx_explode_component <explosion> <component_name> <dx> <dy> <dz>
+//                                    (按平移量爆炸单个组件，4x4 列向量变换；
+//                                     返回 NX 存储的平移回显，约定错位当场暴露)
+//   nx_unexplode_component <explosion> <component_name>  (还原单组件)
+//   nx_list_explosions               (列出当前部件的爆炸状态)
 //   nx_export_pdf <path> [ALL|sheet]  (ALL = 全部图纸页导出到一个多页 PDF)
 //   nx_build_plate_test           (single-command acceptance part)
 //   nx_create_wave_link <src_master> <target> [body_index] [assoc=1] [x=..] [y=..] [z=..]   (WAVE 链接：源件为装配根，目标件作下游组件，固定时间戳记/提取几何，可选摆放偏移)
@@ -127,6 +137,8 @@ public static class NX_MCP_Loader
     private static readonly Dictionary<string, Sketch> _sketches = new Dictionary<string, Sketch>();
     private static readonly Dictionary<string, string> _sketchPlanes = new Dictionary<string, string>();
     private static readonly Dictionary<string, Body> _bodies = new Dictionary<string, Body>();
+    private static readonly Dictionary<string, Tag> _explosions = new Dictionary<string, Tag>();
+    private static int _explosionCounter;
     private static int _sketchCounter;
     private static int _bodyCounter;
     private static string _partPath;
@@ -383,6 +395,16 @@ public static class NX_MCP_Loader
             // below was verified present in the NX 12 NXOpen.xml member list.
             case "nx_create_drawing_sheet":
                 return CreateDrawingSheet(parts);
+            case "nx_create_explosion":
+                return CreateExplosionCmd(parts);
+            case "nx_explode_component":
+                return ExplodeComponentCmd(parts);
+            case "nx_unexplode_component":
+                return UnexplodeComponentCmd(parts);
+            case "nx_list_explosions":
+                return ListExplosionsCmd();
+            case "nx_refset_add_bodies":
+                return RefsetAddBodies(parts);
             case "nx_create_projected_view":
                 return CreateProjectedView(parts);
             case "nx_list_drawing_sheets":
@@ -695,12 +717,34 @@ public static class NX_MCP_Loader
             {
                 try { pv.SetName(parts[4].Trim()); } catch { }
             }
+            // optional explosion=<name> attaches an assembly explosion state
+            // to this view (UF_ASSEM_set_view_explosion) - 爆炸图入工艺卡；
+            // 挂接失败只降级为警告，不拖垮视图创建
+            string expNote = "";
+            for (int i = 3; i < parts.Length; i++)
+            {
+                string t = parts[i].Trim();
+                if (t.StartsWith("explosion=", StringComparison.OrdinalIgnoreCase))
+                {
+                    string ename = t.Substring(10).Trim();
+                    try
+                    {
+                        NXOpen.Assemblies.Explosion e = FindExplosion(ename);
+                        NXOpen.UF.UFSession.GetUFSession().Assem.SetViewExplosion(pv.Tag, e.Tag);
+                        expNote = " explosion=" + ename;
+                    }
+                    catch (Exception ee)
+                    {
+                        expNote = " explosion_attach_failed: " + ee.Message;
+                    }
+                }
+            }
             try { ForceUpdateSheet(sheet); } catch { }
 
             string id = ""; try { id = pv.JournalIdentifier; } catch { }
             int count = 0;
             try { count = sheet.GetDraftingViews().Length; } catch { }
-            return OkJson("view", id, "projected view created views=" + count);
+            return OkJson("view", id, "projected view created views=" + count + expNote);
         }
         catch (Exception e)
         {
@@ -4038,9 +4082,214 @@ public static class NX_MCP_Loader
         return sb.ToString();
     }
 
+    // nx_refset_add_bodies [name=MODEL]
+    // Create (or reuse) a named reference set in the work part and put every
+    // solid body into it. Assembly components reference their child part's
+    // refset (nx_add_component defaults to MODEL); a child part whose bodies
+    // are in NO refset displays as an empty component - drafting views of the
+    // assembly render blank and mass_properties sees no geometry (probed
+    // 2026-11-06). Call this on the child part BEFORE nx_add_component, then
+    // nx_save_part. The assembly-side load fix (EnsureChildLoaded /
+    // prototype LoadFully in OpenPart) pulls the geometry in.
+    private static string RefsetAddBodies(string[] parts)
+    {
+        if (_part == null) return ErrJson("no active part");
+        string name = parts.Length > 1 && parts[1].Trim().Length > 0
+            ? parts[1].Trim() : "MODEL";
+        try
+        {
+            var bodies = new List<NXOpen.NXObject>();
+            foreach (Body b in _part.Bodies.ToArray())
+            {
+                bool solid = false;
+                try { solid = b.IsSolidBody; } catch { }
+                if (solid) bodies.Add(b);
+            }
+            if (bodies.Count == 0) return ErrJson("no solid bodies in work part");
+            NXOpen.ReferenceSet rs = null;
+            try { rs = _part.FindObject(name) as NXOpen.ReferenceSet; } catch { }
+            if (rs == null)
+            {
+                rs = _part.CreateReferenceSet();
+                try { rs.SetName(name); } catch { }
+                rs.AddObjectsToReferenceSet(bodies.ToArray());
+                return OkJson("refset", name,
+                    "refset " + name + " created with " + bodies.Count
+                    + " solid body(ies)");
+            }
+            rs.AddObjectsToReferenceSet(bodies.ToArray());
+            int members = 0;
+            try { members = rs.AskMembersInReferenceSet().Length; } catch { }
+            return OkJson("refset", name,
+                "refset " + name + " reused; added " + bodies.Count
+                + " solid body(ies), now " + members + " member(s)");
+        }
+        catch (Exception e)
+        {
+            return ErrJson("refset_add_bodies failed: " + e.Message);
+        }
+    }
+
+    // ---- explosion views (爆炸视图, 装配工序卡配图) ---------------------------
+    //
+    // An explosion is a named view state of the assembly: each component can
+    // carry a translation (UF_ASSEM_explode_component, 4x4 COLUMN-vector
+    // transform - translation in the 4th column, per uf_assem.h "Component
+    // Transform" section). Attach it to a drafting view with
+    // nx_create_projected_view ... explosion=<name>
+    // (UF_ASSEM_set_view_explosion) so the sheet renders the exploded state;
+    // export the PDF for the process card as usual.
+    private static NXOpen.Assemblies.Explosion FindExplosion(string name)
+    {
+        if (_part == null) throw new Exception("no active part");
+        NXOpen.Assemblies.Explosion e = null;
+        try { e = _part.ComponentAssembly.Explosions.FindObject(name); } catch { }
+        if (e == null)
+        {
+            foreach (NXOpen.Assemblies.Explosion x in _part.ComponentAssembly.Explosions.ToArray())
+            {
+                string nm = ""; try { nm = x.Name; } catch { }
+                if (string.Equals(nm, name, StringComparison.OrdinalIgnoreCase)) { e = x; break; }
+            }
+        }
+        if (e == null)
+            throw new Exception("no explosion named " + name + " (create one with nx_create_explosion)");
+        return e;
+    }
+
+    private static NXOpen.Assemblies.Component FindComponentByName(string target)
+    {
+        NXOpen.Assemblies.Component root = _part.ComponentAssembly.RootComponent;
+        NXOpen.Assemblies.Component[] kids = null;
+        try { kids = root.GetChildren(); }
+        catch (Exception e) { throw new Exception("root.GetChildren failed: " + e.Message); }
+        foreach (NXOpen.Assemblies.Component c in kids)
+        {
+            if (c == null) continue;   // broken/dangling component row
+            string nm = ""; try { nm = c.Name; } catch { }
+            string dn = ""; try { dn = c.DisplayName; } catch { }
+            if (string.Equals(nm, target, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(dn, target, StringComparison.OrdinalIgnoreCase))
+                return c;
+        }
+        var avail = new StringBuilder();
+        foreach (NXOpen.Assemblies.Component c in kids)
+        {
+            if (c == null) { avail.Append(" <broken>"); continue; }
+            string nm = ""; try { nm = c.DisplayName; } catch { }
+            if (avail.Length > 0) avail.Append(", ");
+            avail.Append(nm);
+        }
+        throw new Exception("no component named " + target + " (root children: " + avail.ToString() + ")");
+    }
+
+    // nx_create_explosion [name]
+    private static string CreateExplosionCmd(string[] parts)
+    {
+        if (_part == null) return ErrJson("no active part");
+        string name = parts.Length > 1 && parts[1].Trim().Length > 0
+            ? parts[1].Trim() : ("EXPLOSION_" + (++_explosionCounter));
+        try
+        {
+            NXOpen.Assemblies.Explosion e = _part.ComponentAssembly.Explosions.Create(name);
+            Tag t = e.Tag;
+            _explosions[name] = t;
+            int nComp = 0;
+            try { nComp = _part.ComponentAssembly.RootComponent.GetChildren().Length; } catch { }
+            return OkJson("explosion", name,
+                "explosion " + name + " created (root components=" + nComp + ")");
+        }
+        catch (Exception ex)
+        {
+            return ErrJson("create_explosion failed: " + ex.Message
+                + " (the part must be an assembly; name must be unique)");
+        }
+    }
+
+    // nx_explode_component <explosion_name> <component_name> <dx> <dy> <dz>
+    private static string ExplodeComponentCmd(string[] parts)
+    {
+        if (parts.Length < 6)
+            return ErrJson("usage: nx_explode_component <explosion_name> <component_name> <dx> <dy> <dz>");
+        try
+        {
+            NXOpen.Assemblies.Explosion e = FindExplosion(parts[1]);
+            NXOpen.Assemblies.Component comp = FindComponentByName(parts[2]);
+            double dx = D(parts[3]), dy = D(parts[4]), dz = D(parts[5]);
+            NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+            double[,] m = new double[4, 4];
+            m[0, 0] = 1.0; m[1, 1] = 1.0; m[2, 2] = 1.0; m[3, 3] = 1.0;
+            m[0, 3] = dx; m[1, 3] = dy; m[2, 3] = dz;
+            uf.Assem.ExplodeComponent(e.Tag, comp.Tag, m);
+            // echo back what NX stored - catches any row/column convention
+            // mismatch immediately instead of at PDF time
+            NXOpen.UF.UFAssem.ExplStatus st = NXOpen.UF.UFAssem.ExplStatus.Unexploded;
+            double[,] echo = new double[4, 4];
+            string echoErr = "";
+            try { uf.Assem.AskCompExplosion(e.Tag, comp.Tag, out st, echo); }
+            catch (Exception ec) { echoErr = ec.Message; }
+            string msg = "component " + parts[2] + " exploded by (" + F(dx) + "," + F(dy) + "," + F(dz) + ")"
+                + " status=" + st;
+            if (echoErr.Length > 0) msg += "; ask_comp_explosion: " + echoErr;
+            else msg += "; stored translation=(" + F(echo[0, 3]) + "," + F(echo[1, 3]) + "," + F(echo[2, 3]) + ")";
+            return OkJson("component", parts[2], msg);
+        }
+        catch (Exception ex)
+        {
+            return ErrJson("explode_component failed: " + ex.Message);
+        }
+    }
+
+    // nx_unexplode_component <explosion_name> <component_name>
+    private static string UnexplodeComponentCmd(string[] parts)
+    {
+        if (parts.Length < 3)
+            return ErrJson("usage: nx_unexplode_component <explosion_name> <component_name>");
+        try
+        {
+            NXOpen.Assemblies.Explosion e = FindExplosion(parts[1]);
+            NXOpen.Assemblies.Component comp = FindComponentByName(parts[2]);
+            NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+            uf.Assem.UnexplodeComponent(e.Tag, comp.Tag);
+            return OkJson("component", parts[2], "component " + parts[2] + " unexploded");
+        }
+        catch (Exception ex)
+        {
+            return ErrJson("unexplode_component failed: " + ex.Message);
+        }
+    }
+
+    // nx_list_explosions
+    private static string ListExplosionsCmd()
+    {
+        if (_part == null) return ErrJson("no active part");
+        try
+        {
+            var sb = new StringBuilder();
+            int n = 0;
+            foreach (NXOpen.Assemblies.Explosion x in _part.ComponentAssembly.Explosions.ToArray())
+            {
+                string nm = ""; try { nm = x.Name; } catch { }
+                Tag t = x.Tag;
+                if (sb.Length > 0) sb.Append(",");
+                sb.Append("{\"name\":\"").Append(Esc(nm))
+                  .Append("\",\"tag\":").Append(t.ToString()).Append("}");
+                n++;
+            }
+            var sb2 = new StringBuilder();
+            sb2.Append("{\"ok\":true,\"count\":").Append(n)
+               .Append(",\"explosions\":[").Append(sb.ToString()).Append("]")
+               .Append(",\"result\":\"").Append(Esc("found " + n + " explosion(s)")).Append("\"}");
+            return sb2.ToString();
+        }
+        catch (Exception ex)
+        {
+            return ErrJson("list_explosions failed: " + ex.Message);
+        }
+    }
+
     // nx_probe_face <body_id> <face_index>
-    // Raw UF evaluator dump for diagnosing face parametrization semantics
-    // (uv bounds order, AskFaceProps outputs at (0,0) and (1,1)). Temporary
+    // Raw UF evaluator dump for diagnosing face parametrization semantics    // (uv bounds order, AskFaceProps outputs at (0,0) and (1,1)). Temporary
     // diagnostic helper for the nx_list_holes cylinder fit.
     private static string ProbeFace(string[] parts)
     {
@@ -5136,12 +5385,70 @@ public static class NX_MCP_Loader
             ResetTaskState();
             // register existing bodies so GetBody works after nx_open_part
             RegisterExistingBodies(_part);
-            return OkJson("part", _partPath, "opened");
+            string loadNote = EnsureAssemblyChildrenLoaded();
+            return OkJson("part", _partPath, "opened" + loadNote);
         }
         finally
         {
             if (status != null) { try { status.Dispose(); } catch { } }
         }
+    }
+
+    // Force-load the geometry of every root component. NX loads assembly
+    // children structure-only by default, which leaves the assembly with 0
+    // bodies (nx_mass_properties: "no solid bodies") and empty drafting
+    // views. Returns "" or "; children loaded=n" for the response message.
+    private static string EnsureAssemblyChildrenLoaded()
+    {
+        try
+        {
+            NXOpen.Assemblies.Component root = _part.ComponentAssembly.RootComponent;
+            if (root == null) return "";
+            NXOpen.Assemblies.Component[] kids = root.GetChildren();
+            if (kids == null || kids.Length == 0) return "";
+            NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+            int n = 0;
+            foreach (NXOpen.Assemblies.Component c in kids)
+            {
+                if (c == null) continue;
+                string cn = "";
+                try { cn = c.DisplayName; } catch { }
+                // Route 1: UF_ASSEM_ensure_child_loaded (probed 2026-11-06:
+                // throws "invalid OM object" on the component tag - kept for
+                // reference). Route 2: the component's prototype part
+                // LoadFully(), the managed high-level equivalent.
+                bool ok1 = false;
+                try
+                {
+                    NXOpen.UF.UFPart.LoadStatus ls;
+                    uf.Assem.EnsureChildLoaded(c.Tag, out ls);
+                    ok1 = true;
+                }
+                catch (Exception el)
+                {
+                    Log("ensure_child_loaded(" + cn + ") failed: " + el.Message);
+                }
+                if (ok1) { n++; continue; }
+                try
+                {
+                    NXOpen.BasePart proto = c.Prototype as NXOpen.BasePart;
+                    if (proto != null)
+                    {
+                        NXOpen.PartLoadStatus pls = proto.LoadFully();
+                        if (pls != null) { try { pls.Dispose(); } catch { } }
+                        ok1 = true;
+                        Log("prototype loadfully(" + cn + ") ok");
+                    }
+                }
+                catch (Exception el2)
+                {
+                    Log("prototype loadfully(" + cn + ") failed: " + el2.Message);
+                }
+                if (ok1) n++;
+            }
+            return "; children loaded=" + n;
+        }
+        catch { return ""; }
     }
 
     private static string ClosePart(string[] parts)
@@ -7024,6 +7331,23 @@ public static class NX_MCP_Loader
                 return ErrJson("add_component failed: "
                     + ((addErr.Length > 0) ? addErr : "AddComponent returned null"));
 
+            // Pull the child geometry in right away (NX loads assembly
+            // children structure-only by default). UF EnsureChildLoaded
+            // throws "invalid OM object" on the component tag (probed
+            // 2026-11-06), the managed prototype route works.
+            string loadFix = "";
+            try
+            {
+                NXOpen.BasePart childPart = comp.Prototype as NXOpen.BasePart;
+                if (childPart != null)
+                {
+                    NXOpen.PartLoadStatus pls = childPart.LoadFully();
+                    if (pls != null) { try { pls.Dispose(); } catch { } }
+                    loadFix = "child fully loaded";
+                }
+            }
+            catch (Exception el) { loadFix = "child load failed: " + el.Message; }
+
             int after = CountRootChildren();
             string jid = "";
             try { jid = comp.JournalIdentifier; } catch { }
@@ -7039,6 +7363,7 @@ public static class NX_MCP_Loader
                     + before + " -> " + after + ")");
             string msg = "component '" + shown + "' added (children " + before
                 + " -> " + after + ")";
+            if (loadFix.Length > 0) msg += "; " + loadFix;
             if (loadWarn.Length > 0) msg += "; load warning: " + loadWarn;
             var rs = new StringBuilder();
             rs.Append("{\"ok\":true,\"component\":\"").Append(Esc(shown));

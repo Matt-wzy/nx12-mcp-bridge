@@ -17,6 +17,8 @@ from nx_mcp.contracts import (
     AssemblyListResult,
     AttributeListResult,
     ComponentAddResult,
+    ExplosionListResult,
+    ExplosionResult,
     ExportResult,
     ExtrudeResult,
     HoleListResult,
@@ -424,6 +426,11 @@ CERTIFIED_TOOL_NAMES = {
     "nx_export_bom_csv",
     "nx_list_holes",
     "nx_export_hole_table_csv",
+    "nx_create_explosion",
+    "nx_explode_component",
+    "nx_unexplode_component",
+    "nx_list_explosions",
+    "nx_refset_add_bodies",
     # 装配添加组件（工序装配/合件建模；装配工艺路线第一步）
     "nx_add_component",
     # 焊接符号（GB/T 324 焊缝标注，WeldCollection.CreateLineWeldBuilder 路线）
@@ -971,15 +978,31 @@ def create_certified_server(
         y: float,
         parent_view_id: str = "",
         name: str = "",
+        explosion: str = "",
     ) -> OperationResult:
         """Project a view from an existing drafting view at sheet position (x, y).
 
         Leave parent_view_id empty to use the first drafting view on the sheet.
+        explosion optionally names an assembly explosion (created with
+        nx_create_explosion + nx_explode_component) to attach to this view;
+        the message reports attachment success or the reason it failed.
+        NOTE (NX12, probed 2026-11-06): the attach succeeds and the modeling
+        explosion state is stored in the part, but the exploded OFFSETS do
+        not render in the drafting view - the view shows assembled positions
+        (see 受阻项调研档案 section 11). The assembly components
+        themselves render fine once the child parts carry a MODEL refset
+        (nx_refset_add_bodies) and are fully loaded.
         """
         return OperationResult(
             **await call(
                 "nx_create_projected_view",
-                {"x": x, "y": y, "parent_view_id": parent_view_id, "name": name},
+                {
+                    "x": x,
+                    "y": y,
+                    "parent_view_id": parent_view_id,
+                    "name": name,
+                    "explosion": explosion,
+                },
             )
         )
 
@@ -1568,6 +1591,77 @@ def create_certified_server(
         if position is not None:
             params["position"] = {"x": position.x, "y": position.y, "z": position.z}
         return ComponentAddResult(**await call("nx_add_component", params))
+
+    @mcp.tool()
+    async def nx_create_explosion(name: str = "") -> ExplosionResult:
+        """Create a named assembly explosion state (爆炸视图).
+
+        The active part must be an assembly (add components with
+        nx_add_component first); name must be unique in the part and defaults
+        to EXPLOSION_<n>. The explosion starts with every component in its
+        assembled position - move components with nx_explode_component, list
+        states with nx_list_explosions, and attach one to a drafting view via
+        nx_create_projected_view(explosion=...) to render it on the sheet.
+        """
+        params: dict[str, Any] = {}
+        if name:
+            params["name"] = name
+        return ExplosionResult(**await call("nx_create_explosion", params))
+
+    @mcp.tool()
+    async def nx_explode_component(
+        explosion: str,
+        component: str,
+        dx: float,
+        dy: float,
+        dz: float,
+    ) -> ExplosionResult:
+        """Explode one assembly component by a translation (dx, dy, dz) in mm.
+
+        component is the instance name as shown by nx_list_assembly
+        (case-insensitive). The translation accumulates with the component's
+        parents' explosion offsets. The message echoes the transform NX
+        actually stored (status + translation), so a convention mismatch
+        surfaces immediately instead of at PDF time. Undo one component with
+        nx_unexplode_component; the explosion only affects views that
+        reference it (nx_create_projected_view explosion=...).
+        """
+        return ExplosionResult(
+            **await call(
+                "nx_explode_component",
+                {"explosion": explosion, "component": component,
+                 "dx": dx, "dy": dy, "dz": dz},
+            )
+        )
+
+    @mcp.tool()
+    async def nx_unexplode_component(explosion: str, component: str) -> ExplosionResult:
+        """Move one component back to its assembled position in an explosion."""
+        return ExplosionResult(
+            **await call(
+                "nx_unexplode_component",
+                {"explosion": explosion, "component": component},
+            )
+        )
+
+    @mcp.tool()
+    async def nx_list_explosions() -> ExplosionListResult:
+        """List the named explosion states of the active part."""
+        return ExplosionListResult(**await call("nx_list_explosions", {}))
+
+    @mcp.tool()
+    async def nx_refset_add_bodies(name: str = "MODEL") -> OperationResult:
+        """Put every solid body of the work part into a named reference set.
+
+        Assembly components display their child part through the referenced
+        refset (nx_add_component defaults to MODEL). A child part whose
+        bodies are in no refset shows up as an EMPTY component: the assembly
+        drawing renders blank. Run this on the CHILD part before
+        nx_add_component (then nx_save_part). Creates the refset when missing
+        or adds the bodies to the existing one.
+        """
+        params: dict[str, Any] = {"name": name} if name else {}
+        return OperationResult(**await call("nx_refset_add_bodies", params))
 
     @mcp.tool()
     async def nx_export_bom_csv(path: str) -> ExportResult:

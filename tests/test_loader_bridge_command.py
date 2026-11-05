@@ -125,6 +125,72 @@ def test_list_holes_wire_format():
     assert _command("nx_list_holes", {"body_id": "BODY_1"}) == "nx_list_holes BODY_1"
 
 
+def test_explosion_wire_formats():
+    assert _command("nx_create_explosion", {}) == "nx_create_explosion"
+    assert (
+        _command("nx_create_explosion", {"name": "EXP_1"})
+        == "nx_create_explosion EXP_1"
+    )
+    assert _command("nx_list_explosions", {}) == "nx_list_explosions"
+    assert (
+        _command(
+            "nx_explode_component",
+            {"explosion": "EXP_1", "component": "CLAMP_A", "dx": 30.0, "dy": 0.0, "dz": -5.5},
+        )
+        == "nx_explode_component EXP_1 CLAMP_A 30 0 -5.5"
+    )
+    assert (
+        _command("nx_unexplode_component", {"explosion": "EXP_1", "component": "CLAMP_A"})
+        == "nx_unexplode_component EXP_1 CLAMP_A"
+    )
+
+
+def test_projected_view_carries_explosion_token_last():
+    cmd = _command(
+        "nx_create_projected_view",
+        {"x": 100.0, "y": 80.0, "parent_view_id": "V_TOP", "explosion": "EXP_1"},
+    )
+    assert cmd == "nx_create_projected_view 100 80 V_TOP explosion=EXP_1"
+    # no explosion -> unchanged grammar
+    plain = _command("nx_create_projected_view", {"x": 1.0, "y": 2.0})
+    assert plain == "nx_create_projected_view 1 2"
+
+
+def test_adapt_list_explosions():
+    from nx_mcp.loader_bridge import _adapt
+
+    adapted = _adapt(
+        "nx_list_explosions",
+        {},
+        {
+            "ok": True,
+            "count": 1,
+            "explosions": [{"name": "EXP_1", "tag": 4242}],
+            "result": "found 1 explosion(s)",
+        },
+    )
+    assert adapted["count"] == 1
+    assert adapted["explosions"][0]["name"] == "EXP_1"
+    assert adapted["explosions"][0]["tag"] == 4242
+
+
+def test_adapt_explode_component_echoes_message():
+    from nx_mcp.loader_bridge import _adapt
+
+    adapted = _adapt(
+        "nx_explode_component",
+        {},
+        {
+            "ok": True,
+            "component": "CLAMP_A",
+            "result": "component CLAMP_A exploded by (30,0,0) status=Exploded"
+                      "; stored translation=(30,0,0)",
+        },
+    )
+    assert adapted["component"] == "CLAMP_A"
+    assert "stored translation=(30,0,0)" in adapted["message"]
+
+
 def test_set_dimension_value_formats_numbers():
     cmd = _command(
         "nx_set_dimension_value",

@@ -13,6 +13,9 @@ __all__ = [
     "BodyMassProperties",
     "BomRow",
     "ExportResult",
+    "ExplosionInfo",
+    "ExplosionListResult",
+    "ExplosionResult",
     "ExtrudeResult",
     "HoleInfo",
     "HoleListResult",
@@ -243,4 +246,35 @@ class ExportResult(BaseModel):
 
     status: Literal["success"] = "success"
     path: str
+    message: str = ""
+
+
+class ExplosionResult(BaseModel):
+    """Result of nx_create_explosion / explode / unexplode operations.
+
+    name is the explosion name (create) and component the instance name
+    (explode/unexplode); both messages echo what NX stored so a transform
+    convention mismatch surfaces immediately, not at PDF time."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["success"] = "success"
+    name: str = ""
+    component: str = ""
+    message: str = ""
+
+
+class ExplosionInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    tag: int = 0
+
+
+class ExplosionListResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["success"] = "success"
+    count: int = 0
+    explosions: list[ExplosionInfo] = Field(default_factory=list)
     message: str = ""
