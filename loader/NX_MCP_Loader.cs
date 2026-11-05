@@ -88,6 +88,17 @@
 //   nx_unexplode_component <explosion> <component_name>  (还原单组件)
 //   nx_list_explosions               (列出当前部件的爆炸状态)
 //   nx_export_pdf <path> [ALL|sheet]  (ALL = 全部图纸页导出到一个多页 PDF)
+//   nx_create_stock <box|cyl> [body_id] [allow=a] [axis=x|y|z] [dia=d] [len=l] [ra=r] [aa=r]
+//                                    (毛坯生成：包络体 bbox 加工余量 box=长方体/cyl=圆柱
+//                                     棒料（径向盖 bbox 对角线，dia= 可传标准棒料直径），
+//                                     返回毛坯/零件体积与材料利用率，工艺材料定额用)
+//   nx_create_table <x> <y> [cw=w] [rh=h] [font=chinesef] [header=1] <cells...>
+//                                    (表格注解 UF_TABNOT 路线：cells 行分隔'|'列分隔','
+//                                     放最后可含空格；header=1 首行表头；建表后自动剥离
+//                                     NX 默认模板格(AskNthRow/Column+Remove)，文本走
+//                                     原生 UTF-8 P/Invoke；限制：仅 ASCII 格文可渲染，
+//                                     中文存得进但渲染为方块(七轮探针判死全部字体路线，
+//                                     见受阻项第 12 节)；孔表/参数表上图纸)
 //   nx_build_plate_test           (single-command acceptance part)
 //   nx_create_wave_link <src_master> <target> [body_index] [assoc=1] [x=..] [y=..] [z=..]   (WAVE 链接：源件为装配根，目标件作下游组件，固定时间戳记/提取几何，可选摆放偏移)
 //   create_block <w> <h> <d>      (kept for backward compatibility)
@@ -512,6 +523,22 @@ public static class NX_MCP_Loader
                 return CreateSymbThreadCmd(parts);
             case "nx_probe_symb_thread":
                 return ProbeSymbThread(parts);
+            case "nx_probe_tabnot":
+                return ProbeTabnot(parts);
+            case "nx_probe_tabnot2":
+            case "nx_probe_tabnot3":
+            case "nx_probe_tabnot4":
+            case "nx_probe_tabnot5":
+                return ProbeTabnot5(parts);
+            case "nx_probe_tabnot7":
+                return ProbeTabnot7(parts);
+                return ProbeTabnot4(parts);
+                return ProbeTabnot3(parts);
+                return ProbeTabnot2(parts);
+            case "nx_create_stock":
+                return CreateStock(parts);
+            case "nx_create_table":
+                return CreateTableCmd(parts);
             default:
                 return ErrJson("unknown command: " + cmd);
         }
@@ -7426,6 +7453,1062 @@ public static class NX_MCP_Loader
         catch (Exception e)
         {
             return ErrJson("list_assembly failed: " + e.Message);
+        }
+    }
+
+    // ---- stock blank (毛坯, 2026-11-06) ---------------------------------
+    // nx_create_stock <box|cyl> [body_id] [allow=a] [axis=x|y|z] [dia=d] [len=l] [ra=r] [aa=r]
+    // Wraps the resolved body's bounding box in a machining blank:
+    //   box = block, each side grown by `allow` (default 2 mm);
+    //   cyl = cylinder around the cross-section DIAGONAL (covers bbox corners,
+    //         slightly generous on round shafts - pass dia= for exact standard
+    //         bar stock) along `axis` (default: longest bbox dimension, z
+    //         preferred on ties for turned parts), length grown by `aa` at
+    //         both ends, diameter by `ra` (both default to `allow`).
+    // Reports stock vs part volume and the material utilization ratio
+    // (part/stock) - the everyday process-engineering stock allowance check.
+    // Route: UF_MODL_ask_bounding_box ([xmin,ymin,zmin,xmax,ymax,zmax] per
+    // uf_modl_utilities.h) + UF_MODL_create_block1 / create_cylinder
+    // (Nullsign = new target solid, string lengths in invariant culture) +
+    // UF_MODL_ask_feat_body. Volume via MeasureManager (same unit matrix as
+    // nx_mass_properties).
+    private static double SolidsVolume(Body[] solids)
+    {
+        if (solids == null || solids.Length == 0) return 0.0;
+        Unit massU = null, lenU = null, volU = null;
+        try { massU = _part.UnitCollection.FindObject("Kilogram"); } catch { }
+        try { lenU = _part.UnitCollection.FindObject("Millimeter"); } catch { }
+        try { volU = _part.UnitCollection.FindObject("CubicMillimeter"); } catch { }
+        if (massU == null || lenU == null || volU == null) return double.NaN;
+        try
+        {
+            return _part.MeasureManager.NewMassProperties(
+                new Unit[] { massU, lenU, volU }, 0.99, solids).Volume;
+        }
+        catch
+        {
+            try
+            {
+                return _part.MeasureManager.NewMassProperties(
+                    new Unit[] { massU, lenU }, 0.99, solids).Volume;
+            }
+            catch { return double.NaN; }
+        }
+    }
+
+    private static string CreateStock(string[] parts)
+    {
+        if (_part == null) return ErrJson("no active part");
+        if (parts.Length < 2)
+            return ErrJson("usage: nx_create_stock <box|cyl> [body_id] [allow=2] "
+                + "[axis=x|y|z] [dia=d] [len=l] [ra=radial] [aa=axial]");
+        try
+        {
+            _session = Session.GetSession();
+            string mode = parts[1].Trim().ToLowerInvariant();
+            if (mode != "box" && mode != "cyl")
+                return ErrJson("mode must be box or cyl");
+            string bodyArg = parts.Length > 2 && !parts[2].Contains("=")
+                ? parts[2].Trim() : "";
+            Body body = ResolveBody(bodyArg);
+
+            double allow = 2.0, ra = -1.0, aa = -1.0, dia = -1.0, len = -1.0;
+            string axis = "auto";
+            for (int i = 2; i < parts.Length; i++)
+            {
+                string t = parts[i];
+                if (t.StartsWith("allow=", StringComparison.OrdinalIgnoreCase)) allow = D(t.Substring(6));
+                else if (t.StartsWith("ra=", StringComparison.OrdinalIgnoreCase)) ra = D(t.Substring(3));
+                else if (t.StartsWith("aa=", StringComparison.OrdinalIgnoreCase)) aa = D(t.Substring(3));
+                else if (t.StartsWith("dia=", StringComparison.OrdinalIgnoreCase)) dia = D(t.Substring(4));
+                else if (t.StartsWith("len=", StringComparison.OrdinalIgnoreCase)) len = D(t.Substring(4));
+                else if (t.StartsWith("axis=", StringComparison.OrdinalIgnoreCase)) axis = t.Substring(5).Trim().ToLowerInvariant();
+            }
+            if (allow < 0.0) return ErrJson("allow must be >= 0");
+
+            // part volume BEFORE the stock exists (utilization denominator)
+            List<Body> pre = new List<Body>();
+            foreach (Body b in _part.Bodies.ToArray()) if (b.IsSolidBody) pre.Add(b);
+            double partVol = SolidsVolume(pre.ToArray());
+            int bodiesBefore = pre.Count;
+
+            NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+            double[] bb = new double[6];
+            uf.Modl.AskBoundingBox(body.Tag, bb);
+            double ex = bb[3] - bb[0], ey = bb[4] - bb[1], ez = bb[5] - bb[2];
+
+            Tag featTag = Tag.Null;
+            string desc = "";
+            if (mode == "box")
+            {
+                double L = ex + 2 * allow, W = ey + 2 * allow, H = ez + 2 * allow;
+                double[] corner = { bb[0] - allow, bb[1] - allow, bb[2] - allow };
+                string[] lens = {
+                    L.ToString("0.###", CultureInfo.InvariantCulture),
+                    W.ToString("0.###", CultureInfo.InvariantCulture),
+                    H.ToString("0.###", CultureInfo.InvariantCulture) };
+                uf.Modl.CreateBlock1(NXOpen.UF.FeatureSigns.Nullsign, corner, lens, out featTag);
+                desc = "block " + F(L) + "x" + F(W) + "x" + F(H) + " allowance=" + F(allow);
+            }
+            else
+            {
+                int ax;
+                if (axis == "x") ax = 0;
+                else if (axis == "y") ax = 1;
+                else if (axis == "z") ax = 2;
+                else
+                {
+                    // auto = longest bbox dimension; ties prefer z (turning axis),
+                    // then x
+                    double m = Math.Max(ex, Math.Max(ey, ez));
+                    if (ez >= m - 1e-9) ax = 2;
+                    else if (ex >= m - 1e-9) ax = 0;
+                    else ax = 1;
+                }
+                double radial = ra >= 0.0 ? ra : allow;
+                double axial = aa >= 0.0 ? aa : allow;
+                double dd, ll;
+                double[] origin = new double[3];
+                double[] dir = new double[3];
+                if (ax == 2)
+                {
+                    dd = (dia > 0 ? dia : Math.Sqrt(ex * ex + ey * ey)) + (dia > 0 ? 0 : 2 * radial);
+                    ll = (len > 0 ? len : ez) + (len > 0 ? 0 : 2 * axial);
+                    origin[0] = bb[0] + ex / 2.0; origin[1] = bb[1] + ey / 2.0; origin[2] = bb[2] - (len > 0 ? 0 : axial);
+                    dir[2] = 1.0;
+                }
+                else if (ax == 0)
+                {
+                    dd = (dia > 0 ? dia : Math.Sqrt(ey * ey + ez * ez)) + (dia > 0 ? 0 : 2 * radial);
+                    ll = (len > 0 ? len : ex) + (len > 0 ? 0 : 2 * axial);
+                    origin[0] = bb[0] - (len > 0 ? 0 : axial); origin[1] = bb[1] + ey / 2.0; origin[2] = bb[2] + ez / 2.0;
+                    dir[0] = 1.0;
+                }
+                else
+                {
+                    dd = (dia > 0 ? dia : Math.Sqrt(ex * ex + ez * ez)) + (dia > 0 ? 0 : 2 * radial);
+                    ll = (len > 0 ? len : ey) + (len > 0 ? 0 : 2 * axial);
+                    origin[0] = bb[0] + ex / 2.0; origin[1] = bb[1] - (len > 0 ? 0 : axial); origin[2] = bb[2] + ez / 2.0;
+                    dir[1] = 1.0;
+                }
+                string dStr = dd.ToString("0.###", CultureInfo.InvariantCulture);
+                string hStr = ll.ToString("0.###", CultureInfo.InvariantCulture);
+                uf.Modl.CreateCylinder(NXOpen.UF.FeatureSigns.Nullsign, Tag.Null,
+                    origin, hStr, dStr, dir, out featTag);
+                string axName = ax == 0 ? "x" : (ax == 1 ? "y" : "z");
+                desc = "cylinder d=" + F(dd) + " x " + F(ll) + " axis=" + axName
+                    + " (dia covers bbox diagonal" + (dia > 0 ? "" : "; pass dia= for exact bar stock")
+                    + ")";
+            }
+
+            // locate the new solid: UF_MODL_ask_feat_body -> tag -> Body object
+            Tag stockTag = Tag.Null;
+            try { uf.Modl.AskFeatBody(featTag, out stockTag); } catch { }
+            Body stockBody = null;
+            foreach (Body b in _part.Bodies.ToArray())
+                if (stockTag != Tag.Null && b.Tag == stockTag) { stockBody = b; break; }
+            if (stockBody == null)
+            {
+                // fallback: bodies count diff, take the last
+                Body[] now = _part.Bodies.ToArray();
+                if (now.Length > bodiesBefore) stockBody = now[now.Length - 1];
+            }
+            if (stockBody == null)
+                return ErrJson("stock feature created (feat tag " + featTag + ") but no new body found");
+
+            string bid = "";
+            _bodyCounter++;
+            bid = "BODY_" + _bodyCounter;
+            _bodies[bid] = stockBody;
+
+            double stockVol = SolidsVolume(new Body[] { stockBody });
+            double util = (stockVol > 0.0 && !double.IsNaN(stockVol) && !double.IsNaN(partVol))
+                ? partVol / stockVol * 100.0 : double.NaN;
+            string utilTxt = double.IsNaN(util)
+                ? "utilization=n/a (volume unavailable)"
+                : "utilization=" + util.ToString("0.#", CultureInfo.InvariantCulture) + "%";
+
+            string res = "stock " + desc
+                + "  stock_volume=" + stockVol.ToString("R", CultureInfo.InvariantCulture) + " mm^3"
+                + "  part_volume=" + partVol.ToString("R", CultureInfo.InvariantCulture) + " mm^3"
+                + "  " + utilTxt;
+
+            return "{\"ok\":true"
+                + ",\"body_id\":\"" + Esc(bid) + "\""
+                + ",\"feature_tag\":" + featTag
+                + ",\"stock_volume_mm3\":" + stockVol.ToString("R", CultureInfo.InvariantCulture)
+                + ",\"part_volume_mm3\":" + partVol.ToString("R", CultureInfo.InvariantCulture)
+                + ",\"utilization_pct\":" + (double.IsNaN(util) ? "null" : util.ToString("0.##", CultureInfo.InvariantCulture))
+                + ",\"bbox_min\":[" + F(bb[0]) + "," + F(bb[1]) + "," + F(bb[2]) + "]"
+                + ",\"bbox_max\":[" + F(bb[3]) + "," + F(bb[4]) + "," + F(bb[5]) + "]"
+                + ",\"result\":\"" + Esc(res) + "\"}";
+        }
+        catch (Exception ex)
+        {
+            return ErrJson("create_stock failed: " + ex.Message
+                + " (route: UF_MODL_create_block1/create_cylinder; check body_id and option values)");
+        }
+    }
+
+    // ---- tabular note (表格注解, 2026-11-06) ----------------------------
+    // nx_create_table <x> <y> [cw=w] [rh=h] [font=name] [header=0|1] <cells...>
+    // cells = trailing tokens joined by space; rows split by '|', columns by
+    // ',' (e.g. "孔号,直径,深度|1,8,15|2,10,20"). NO line breaks inside a cell
+    // ('|' is the row separator) and no cell text starting with cw=/rh=/font=/
+    // header= (they would be eaten as options - put text with '=' elsewhere).
+    // Route (2026-11-06 probe rounds 1-3, every step verified live):
+    //   font=: part-level annotation defaults via SettingsManager
+    //   .CreatePreferencesBuilder().AnnotationStyle.LetteringStyle
+    //   .GeneralTextFont, applied BEFORE the table is created so its cells
+    //   inherit. SIDE EFFECT: the part default lettering font stays changed
+    //   for annotations created later in this session (ASCII unaffected).
+    //   The per-object TableEditSettingsBuilder route is unverified-dead
+    //   (prime suspect of the round-2 NX Fatal error; avoided).
+    //   AskDefaultSectionPrefs + continuation_note=null -> UF_TABNOT_create
+    //   (zeroed prefs fail "溢出方向无效"; the char* field must be NULL, not
+    //    a marshaller-owned buffer). Rows/cols: CreateColumn/AddColumn(-1=
+    //    append) + CreateRow/AddRow, optional AddHeaderRow(note,row,0) for
+    //    header=1; AskCellAtRowCol. Cell text goes through the raw
+    //    libufun.dll P/Invoke with explicit UTF-8 bytes: NX 12 stores UF
+    //    strings as UTF-8, the .NET wrapper marshals String via the process
+    //    ANSI codepage (GBK here), so CN text through the wrapper reaches NX
+    //    as invalid UTF-8 and killed NX inside UF_TABNOT_set_cell_text with
+    //    a Fatal error (round 2). The raw route round-trips 孔号 byte-exact
+    //    (probe C step). The CellPrefs struct route is DEAD anyway - its
+    //    int[3]/enum[] fields have no MarshalAs in the .NET wrapper.
+    //   LIMITATION (probe rounds 4-7, 2026-11-06): only ASCII cell text
+    //    RENDERS. CJK text is stored byte-correctly but renders as boxes
+    //    (UTF-8) or blank (GBK) - the cell font cannot be switched: part
+    //    prefs AnnotationStyle does not cascade into UF cells,
+    //    TableEditSettingsBuilder AVs on UF-created tables (rounds 5/6,
+    //    incl. with InheritSettingsFromPreferences first), CellPrefs struct
+    //    marshal is dead, and a raw native-memory set_cell_prefs patch of
+    //    text_font (round 7, offset 16) returns rc=0 but changes nothing -
+    //    the NX-internal font byte mapping matches neither UTF-8 nor GBK.
+    //    Keep cells ASCII (headers like NO/DIA/DEPTH); Chinese labels can be
+    //    overlaid with nx_create_note at cell positions. The Python side
+    //    rejects non-ASCII cells unless allow_cjk=1 is passed explicitly.
+    // Verification: Tables before/after count + first-cell raw UTF-8 echo.
+    private static string CreateTableCmd(string[] parts)
+    {
+        if (_part == null) return ErrJson("no active part");
+        if (parts.Length < 4)
+            return ErrJson("usage: nx_create_table <x> <y> [cw=20] [rh=6] [font=chinesef] "
+                + "[header=1] <cells: rows '|' cols ','>");
+        try
+        {
+            _session = Session.GetSession();
+            double x = D(parts[1]), y = D(parts[2]);
+            double cw = 20.0, rh = 6.0;
+            string font = "";
+            bool header = false;
+            int i = 3;
+            while (i < parts.Length)
+            {
+                string t = parts[i];
+                if (t.StartsWith("cw=", StringComparison.OrdinalIgnoreCase)) { cw = D(t.Substring(3)); i++; }
+                else if (t.StartsWith("rh=", StringComparison.OrdinalIgnoreCase)) { rh = D(t.Substring(3)); i++; }
+                else if (t.StartsWith("font=", StringComparison.OrdinalIgnoreCase)) { font = t.Substring(5).Trim(); i++; }
+                else if (t.StartsWith("header=", StringComparison.OrdinalIgnoreCase)) { header = t.Substring(7).Trim() == "1"; i++; }
+                else break;
+            }
+            string cells = string.Join(" ", parts, i, parts.Length - i).Trim();
+            if (cells.Length == 0)
+                return ErrJson("missing cells spec (rows '|' cols ',') after options");
+
+            string[] rowSpecs = cells.Split('|');
+            int nRows = rowSpecs.Length;
+            if (nRows < 1 || nRows > 50)
+                return ErrJson("table needs 1..50 rows, got " + nRows);
+            string[][] grid = new string[nRows][];
+            int nCols = rowSpecs[0].Split(',').Length;
+            for (int r = 0; r < nRows; r++)
+            {
+                grid[r] = rowSpecs[r].Split(',');
+                if (grid[r].Length != nCols)
+                    return ErrJson("ragged cells spec: row " + (r + 1) + " has "
+                        + grid[r].Length + " cols, row 1 has " + nCols);
+            }
+            if (nCols < 1 || nCols > 30)
+                return ErrJson("table needs 1..30 columns, got " + nCols);
+
+            DrawingSheet sheet = GetSheetToUse();
+            int tablesBefore = 0;
+            try { tablesBefore = _part.Annotations.Tables.ToArray().Length; } catch { }
+
+            NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+
+            // font first: part-level defaults so the new table's cells inherit
+            // (chinesef renders both CJK and ASCII; the change persists for
+            // annotations created later in this session - documented above)
+            string fontMsg = "font=none";
+            if (font.Length > 0)
+            {
+                string avail;
+                int fid = FindCharacterFontByName(font, out avail);
+                if (fid <= 0)
+                {
+                    try { fid = _part.Fonts.AddFont(font); }
+                    catch (Exception af) { avail = avail + "; AddFont failed: " + af.Message; }
+                }
+                if (fid <= 0)
+                    fontMsg = "font skipped: '" + font + "' not resolvable (table: " + avail + ")";
+                else
+                {
+                    var sm = _part.SettingsManager;
+                    var pb = sm.CreatePreferencesBuilder();
+                    try
+                    {
+                        pb.AnnotationStyle.LetteringStyle.GeneralTextFont = fid;
+                        pb.Commit();
+                        fontMsg = "font=" + font + " (id " + fid + ") set as part annotation default";
+                    }
+                    finally { try { pb.Destroy(); } catch { } }
+                }
+            }
+
+            var secPrefs = new NXOpen.UF.UFTabnot.SectionPrefs();
+            try { uf.Tabnot.AskDefaultSectionPrefs(out secPrefs); }
+            catch (Exception ep) { Log("tabnot default prefs: " + ep.Message); }
+            secPrefs.continuation_note = null;   // char* field: pass NULL, not
+                                                 // a marshaller-owned buffer
+            Tag noteTag = Tag.Null;
+            double[] origin = { x, y, 0.0 };
+            uf.Tabnot.Create(ref secPrefs, origin, out noteTag);
+            if (noteTag == Tag.Null)
+                return ErrJson("UF_TABNOT_create returned a null tag");
+            // UF_TABNOT_create emits a DEFAULT-SIZED template grid (probed
+            // 2026-11-06: text landed in an appended corner cell of a ~6x8
+            // template). Strip every default row/column first - removal
+            // shifts indices, so always take index 0 until the asks fail.
+            int stripped = 0;
+            while (true)
+            {
+                Tag r;
+                try { uf.Tabnot.AskNthRow(noteTag, 0, out r); }
+                catch { break; }
+                if (r == Tag.Null) break;
+                uf.Tabnot.RemoveRow(r);
+                stripped++;
+                if (stripped > 100) break;
+            }
+            while (true)
+            {
+                Tag c;
+                try { uf.Tabnot.AskNthColumn(noteTag, 0, out c); }
+                catch { break; }
+                if (c == Tag.Null) break;
+                uf.Tabnot.RemoveColumn(c);
+                stripped++;
+                if (stripped > 200) break;
+            }
+
+            Tag[] colTags = new Tag[nCols];
+            for (int c = 0; c < nCols; c++)
+            {
+                Tag col;
+                uf.Tabnot.CreateColumn(cw, out col);
+                uf.Tabnot.AddColumn(noteTag, col, -1);
+                colTags[c] = col;
+            }
+            Tag[] rowTags = new Tag[nRows];
+            for (int r = 0; r < nRows; r++)
+            {
+                Tag row;
+                uf.Tabnot.CreateRow(rh, out row);
+                if (r == 0 && header) uf.Tabnot.AddHeaderRow(noteTag, row, 0);
+                else uf.Tabnot.AddRow(noteTag, row, -1);
+                rowTags[r] = row;
+            }
+            int filled = 0;
+            Tag cell00 = Tag.Null;
+            for (int r = 0; r < nRows; r++)
+                for (int c = 0; c < nCols; c++)
+                {
+                    Tag cell;
+                    uf.Tabnot.AskCellAtRowCol(rowTags[r], colTags[c], out cell);
+                    // UTF-8 bytes + NUL through the raw libufun entry point -
+                    // the .NET wrapper's GBK marshaling kills NX on CJK text
+                    byte[] txt = Encoding.UTF8.GetBytes(grid[r][c]);
+                    byte[] buf = new byte[txt.Length + 1];
+                    Array.Copy(txt, buf, txt.Length);
+                    int rc = UFTabnotSetCellTextRaw((int)(object)cell, buf);
+                    if (rc != 0)
+                        throw new Exception("UF_TABNOT_set_cell_text rc=" + rc
+                            + " at cell (" + r + "," + c + ")");
+                    if (filled == 0) cell00 = cell;
+                    filled++;
+                }
+            string cellEcho = "";
+            try
+            {
+                IntPtr p;
+                int rc = UFTabnotAskCellTextRaw((int)(object)cell00, out p);
+                if (rc == 0) cellEcho = Utf8ToString(p);
+                else cellEcho = "(ask rc=" + rc + ")";
+            }
+            catch (Exception et) { cellEcho = "(ask_cell_text: " + et.Message + ")"; }
+
+            uf.Tabnot.Update(noteTag);
+            try { _part.DrawingSheets.RefreshCurrentSheet(); } catch { }
+            int tablesAfter = tablesBefore;
+            try { tablesAfter = _part.Annotations.Tables.ToArray().Length; } catch { }
+
+            string res = "table " + nRows + "x" + nCols + " created at (" + F(x) + "," + F(y)
+                + ") cells=" + filled + " stripped=" + stripped
+                + " tables " + tablesBefore + "->" + tablesAfter
+                + " first_cell=\"" + cellEcho + "\" " + fontMsg;
+            return "{\"ok\":true"
+                + ",\"note_tag\":" + noteTag
+                + ",\"rows\":" + nRows
+                + ",\"cols\":" + nCols
+                + ",\"tables_after\":" + tablesAfter
+                + ",\"cell_echo\":\"" + Esc(cellEcho) + "\""
+                + ",\"font\":\"" + Esc(fontMsg) + "\""
+                + ",\"result\":\"" + Esc(res) + "\"}";
+        }
+        catch (Exception ex)
+        {
+            return ErrJson("create_table failed: " + ex.Message
+                + " (a drawing sheet must exist; cells rows '|' cols ',')");
+        }
+    }
+
+    // nx_probe_tabnot <x> <y> — step-by-step UF_TABNOT sequence probe (2026-11-06).
+    // The composite nx_create_table failed with NX "内存访问违例"; this probe
+    // runs each UF call in its own try/catch and reports which step AVs, with
+    // a SectionPrefs field dump (suspect: the char* continuation_note field
+    // round-trip through the .NET wrapper). C# 5: no local functions, so the
+    // step runner is a class-level static.
+    private static void ProbeStep(List<string> steps, string name, Action act)
+    {
+        try { act(); steps.Add(name + ": ok"); }
+        catch (Exception e) { steps.Add(name + ": FAIL " + e.Message); }
+    }
+
+    private static string ProbeTabnot(string[] parts)
+    {
+        if (parts.Length < 3)
+            return ErrJson("usage: nx_probe_tabnot <x> <y>");
+        List<string> steps = new List<string>();
+        try
+        {
+            _session = Session.GetSession();
+            double x = D(parts[1]), y = D(parts[2]);
+            NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+            GetSheetToUse();
+
+            var prefs = new NXOpen.UF.UFTabnot.SectionPrefs();
+            ProbeStep(steps, "ask_default_prefs",
+                () => uf.Tabnot.AskDefaultSectionPrefs(out prefs));
+            steps.Add(string.Format(CultureInfo.InvariantCulture,
+                "prefs: header_loc={0} max_h={1} overflow_dir={2} overflow_sp={3} attach={4} dbl_border={5} border_w={6} disp_cont={7} cont_note={8}",
+                prefs.header_location, prefs.max_height, prefs.overflow_direction,
+                prefs.overflow_spacing, prefs.attach_point, prefs.use_double_width_border,
+                prefs.border_width, prefs.display_continuation_note,
+                prefs.continuation_note == null ? "<null>" : ("\"" + prefs.continuation_note + "\"")));
+            double[] origin = { x, y, 0.0 };
+            Tag noteTag = Tag.Null;
+            // variant A: pass the asked prefs as-is (continuation_note holds a
+            // string the marshaller will re-allocate + free after the call)
+            Tag variantA = Tag.Null;
+            ProbeStep(steps, "create_with_prefs",
+                () => uf.Tabnot.Create(ref prefs, origin, out variantA));
+            steps.Add("note_tag_A=" + variantA);
+            if (variantA == Tag.Null)
+            {
+                // variant B: zeroed prefs with continuation_note nulled
+                var zero = new NXOpen.UF.UFTabnot.SectionPrefs();
+                zero.continuation_note = null;
+                ProbeStep(steps, "create_zero_prefs",
+                    () => uf.Tabnot.Create(ref zero, origin, out noteTag));
+                steps.Add("note_tag_B=" + noteTag);
+            }
+            else
+            {
+                noteTag = variantA;
+                // variant C: same as A but with continuation_note nulled first
+                prefs.continuation_note = null;
+                Tag variantC = Tag.Null;
+                ProbeStep(steps, "create_with_prefs_null_note",
+                    () => uf.Tabnot.Create(ref prefs, origin, out variantC));
+                steps.Add("note_tag_C=" + variantC);
+            }
+            if (noteTag == Tag.Null) return OkJsonList("steps", steps, "probe done");
+            Tag col = Tag.Null;
+            ProbeStep(steps, "create_column", () => uf.Tabnot.CreateColumn(20.0, out col));
+            ProbeStep(steps, "add_column", () => uf.Tabnot.AddColumn(noteTag, col, -1));
+            Tag row = Tag.Null;
+            ProbeStep(steps, "create_row", () => uf.Tabnot.CreateRow(6.0, out row));
+            ProbeStep(steps, "add_header_row", () => uf.Tabnot.AddHeaderRow(noteTag, row, 0));
+            Tag row2 = Tag.Null;
+            ProbeStep(steps, "create_row2", () => uf.Tabnot.CreateRow(6.0, out row2));
+            ProbeStep(steps, "add_row2", () => uf.Tabnot.AddRow(noteTag, row2, -1));
+            Tag cell = Tag.Null;
+            ProbeStep(steps, "ask_cell", () => uf.Tabnot.AskCellAtRowCol(row, col, out cell));
+            steps.Add("cell_tag=" + cell);
+            ProbeStep(steps, "set_cell_text", () => uf.Tabnot.SetCellText(cell, "OP 10"));
+            string back = null;
+            ProbeStep(steps, "ask_cell_text", () => uf.Tabnot.AskCellText(cell, out back));
+            steps.Add("cell_text=" + (back == null ? "<null>" : "\"" + back + "\""));
+            ProbeStep(steps, "update", () => uf.Tabnot.Update(noteTag));
+            int nTab = -1;
+            try { nTab = _part.Annotations.Tables.ToArray().Length; } catch { }
+            steps.Add("tables_count=" + nTab);
+
+            // ---- round 2: the two suspects the composite hit and round 1
+            // didn't cover - Chinese cell text and the per-object font route.
+            Tag note2 = Tag.Null;
+            var zero2 = new NXOpen.UF.UFTabnot.SectionPrefs();
+            zero2.continuation_note = null;
+            ProbeStep(steps, "cn_create", () => uf.Tabnot.Create(ref zero2, origin, out note2));
+            Tag col2 = Tag.Null, rowc = Tag.Null, cell2 = Tag.Null;
+            ProbeStep(steps, "cn_create_column", () => uf.Tabnot.CreateColumn(20.0, out col2));
+            ProbeStep(steps, "cn_add_column", () => uf.Tabnot.AddColumn(note2, col2, -1));
+            ProbeStep(steps, "cn_create_row", () => uf.Tabnot.CreateRow(6.0, out rowc));
+            ProbeStep(steps, "cn_add_row", () => uf.Tabnot.AddRow(note2, rowc, -1));
+            ProbeStep(steps, "cn_ask_cell", () => uf.Tabnot.AskCellAtRowCol(rowc, col2, out cell2));
+            ProbeStep(steps, "cn_set_text", () => uf.Tabnot.SetCellText(cell2, "孔号"));
+            string backCn = null;
+            ProbeStep(steps, "cn_ask_text", () => uf.Tabnot.AskCellText(cell2, out backCn));
+            steps.Add("cn_text=" + (backCn == null
+                ? "<null>"
+                : "\"" + backCn + "\" len=" + backCn.Length
+                  + " bytes=" + Encoding.UTF8.GetBytes(backCn).Length));
+            ProbeStep(steps, "cn_update", () => uf.Tabnot.Update(note2));
+
+            // font route: SettingsManager.CreateTableEditSettingsBuilder on the
+            // newest Table object (count diff), TableLettering.GeneralTextFont
+            NXOpen.Annotations.Table tObj = null;
+            try
+            {
+                NXOpen.Annotations.Table[] tabs = _part.Annotations.Tables.ToArray();
+                if (tabs.Length > 0) tObj = tabs[tabs.Length - 1];
+            }
+            catch { }
+            steps.Add("font_obj=" + (tObj == null ? "<none>" : tObj.JournalIdentifier));
+            if (tObj != null)
+            {
+                string avail;
+                int fid = FindCharacterFontByName("chinesef", out avail);
+                steps.Add("font_lookup_id=" + fid);
+                if (fid <= 0)
+                {
+                    int fid2 = 0;
+                    try { fid2 = _part.Fonts.AddFont("chinesef"); }
+                    catch (Exception af2) { steps.Add("font_addfont: FAIL " + af2.Message); }
+                    fid = fid2;
+                    steps.Add("font_addfont_id=" + fid);
+                }
+                if (fid > 0)
+                {
+                    try
+                    {
+                        var sm = _part.SettingsManager;
+                        var stb = sm.CreateTableEditSettingsBuilder(new DisplayableObject[] { tObj });
+                        try
+                        {
+                            stb.TableLettering.GeneralTextFont = fid;
+                            ProbeStep(steps, "font_commit", () => stb.Commit());
+                        }
+                        finally { try { stb.Destroy(); } catch { } }
+                    }
+                    catch (Exception se) { steps.Add("font_builder: FAIL " + se.Message); }
+                }
+            }
+            return OkJsonList("steps", steps, "probe done");
+        }
+        catch (Exception ex)
+        {
+            steps.Add("outer: " + ex.Message);
+            return OkJsonList("steps", steps, "probe done with outer error");
+        }
+    }
+
+    // ---- native UF P/Invoke (UTF-8 safe cell text) -----------------------
+    // The .NET UF wrapper marshals String with the process ANSI codepage (GBK
+    // here): CN text reaches NX as invalid UTF-8 and killed NX with a Fatal
+    // error inside UF_TABNOT_set_cell_text (2026-11-06 probe round 2). These
+    // raw entry points let us hand NX exactly the bytes we choose (UTF-8,
+    // which is what NX 12 stores internally - ASCII round-trips proved the
+    // transport, only the CN codepage conversion was broken). NXOpen.Tag is
+    // an Int32-backed enum (NXOpen.Utilities.dll), so the raw tag travels as
+    // int; x64 has a single calling convention so cdecl/stdcall is moot.
+    [DllImport("libufun.dll", EntryPoint = "UF_TABNOT_set_cell_text")]
+    private static extern int UFTabnotSetCellTextRaw(int cellTag, byte[] utf8Text);
+
+    [DllImport("libufun.dll", EntryPoint = "UF_TABNOT_ask_cell_text")]
+    private static extern int UFTabnotAskCellTextRaw(int cellTag, out IntPtr textPtr);
+
+    [DllImport("libufun.dll", EntryPoint = "UF_free")]
+    private static extern void UFFreeRaw(IntPtr p);
+
+    private static string Utf8ToString(IntPtr p)
+    {
+        if (p == IntPtr.Zero) return "";
+        int n = 0;
+        while (Marshal.ReadByte(p, n) != 0) n++;
+        byte[] buf = new byte[n];
+        Marshal.Copy(p, buf, 0, n);
+        UFFreeRaw(p);
+        return Encoding.UTF8.GetString(buf);
+    }
+
+    private static string ProbeTabnot2(string[] parts)
+    {
+        if (parts.Length < 3)
+            return ErrJson("usage: nx_probe_tabnot2 <x> <y>");
+        List<string> steps = new List<string>();
+        try
+        {
+            _session = Session.GetSession();
+            double x = D(parts[1]), y = D(parts[2]);
+            NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+            GetSheetToUse();
+
+            var zero = new NXOpen.UF.UFTabnot.SectionPrefs();
+            // asked defaults, continuation_note nulled (zeroed prefs fail with
+            // "溢出方向无效"; the .NET round-trip of the char* field was the
+            // remaining doubt - ask defaults then null just that field)
+            try { uf.Tabnot.AskDefaultSectionPrefs(out zero); }
+            catch (Exception ep) { Log("probe2 ask prefs: " + ep.Message); }
+            zero.continuation_note = null;
+            Tag note2 = Tag.Null;
+            Tag colT = Tag.Null, rowT = Tag.Null, cellT = Tag.Null;
+            Log("probe2 A: create begin");
+            ProbeStep(steps, "A_create_col_row_cell", () =>
+            {
+                uf.Tabnot.Create(ref zero, new double[] { x, y, 0.0 }, out note2);
+                uf.Tabnot.CreateColumn(20.0, out colT);
+                uf.Tabnot.AddColumn(note2, colT, -1);
+                uf.Tabnot.CreateRow(6.0, out rowT);
+                uf.Tabnot.AddRow(note2, rowT, -1);
+                uf.Tabnot.AskCellAtRowCol(rowT, colT, out cellT);
+            });
+            Log("probe2 A3 done: cell=" + cellT + " row=" + rowT + " col=" + colT);
+
+            // B: raw UTF-8 set (the fix under test)
+            Log("probe2 B: raw utf8 set begin");
+            ProbeStep(steps, "B_set_utf8", () =>
+            {
+                byte[] bytes = Encoding.UTF8.GetBytes("孔号");
+                byte[] buf = new byte[bytes.Length + 1];
+                Array.Copy(bytes, buf, bytes.Length);
+                int rc = UFTabnotSetCellTextRaw((int)(object)cellT, buf);
+                if (rc != 0) throw new Exception("UF_TABNOT_set_cell_text rc=" + rc);
+            });
+            Log("probe2 B done");
+
+            // C: raw ask back, decode UTF-8
+            Log("probe2 C: raw utf8 ask begin");
+            ProbeStep(steps, "C_ask_utf8", () =>
+            {
+                IntPtr p;
+                int rc = UFTabnotAskCellTextRaw((int)(object)cellT, out p);
+                if (rc != 0) throw new Exception("UF_TABNOT_ask_cell_text rc=" + rc);
+                string s = Utf8ToString(p);
+                steps.Add("C_text=" + s + " utf8bytes=" + Encoding.UTF8.GetByteCount(s));
+            });
+            Log("probe2 C done");
+
+            // D: part-level annotation style font (safe candidate first)
+            Log("probe2 D: preferences font begin");
+            ProbeStep(steps, "D_prefs_font", () =>
+            {
+                string avail;
+                int fid = FindCharacterFontByName("chinesef", out avail);
+                if (fid <= 0) fid = _part.Fonts.AddFont("chinesef");
+                if (fid <= 0) throw new Exception("no font id (table: " + avail + ")");
+                var sm = _part.SettingsManager;
+                var pb = sm.CreatePreferencesBuilder();
+                try
+                {
+                    pb.AnnotationStyle.LetteringStyle.GeneralTextFont = fid;
+                    pb.Commit();
+                }
+                finally { try { pb.Destroy(); } catch { } }
+                steps.Add("D_font_id=" + fid);
+            });
+            Log("probe2 D done");
+
+            // E: update
+            ProbeStep(steps, "E_update", () => uf.Tabnot.Update(note2));
+            Log("probe2 E done");
+
+            // (F, the per-object TableEditSettingsBuilder route, is NOT probed:
+            //  it is the prime fatal-error suspect from round 2 and D covers
+            //  the feature. Left unverified-dead, see 受阻项调研档案.)
+            return OkJsonList("steps", steps, "probe2 done");
+        }
+        catch (Exception ex)
+        {
+            steps.Add("outer: " + ex.Message);
+            Log("probe2 outer: " + ex.Message);
+            return OkJsonList("steps", steps, "probe2 done with outer error");
+        }
+    }
+
+    // nx_probe_tabnot3 — encoding A/B for cell text rendering (2026-11-06).
+    // Round-3 echo round-trips were byte-identical yet the PDF renders CJK
+    // cells as boxes/mojibake: NX stores the bytes but its render/text
+    // engine interprets them in another encoding. This probe writes the SAME
+    // text twice (UTF-8 bytes vs GBK=936 bytes) plus an ASCII control, then
+    // the caller exports the sheet to PDF for an eyeball verdict.
+    private static string ProbeTabnot3(string[] parts)
+    {
+        List<string> steps = new List<string>();
+        try
+        {
+            _session = Session.GetSession();
+            NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+            GetSheetToUse();
+
+            string text = "孔号直径";
+            double[,] pos = { { 30.0, 260.0 }, { 30.0, 220.0 }, { 30.0, 180.0 } };
+            string[] names = { "utf8", "gbk", "ascii" };
+            for (int t = 0; t < 3; t++)
+            {
+                var prefs = new NXOpen.UF.UFTabnot.SectionPrefs();
+                try { uf.Tabnot.AskDefaultSectionPrefs(out prefs); }
+                catch (Exception ep) { steps.Add("ask" + t + ": " + ep.Message); }
+                prefs.continuation_note = null;
+                Tag note = Tag.Null;
+                uf.Tabnot.Create(ref prefs,
+                    new double[] { pos[t, 0], pos[t, 1], 0.0 }, out note);
+                Tag col, row, cell;
+                uf.Tabnot.CreateColumn(30.0, out col);
+                uf.Tabnot.AddColumn(note, col, -1);
+                uf.Tabnot.CreateRow(6.0, out row);
+                uf.Tabnot.AddRow(note, row, -1);
+                uf.Tabnot.AskCellAtRowCol(row, col, out cell);
+                byte[] bytes;
+                if (t == 0) bytes = Encoding.UTF8.GetBytes(text);
+                else if (t == 1) bytes = Encoding.GetEncoding(936).GetBytes(text);
+                else bytes = Encoding.ASCII.GetBytes("OK-" + t);
+                byte[] buf = new byte[bytes.Length + 1];
+                Array.Copy(bytes, buf, bytes.Length);
+                int rc = UFTabnotSetCellTextRaw((int)(object)cell, buf);
+                steps.Add(names[t] + ": tag=" + note + " rc=" + rc + " bytes=" + bytes.Length);
+                uf.Tabnot.Update(note);
+            }
+            return OkJsonList("steps", steps, "probe3 done");
+        }
+        catch (Exception ex)
+        {
+            steps.Add("outer: " + ex.Message);
+            return OkJsonList("steps", steps, "probe3 done with outer error");
+        }
+    }
+
+    // nx_probe_tabnot4 — geometry fix + font + UTF-8/GBK render matrix
+    // (2026-11-06). Round-4 found UF_TABNOT_create emits a DEFAULT-SIZED
+    // template (extra rows/cols); the fix strips them via AskNthRow/Column +
+    // RemoveRow/Column before adding ours. Font: part prefs chinesef set
+    // BEFORE creation. Encoding A/B: same CN text as UTF-8 vs GBK bytes.
+    private static string ProbeTabnot4(string[] parts)
+    {
+        List<string> steps = new List<string>();
+        try
+        {
+            _session = Session.GetSession();
+            NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+            GetSheetToUse();
+
+            // font first (part defaults)
+            string avail;
+            int fid = FindCharacterFontByName("chinesef", out avail);
+            if (fid <= 0) fid = _part.Fonts.AddFont("chinesef");
+            steps.Add("font_id=" + fid);
+            var sm = _part.SettingsManager;
+            var pb = sm.CreatePreferencesBuilder();
+            try
+            {
+                pb.AnnotationStyle.LetteringStyle.GeneralTextFont = fid;
+                pb.Commit();
+            }
+            finally { try { pb.Destroy(); } catch { } }
+
+            double[,] pos = { { 30.0, 260.0 }, { 30.0, 220.0 }, { 30.0, 180.0 } };
+            string[] names = { "utf8", "gbk", "ascii" };
+            for (int t = 0; t < 3; t++)
+            {
+                var prefs = new NXOpen.UF.UFTabnot.SectionPrefs();
+                try { uf.Tabnot.AskDefaultSectionPrefs(out prefs); }
+                catch (Exception ep) { steps.Add("ask" + t + ": " + ep.Message); }
+                prefs.continuation_note = null;
+                Tag note = Tag.Null;
+                uf.Tabnot.Create(ref prefs,
+                    new double[] { pos[t, 0], pos[t, 1], 0.0 }, out note);
+                // strip the default template rows/cols (index 0 until empty;
+                // removal shifts the indices so always take the first)
+                int stripped = 0;
+                while (true)
+                {
+                    Tag r;
+                    try { uf.Tabnot.AskNthRow(note, 0, out r); }
+                    catch { break; }
+                    if (r == Tag.Null) break;
+                    uf.Tabnot.RemoveRow(r);
+                    stripped++;
+                    if (stripped > 100) break;
+                }
+                while (true)
+                {
+                    Tag c;
+                    try { uf.Tabnot.AskNthColumn(note, 0, out c); }
+                    catch { break; }
+                    if (c == Tag.Null) break;
+                    uf.Tabnot.RemoveColumn(c);
+                    stripped++;
+                    if (stripped > 200) break;
+                }
+                // 2 cols x 2 rows
+                Tag c1, c2;
+                uf.Tabnot.CreateColumn(30.0, out c1);
+                uf.Tabnot.AddColumn(note, c1, -1);
+                uf.Tabnot.CreateColumn(30.0, out c2);
+                uf.Tabnot.AddColumn(note, c2, -1);
+                Tag r1, r2;
+                uf.Tabnot.CreateRow(6.0, out r1);
+                uf.Tabnot.AddRow(note, r1, -1);
+                uf.Tabnot.CreateRow(6.0, out r2);
+                uf.Tabnot.AddRow(note, r2, -1);
+                string text = "孔号";
+                for (int i = 0; i < 2; i++)
+                {
+                    Tag cell;
+                    uf.Tabnot.AskCellAtRowCol(i == 0 ? r1 : r2, c1, out cell);
+                    byte[] bytes;
+                    if (t == 0) bytes = Encoding.UTF8.GetBytes(text);
+                    else if (t == 1) bytes = Encoding.GetEncoding(936).GetBytes(text);
+                    else bytes = Encoding.ASCII.GetBytes("OK-" + i);
+                    byte[] buf = new byte[bytes.Length + 1];
+                    Array.Copy(bytes, buf, bytes.Length);
+                    int rc = UFTabnotSetCellTextRaw((int)(object)cell, buf);
+                    steps.Add(names[t] + ": rc=" + rc + " stripped=" + stripped);
+                }
+                uf.Tabnot.Update(note);
+            }
+            return OkJsonList("steps", steps, "probe4 done");
+        }
+        catch (Exception ex)
+        {
+            steps.Add("outer: " + ex.Message);
+            return OkJsonList("steps", steps, "probe4 done with outer error");
+        }
+    }
+
+    // nx_probe_tabnot5/6 — per-object font retry (round 6 adds Inherit*) + encoding matrix (2026-11-06).
+    // Round-4: geometry fixed (strip defaults), part-prefs font did NOT
+    // cascade into UF-created cells (UTF-8 = boxes, GBK = blank). Round-2's
+    // "fatal" TableEditSettingsBuilder suspect is re-tried here because the
+    // round-3 conviction showed the wrapper's GBK-marshaled CN text was the
+    // real killer running BEFORE the font steps. Text now goes in via the
+    // raw UTF-8/GBK P/Invoke (safe), so any fatal this time is the builder.
+    private static string ProbeTabnot5(string[] parts)
+    {
+        List<string> steps = new List<string>();
+        try
+        {
+            _session = Session.GetSession();
+            NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+            GetSheetToUse();
+
+            double[,] pos = { { 30.0, 260.0 }, { 30.0, 220.0 }, { 30.0, 180.0 } };
+            string[] names = { "utf8", "gbk", "ascii" };
+            for (int t = 0; t < 3; t++)
+            {
+                var prefs = new NXOpen.UF.UFTabnot.SectionPrefs();
+                try { uf.Tabnot.AskDefaultSectionPrefs(out prefs); }
+                catch (Exception ep) { steps.Add("ask" + t + ": " + ep.Message); }
+                prefs.continuation_note = null;
+                Tag note = Tag.Null;
+                uf.Tabnot.Create(ref prefs,
+                    new double[] { pos[t, 0], pos[t, 1], 0.0 }, out note);
+                int stripped = 0;
+                while (true)
+                {
+                    Tag r;
+                    try { uf.Tabnot.AskNthRow(note, 0, out r); }
+                    catch { break; }
+                    if (r == Tag.Null) break;
+                    uf.Tabnot.RemoveRow(r);
+                    stripped++;
+                    if (stripped > 100) break;
+                }
+                while (true)
+                {
+                    Tag c;
+                    try { uf.Tabnot.AskNthColumn(note, 0, out c); }
+                    catch { break; }
+                    if (c == Tag.Null) break;
+                    uf.Tabnot.RemoveColumn(c);
+                    stripped++;
+                    if (stripped > 200) break;
+                }
+                Tag c1, c2, r1, r2;
+                uf.Tabnot.CreateColumn(30.0, out c1);
+                uf.Tabnot.AddColumn(note, c1, -1);
+                uf.Tabnot.CreateColumn(30.0, out c2);
+                uf.Tabnot.AddColumn(note, c2, -1);
+                uf.Tabnot.CreateRow(6.0, out r1);
+                uf.Tabnot.AddRow(note, r1, -1);
+                uf.Tabnot.CreateRow(6.0, out r2);
+                uf.Tabnot.AddRow(note, r2, -1);
+                string text = "孔号";
+                for (int i = 0; i < 2; i++)
+                {
+                    Tag cell;
+                    uf.Tabnot.AskCellAtRowCol(i == 0 ? r1 : r2, c1, out cell);
+                    byte[] bytes;
+                    if (t == 0) bytes = Encoding.UTF8.GetBytes(text);
+                    else if (t == 1) bytes = Encoding.GetEncoding(936).GetBytes(text);
+                    else bytes = Encoding.ASCII.GetBytes("OK-" + i);
+                    byte[] buf = new byte[bytes.Length + 1];
+                    Array.Copy(bytes, buf, bytes.Length);
+                    int rc = UFTabnotSetCellTextRaw((int)(object)cell, buf);
+                    steps.Add(names[t] + ": set rc=" + rc);
+                }
+                uf.Tabnot.Update(note);
+
+                // per-object font: find the new Table object via count diff.
+                // Round-5 AV'd on the naked builder; journal recordings always
+                // call an Inherit* first to initialize the builder state, so
+                // try InheritSettingsFromPreferences before touching the font.
+                Log("probe6 editsettings begin t=" + t);
+                NXOpen.Annotations.Table[] tabs = _part.Annotations.Tables.ToArray();
+                NXOpen.Annotations.Table tObj = tabs[tabs.Length - 1];
+                string avail;
+                int fid = FindCharacterFontByName("chinesef", out avail);
+                if (fid <= 0) fid = _part.Fonts.AddFont("chinesef");
+                var sm = _part.SettingsManager;
+                var stb = sm.CreateTableEditSettingsBuilder(new DisplayableObject[] { tObj });
+                try
+                {
+                    ProbeStep(steps, names[t] + ": inherit_prefs",
+                        () => stb.InheritSettingsFromPreferences());
+                    ProbeStep(steps, names[t] + ": set_font", () =>
+                        stb.TableLettering.GeneralTextFont = fid);
+                    ProbeStep(steps, names[t] + ": commit", () => stb.Commit());
+                }
+                finally { try { stb.Destroy(); } catch { } }
+                Log("probe6 editsettings done t=" + t);
+            }
+            return OkJsonList("steps", steps, "probe6 done");
+        }
+        catch (Exception ex)
+        {
+            steps.Add("outer: " + ex.Message);
+            Log("probe6 outer: " + ex.Message);
+            return OkJsonList("steps", steps, "probe6 done with outer error");
+        }
+    }
+
+    // Raw native-memory UF_TABNOT cell prefs (2026-11-06): the .NET wrapper
+    // struct marshal is dead (inline int[3]/enum[] fields, no MarshalAs), but
+    // ask_default_cell_prefs fills a caller buffer with self-consistent
+    // defaults - we only patch the 4-byte text_font at offset 16 (the first
+    // five fields are sequential 4-byte ints: format/precision/is_a_formula/
+    // zero_display/text_font) and push it back through the raw entry points.
+    [DllImport("libufun.dll", EntryPoint = "UF_TABNOT_ask_default_cell_prefs")]
+    private static extern int UFTabnotAskDefaultCellPrefsRaw(IntPtr prefs);
+
+    [DllImport("libufun.dll", EntryPoint = "UF_TABNOT_set_cell_prefs")]
+    private static extern int UFTabnotSetCellPrefsRaw(int cellTag, IntPtr prefs);
+
+    private static string ProbeTabnot7(string[] parts)
+    {
+        List<string> steps = new List<string>();
+        try
+        {
+            _session = Session.GetSession();
+            NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+            GetSheetToUse();
+            string avail;
+            int fid = FindCharacterFontByName("chinesef", out avail);
+            if (fid <= 0) fid = _part.Fonts.AddFont("chinesef");
+            steps.Add("font_id=" + fid);
+
+            double[,] pos = { { 30.0, 260.0 }, { 30.0, 220.0 }, { 30.0, 180.0 } };
+            string[] names = { "utf8", "gbk", "ascii" };
+            for (int t = 0; t < 3; t++)
+            {
+                var prefs = new NXOpen.UF.UFTabnot.SectionPrefs();
+                try { uf.Tabnot.AskDefaultSectionPrefs(out prefs); }
+                catch (Exception ep) { steps.Add("ask" + t + ": " + ep.Message); }
+                prefs.continuation_note = null;
+                Tag note = Tag.Null;
+                uf.Tabnot.Create(ref prefs,
+                    new double[] { pos[t, 0], pos[t, 1], 0.0 }, out note);
+                int stripped = 0;
+                while (true)
+                {
+                    Tag r;
+                    try { uf.Tabnot.AskNthRow(note, 0, out r); }
+                    catch { break; }
+                    if (r == Tag.Null) break;
+                    uf.Tabnot.RemoveRow(r);
+                    stripped++;
+                    if (stripped > 100) break;
+                }
+                while (true)
+                {
+                    Tag c;
+                    try { uf.Tabnot.AskNthColumn(note, 0, out c); }
+                    catch { break; }
+                    if (c == Tag.Null) break;
+                    uf.Tabnot.RemoveColumn(c);
+                    stripped++;
+                    if (stripped > 200) break;
+                }
+                Tag c1, c2, r1, r2;
+                uf.Tabnot.CreateColumn(30.0, out c1);
+                uf.Tabnot.AddColumn(note, c1, -1);
+                uf.Tabnot.CreateColumn(30.0, out c2);
+                uf.Tabnot.AddColumn(note, c2, -1);
+                uf.Tabnot.CreateRow(6.0, out r1);
+                uf.Tabnot.AddRow(note, r1, -1);
+                uf.Tabnot.CreateRow(6.0, out r2);
+                uf.Tabnot.AddRow(note, r2, -1);
+                string text = "孔号";
+                for (int i = 0; i < 2; i++)
+                {
+                    Tag cell;
+                    uf.Tabnot.AskCellAtRowCol(i == 0 ? r1 : r2, c1, out cell);
+                    byte[] bytes;
+                    if (t == 0) bytes = Encoding.UTF8.GetBytes(text);
+                    else if (t == 1) bytes = Encoding.GetEncoding(936).GetBytes(text);
+                    else bytes = Encoding.ASCII.GetBytes("OK-" + i);
+                    byte[] buf = new byte[bytes.Length + 1];
+                    Array.Copy(bytes, buf, bytes.Length);
+                    int rc = UFTabnotSetCellTextRaw((int)(object)cell, buf);
+                    // patch cell prefs: text_font = chinesef (offset 16)
+                    IntPtr mem = Marshal.AllocHGlobal(512);
+                    try
+                    {
+                        int arc = UFTabnotAskDefaultCellPrefsRaw(mem);
+                        if (arc != 0)
+                        {
+                            steps.Add(names[t] + ": ask_prefs rc=" + arc);
+                        }
+                        else
+                        {
+                            Marshal.WriteInt32(mem, 16, fid);
+                            int src = UFTabnotSetCellPrefsRaw((int)(object)cell, mem);
+                            steps.Add(names[t] + ": set rc=" + rc + " prefs_rc=" + src);
+                        }
+                    }
+                    finally { Marshal.FreeHGlobal(mem); }
+                }
+                uf.Tabnot.Update(note);
+            }
+            return OkJsonList("steps", steps, "probe7 done");
+        }
+        catch (Exception ex)
+        {
+            steps.Add("outer: " + ex.Message);
+            Log("probe7 outer: " + ex.Message);
+            return OkJsonList("steps", steps, "probe7 done with outer error");
         }
     }
 

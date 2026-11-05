@@ -29,7 +29,9 @@ __all__ = [
     "OperationResult",
     "PartResult",
     "Point2D",
+    "StockResult",
     "StatusResult",
+    "TableResult",
     "ToolSuccess",
     "Vector3D",
 ]
@@ -277,4 +279,46 @@ class ExplosionListResult(BaseModel):
     status: Literal["success"] = "success"
     count: int = 0
     explosions: list[ExplosionInfo] = Field(default_factory=list)
+    message: str = ""
+
+
+class StockResult(BaseModel):
+    """Result of nx_create_stock: the machining blank around the resolved body.
+
+    utilization_pct = part_volume / stock_volume * 100 - the everyday stock
+    allowance check (NaN becomes null). The blank is a NEW solid registered as
+    BODY_<n> (body_id), so it can be referenced by later tools; bbox echoes the
+    source body's bounding box the blank was derived from."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["success"] = "success"
+    mode: str = "box"
+    body_id: str = ""
+    feature_tag: int = 0
+    stock_volume_mm3: float = 0.0
+    part_volume_mm3: float = 0.0
+    utilization_pct: float | None = None
+    bbox_min: Vector3D = Field(default_factory=lambda: Vector3D(x=0.0, y=0.0, z=0.0))
+    bbox_max: Vector3D = Field(default_factory=lambda: Vector3D(x=0.0, y=0.0, z=0.0))
+    message: str = ""
+
+
+class TableResult(BaseModel):
+    """Result of nx_create_table: a tabular note (表格注解) on the drawing sheet.
+
+    cell_echo is the round-trip read-back of the first cell (AskCellText), so a
+    text/encoding mismatch surfaces in the response instead of at PDF time.
+    font reports what happened to the optional font= request (applied id,
+    skipped reason, or none)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["success"] = "success"
+    rows: int = 0
+    cols: int = 0
+    note_tag: int = 0
+    tables_after: int = 0
+    cell_echo: str = ""
+    font: str = ""
     message: str = ""

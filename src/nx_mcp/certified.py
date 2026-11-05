@@ -31,6 +31,8 @@ from nx_mcp.contracts import (
     PartResult,
     Point2D,
     StatusResult,
+    StockResult,
+    TableResult,
 )
 from nx_mcp.workspace import Workspace, WorkspaceViolation
 
@@ -426,6 +428,12 @@ CERTIFIED_TOOL_NAMES = {
     "nx_export_bom_csv",
     "nx_list_holes",
     "nx_export_hole_table_csv",
+    # 毛坯生成（box/cyl 包络+余量+材料利用率，UF_MODL_create_block1/cylinder 路线；
+    # 工艺材料定额/毛坯图第一步）
+    "nx_create_stock",
+    # 表格注解（UF_TABNOT 路线：孔表/工艺参数表/齿轮参数表上图纸；
+    # 制图侧 HoleTableBuilder 受阻的替代呈现层，cells 行'|'列','）
+    "nx_create_table",
     "nx_create_explosion",
     "nx_explode_component",
     "nx_unexplode_component",
@@ -1662,6 +1670,106 @@ def create_certified_server(
         """
         params: dict[str, Any] = {"name": name} if name else {}
         return OperationResult(**await call("nx_refset_add_bodies", params))
+
+    @mcp.tool()
+    async def nx_create_stock(
+        mode: Literal["box", "cyl"],
+        body_id: str = "",
+        allowance: float = 2.0,
+        axis: str = "auto",
+        dia: float = 0.0,
+        length: float = 0.0,
+    ) -> StockResult:
+        """Create a machining blank (毛坯) around a body's bounding box.
+
+        mode=box wraps the body in a block grown by ``allowance`` on every
+        side. mode=cyl wraps it in a cylinder along ``axis`` (x/y/z, default
+        auto = longest bbox dimension, z preferred on ties for turned parts):
+        the diameter covers the cross-section BBOX DIAGONAL (safe for square
+        sections, generous on round shafts - pass ``dia=`` for exact standard
+        bar stock, then no radial allowance is added) and ``length`` overrides
+        the extent (no axial allowance added either). Both volumes come back
+        plus the material utilization pct (part/stock) for stock allowance
+        checks. The blank is a new solid body registered as BODY_<n>; model
+        coordinates in mm. Returns utilization null when a volume is
+        unavailable. Read nx_mass_properties / nx_list_holes for the part data
+        first if you need it.
+        """
+        params: dict[str, Any] = {"mode": mode, "allowance": allowance}
+        if body_id:
+            params["body_id"] = body_id
+        if axis and axis != "auto":
+            params["axis"] = axis
+        if dia > 0.0:
+            params["dia"] = dia
+        if length > 0.0:
+            params["length"] = length
+        return StockResult(**await call("nx_create_stock", params))
+
+    @mcp.tool()
+    async def nx_create_table(
+        pos_x: float,
+        pos_y: float,
+        cells: str,
+        col_width: float = 0.0,
+        row_height: float = 0.0,
+        header: bool = False,
+        font: str = "",
+        allow_cjk: bool = False,
+    ) -> TableResult:
+        """Create a tabular note (表格注解) on the current drawing sheet.
+
+        ``cells`` is rows separated by ``|`` and columns by ``,`` - e.g.
+        "NO,DIA,DEPTH|1,8,15|2,10,20"; cell text may contain spaces but NOT
+        newlines or leading cw=/rh=/font=/header= (they would be eaten as
+        options). All rows must have the same column count (1..30 cols,
+        1..50 rows). Sheet coordinates in mm; defaults col_width=20,
+        row_height=6 when 0. ``header`` marks the first row as header row.
+
+        LIMITATION (NX12, probed 2026-11-06): only ASCII cell text renders -
+        CJK cells are stored byte-correctly but render as boxes because no
+        working cell-font API exists in NX12 (.NET CellPrefs marshal is
+        broken, TableEditSettingsBuilder crashes, part preferences do not
+        cascade). Non-ASCII cells are rejected unless allow_cjk=True; for
+        Chinese labels overlay nx_create_note at cell positions instead.
+        ``font`` (e.g. chinesef) sets the part's annotation default lettering
+        font BEFORE the table is created - it does not change cell rendering,
+        but affects annotations created later in this session.
+
+        The response echoes the first cell text read back from NX (encoding
+        self-check). Pair with nx_list_holes / nx_export_bom_csv data to put
+        hole tables / parameter tables on the drawing.
+        """
+        if not allow_cjk and any(ord(ch) > 127 for ch in cells):
+            raise MCPToolError(
+                json.dumps(
+                    NXToolError(
+                        "NX_CJK_CELL_TEXT",
+                        "non-ASCII cell text renders as boxes in NX12 tabular "
+                        "notes (no working cell-font API; see 受阻项调研档案 "
+                        "section 12). Keep cells ASCII - e.g. NO,DIA,DEPTH - or "
+                        "pass allow_cjk=True to force it; overlay Chinese labels "
+                        "with nx_create_note at cell positions instead.",
+                    ).as_dict(),
+                    ensure_ascii=False,
+                )
+            )
+        params: dict[str, Any] = {
+            "pos_x": pos_x,
+            "pos_y": pos_y,
+            "cells": cells,
+        }
+        if allow_cjk:
+            params["allow_cjk"] = True
+        if col_width > 0.0:
+            params["col_width"] = col_width
+        if row_height > 0.0:
+            params["row_height"] = row_height
+        if header:
+            params["header"] = True
+        if font:
+            params["font"] = font
+        return TableResult(**await call("nx_create_table", params))
 
     @mcp.tool()
     async def nx_export_bom_csv(path: str) -> ExportResult:

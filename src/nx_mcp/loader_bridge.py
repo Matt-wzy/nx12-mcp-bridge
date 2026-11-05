@@ -125,6 +125,25 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
     if method == "nx_refset_add_bodies":
         name = str(params.get("name", "") or "")
         return ("nx_refset_add_bodies " + name) if name else "nx_refset_add_bodies"
+    # ---- stock blank (毛坯，工艺材料定额) ---------------------------------
+    if method == "nx_create_stock":
+        # Loader 语法: nx_create_stock <box|cyl> [body_id] [allow=a] [axis=x|y|z]
+        #              [dia=d] [len=l] [ra=r] [aa=r]
+        cmd = "nx_create_stock " + str(params.get("mode", "box"))
+        body_id = str(params.get("body_id", "") or "")
+        if body_id:
+            cmd += " " + body_id
+        cmd += " allow=" + _fmt(float(params.get("allowance", 2.0)))
+        axis = str(params.get("axis", "") or "")
+        if axis and axis != "auto":
+            cmd += " axis=" + axis
+        dia = float(params.get("dia", 0.0) or 0.0)
+        if dia > 0.0:
+            cmd += " dia=" + _fmt(dia)
+        length = float(params.get("length", 0.0) or 0.0)
+        if length > 0.0:
+            cmd += " len=" + _fmt(length)
+        return cmd
     if method == "nx_undo":
         return "nx_undo"
     if method == "nx_release":
@@ -257,6 +276,27 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
         return cmd
     if method == "nx_delete_view":
         return "nx_delete_view " + str(params.get("view_id", ""))
+    if method == "nx_create_table":
+        # Loader 语法: nx_create_table <x> <y> [cw=w] [rh=h] [font=name]
+        #              [header=1] <cells...>  cells 行分隔'|'列分隔','，
+        #              必须是最后一个 token（可含空格）；k=v 选项须在 cells 之前
+        cmd = "nx_create_table %s %s" % (
+            _fmt(float(params.get("pos_x", 0.0))),
+            _fmt(float(params.get("pos_y", 0.0))),
+        )
+        cw = float(params.get("col_width", 0.0) or 0.0)
+        if cw > 0.0:
+            cmd += " cw=" + _fmt(cw)
+        rh = float(params.get("row_height", 0.0) or 0.0)
+        if rh > 0.0:
+            cmd += " rh=" + _fmt(rh)
+        if params.get("header"):
+            cmd += " header=1"
+        font = str(params.get("font", "") or "")
+        if font:
+            cmd += " font=" + font
+        cmd += " " + str(params["cells"])
+        return cmd
     if method == "nx_create_angle_dimension":
         # Loader 语法: nx_create_angle_dimension <view> <body> <e1> <e2> <x> <y>
         #              [arc=minor|major] [name=..]
@@ -1077,6 +1117,41 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
             "status": "success",
             "angle_deg": float(resp.get("angle_deg", 0.0)),
             "acute_deg": float(resp.get("acute_deg", 0.0)),
+            "message": msg,
+        }
+    if method == "nx_create_stock":
+        bbox_min = resp.get("bbox_min") or [0.0, 0.0, 0.0]
+        bbox_max = resp.get("bbox_max") or [0.0, 0.0, 0.0]
+        util = resp.get("utilization_pct")
+        return {
+            "status": "success",
+            "mode": str(resp.get("mode", params.get("mode", "box"))),
+            "body_id": str(resp.get("body_id", "")),
+            "feature_tag": int(resp.get("feature_tag", 0) or 0),
+            "stock_volume_mm3": float(resp.get("stock_volume_mm3", 0.0) or 0.0),
+            "part_volume_mm3": float(resp.get("part_volume_mm3", 0.0) or 0.0),
+            "utilization_pct": None if util is None else float(util),
+            "bbox_min": {
+                "x": float(bbox_min[0]),
+                "y": float(bbox_min[1]),
+                "z": float(bbox_min[2]),
+            },
+            "bbox_max": {
+                "x": float(bbox_max[0]),
+                "y": float(bbox_max[1]),
+                "z": float(bbox_max[2]),
+            },
+            "message": msg,
+        }
+    if method == "nx_create_table":
+        return {
+            "status": "success",
+            "rows": int(resp.get("rows", 0)),
+            "cols": int(resp.get("cols", 0)),
+            "note_tag": int(resp.get("note_tag", 0) or 0),
+            "tables_after": int(resp.get("tables_after", 0)),
+            "cell_echo": str(resp.get("cell_echo", "")),
+            "font": str(resp.get("font", "")),
             "message": msg,
         }
     return {"status": "success", "message": msg}

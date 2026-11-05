@@ -792,3 +792,40 @@ def test_process_card_no_ops_errors(tmp_path):
     with pytest.raises(NXToolError) as exc:
         _write_process_card(str(tmp_path / "x.txt"), {"名称": "轴"}, "text")
     assert "NX_NO_PROCESS_OPS" in json.dumps(exc.value.as_dict(), ensure_ascii=False)
+
+
+def test_stock_wire_format_minimal_box():
+    assert _command("nx_create_stock", {"mode": "box"}) == "nx_create_stock box allow=2"
+
+
+def test_stock_wire_format_full_cyl():
+    cmd = _command(
+        "nx_create_stock",
+        {
+            "mode": "cyl",
+            "body_id": "BODY_3",
+            "allowance": 2.5,
+            "axis": "z",
+            "dia": 55.0,
+            "length": 120.0,
+        },
+    )
+    # dia=/len= are explicit -> no additional allowance is applied loader-side
+    assert cmd == "nx_create_stock cyl BODY_3 allow=2.5 axis=z dia=55 len=120"
+
+
+def test_table_wire_format_cells_last_and_may_contain_spaces():
+    cmd = _command(
+        "nx_create_table",
+        {
+            "pos_x": 30.0,
+            "pos_y": 200.0,
+            "cells": "NO,DIA,DEPTH|1, 8,15",
+            "header": True,
+            "font": "chinesef",
+            "col_width": 25.0,
+        },
+    )
+    assert cmd == (
+        "nx_create_table 30 200 cw=25 header=1 font=chinesef NO,DIA,DEPTH|1, 8,15"
+    )

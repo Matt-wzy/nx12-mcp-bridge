@@ -294,3 +294,128 @@ async def test_add_component_passes_child_and_defaults():
     assert "instance_name" not in params
     assert result.structured_content["component_name"] == "bolt"
     assert result.structured_content["children"] == 2
+
+
+@pytest.mark.asyncio
+async def test_create_stock_passes_mode_and_defaults():
+    bridge = RecordingBridge(
+        {
+            "status": "success",
+            "mode": "box",
+            "body_id": "BODY_1",
+            "feature_tag": 42,
+            "stock_volume_mm3": 123456.0,
+            "part_volume_mm3": 90000.0,
+            "utilization_pct": 72.9,
+            "bbox_min": {"x": 0.0, "y": 0.0, "z": 0.0},
+            "bbox_max": {"x": 100.0, "y": 60.0, "z": 10.0},
+            "message": "stock block 104x64x14 allowance=2 utilization=72.9%",
+        }
+    )
+    server = create_server(bridge)
+
+    async with Client(server) as client:
+        result = await client.call_tool("nx_create_stock", {"mode": "cyl", "dia": 55.0})
+
+    assert result.is_error is False
+    method, params = bridge.calls[0]
+    assert method == "nx_create_stock"
+    assert params["mode"] == "cyl"
+    assert params["dia"] == 55.0
+    assert params["allowance"] == 2.0
+    # axis defaults to auto -> omitted from the wire params
+    assert "axis" not in params
+    assert "body_id" not in params
+    content = result.structured_content
+    assert content["body_id"] == "BODY_1"
+    assert content["utilization_pct"] == 72.9
+    assert content["bbox_min"] == {"x": 0.0, "y": 0.0, "z": 0.0}
+
+
+@pytest.mark.asyncio
+async def test_create_table_carries_cells_and_echoes_contract():
+    bridge = RecordingBridge(
+        {
+            "status": "success",
+            "rows": 2,
+            "cols": 3,
+            "note_tag": 77,
+            "tables_after": 1,
+            "cell_echo": "孔号",
+            "font": "font=chinesef (id 4) applied",
+            "message": "table 2x3 created at (30,200) cells=6 tables 0->1",
+        }
+    )
+    server = create_server(bridge)
+
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "nx_create_table",
+            {
+                "pos_x": 30.0,
+                "pos_y": 200.0,
+                "cells": "NO,DIA,DEPTH|1,8,15",
+                "header": True,
+                "font": "chinesef",
+            },
+        )
+
+    assert result.is_error is False
+    method, params = bridge.calls[0]
+    assert method == "nx_create_table"
+    assert params["cells"] == "NO,DIA,DEPTH|1,8,15"
+    assert params["header"] is True
+    assert params["font"] == "chinesef"
+    # zero-default sizes stay off the wire; the loader applies 20/6
+    assert "col_width" not in params
+    assert "row_height" not in params
+    content = result.structured_content
+    assert content["rows"] == 2
+    assert content["cols"] == 3
+    assert content["cell_echo"] == "孔号"
+
+
+@pytest.mark.asyncio
+async def test_create_table_rejects_cjk_cells_by_default():
+    bridge = RecordingBridge({})
+    server = create_server(bridge)
+
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "nx_create_table",
+            {"pos_x": 30.0, "pos_y": 200.0, "cells": "孔号,直径|1,8"},
+        )
+
+    assert result.is_error is True
+    assert "NX_CJK_CELL_TEXT" in result.content[0].text
+    # rejection happens before any bridge call
+    assert bridge.calls == []
+
+
+@pytest.mark.asyncio
+async def test_create_table_allow_cjk_passes_through():
+    bridge = RecordingBridge(
+        {
+            "status": "success",
+            "rows": 1,
+            "cols": 2,
+            "note_tag": 5,
+            "tables_after": 1,
+            "cell_echo": "孔号",
+            "font": "font=none",
+            "message": "created (CJK cells render as boxes in NX12)",
+        }
+    )
+    server = create_server(bridge)
+
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "nx_create_table",
+            {"pos_x": 30.0, "pos_y": 200.0, "cells": "孔号,直径", "allow_cjk": True},
+        )
+
+    assert result.is_error is False
+    method, params = bridge.calls[0]
+    assert method == "nx_create_table"
+    assert params["allow_cjk"] is True
+    assert params["cells"] == "孔号,直径"
