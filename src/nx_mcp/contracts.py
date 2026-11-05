@@ -14,6 +14,8 @@ __all__ = [
     "BomRow",
     "ExportResult",
     "ExtrudeResult",
+    "HoleInfo",
+    "HoleListResult",
     "MassPropertiesResult",
     "MeasureAngleResult",
     "NXToolError",
@@ -115,6 +117,52 @@ class MeasureAngleResult(BaseModel):
     status: Literal["success"] = "success"
     angle_deg: float
     acute_deg: float
+    message: str = ""
+
+
+class HoleInfo(BaseModel):
+    """One cylindrical wall found by nx_list_holes.
+
+    kind=hole means the material is outside the cylinder (void on the axis);
+    kind=boss means the material is inside (shaft/boss wall). x/y/z is the
+    axis point at the bbox mid-height, so a blind hole reads z = start +
+    depth/2. The row comes from a sampled cylinder fit, so both analytic
+    walls (UF type 16) and parametric swept walls (type 20, e.g. holes made
+    by nx_hole) are covered; uf_type records which one it was. full_wall
+   =False marks partial walls (cross-drilled / milled): their geometry is
+    still exact, but the hole position should be verified manually.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    index: int
+    face_index: int
+    kind: Literal["hole", "boss", "unknown"]
+    diameter: float
+    radius: float = 0.0
+    depth: float = 0.0
+    x: float = 0.0
+    y: float = 0.0
+    z: float = 0.0
+    area: float = 0.0
+    sweep_rad: float = 0.0
+    full_wall: bool = False
+    containment: int = 0
+    uf_type: int = 0
+    tag: int = 0
+    axis_uf: list[float] = Field(default_factory=list)
+    point_uf: list[float] = Field(default_factory=list)
+    err: str = ""
+
+
+class HoleListResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["success"] = "success"
+    count: int = 0
+    cylinders: int = 0
+    face_count: int = 0
+    holes: list[HoleInfo] = Field(default_factory=list)
     message: str = ""
 
 

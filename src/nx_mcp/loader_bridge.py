@@ -100,6 +100,9 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
         return "nx_list_edges " + params["body_id"]
     if method == "nx_list_faces":
         return "nx_list_faces " + params["body_id"]
+    if method == "nx_list_holes":
+        body_id = str(params.get("body_id", "") or "")
+        return ("nx_list_holes " + body_id) if body_id else "nx_list_holes"
     if method == "nx_undo":
         return "nx_undo"
     if method == "nx_release":
@@ -830,6 +833,39 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
             "status": "success",
             "faces": resp.get("faces") or [],
             "face_count": resp.get("face_count", 0),
+            "message": msg,
+        }
+    if method == "nx_list_holes":
+        holes = []
+        for h in resp.get("holes") or []:
+            holes.append(
+                {
+                    "index": int(h.get("index", 0)),
+                    "face_index": int(h.get("face_index", 0)),
+                    "tag": int(h.get("tag", 0)),
+                    "kind": str(h.get("kind", "unknown")),
+                    "diameter": float(h.get("diameter", 0.0)),
+                    "radius": float(h.get("radius", 0.0)),
+                    "depth": float(h.get("depth", 0.0)),
+                    "x": float(h.get("x", 0.0)),
+                    "y": float(h.get("y", 0.0)),
+                    "z": float(h.get("z", 0.0)),
+                    "area": float(h.get("area", 0.0)),
+                    "sweep_rad": float(h.get("sweep_rad", 0.0)),
+                    "full_wall": bool(h.get("full_wall", False)),
+                    "containment": int(h.get("containment", 0)),
+                    "uf_type": int(h.get("uf_type", 0)),
+                    "axis_uf": [float(v) for v in (h.get("axis_uf") or [])],
+                    "point_uf": [float(v) for v in (h.get("point_uf") or [])],
+                    "err": str(h.get("err", "")),
+                }
+            )
+        return {
+            "status": "success",
+            "count": sum(1 for h in holes if h["kind"] == "hole"),
+            "cylinders": int(resp.get("cylinder_count", len(holes))),
+            "face_count": int(resp.get("face_count", 0)),
+            "holes": holes,
             "message": msg,
         }
     if method == "nx_extrude":

@@ -33,6 +33,12 @@
 //   nx_fit_view
 //   nx_export_step <step-path>
 //   nx_mass_properties [density_kg_m3] [accuracy] [per=1]  (体积/表面积/重心/质量，工艺常用；per=1 逐体返回)
+//   nx_list_holes [body_id]   (模型侧孔扫描：采样圆柱拟合，解析圆柱面(16)与
+//                              参数化拉伸壁(20)统一识别，分类孔/凸台+直径/深度/轴心位置；
+//                              孔表 CSV 数据源，绕开 HoleTableBuilder 视图孔对象墙；
+//                              锥/倒圆/球自动排除，交叉孔 full_wall=false)
+//   nx_probe_face <body_id> <face_index>  (UF 面语义诊断：uvminmax/采样原始输出，
+//                              未暴露 MCP，排查 nx_list_holes 拟合问题时用)
 //   nx_measure_angle <body_id> <edge1> <edge2>      (两直线边夹角，装夹/工序定位常用)
 //   nx_create_section_view <view> <x1> <y1> <x2> <y2> <px> <py> [scale=f] [arrow=dx,dy] [step=dx,dy] [name=t]
 //                                                   (简单剖视图，UFUN CreateSimpleSxview，坐标均为图纸坐标；
@@ -444,6 +450,10 @@ public static class NX_MCP_Loader
                 return ListEdges(parts);
             case "nx_list_faces":
                 return ListFaces(parts);
+            case "nx_list_holes":
+                return ListHoles(parts);
+            case "nx_probe_face":
+                return ProbeFace(parts);
             case "nx_read_sketch":
                 return ReadSketch(parts);
             case "nx_undo":
@@ -3856,6 +3866,465 @@ public static class NX_MCP_Loader
     private static string F(double v)
     {
         return v.ToString("0.###", CultureInfo.InvariantCulture);
+    }
+
+    // nx_list_holes [body_id]
+    // Model-side hole scan for process hole tables (钻孔工序/孔位明细). Classifies
+    // cylindrical walls as hole vs boss and reports dia/depth/axis position.
+    // Works on BOTH analytic cylinder faces (UF type 16) and the parametric
+    // swept walls this project's sketch-extrude booleans produce - probed
+    // 2026-11-06: nx_hole walls come back UF type 20 (managed "Swept"), plate
+    // walls type 22 - via one uniform sampling route, because AskFaceData
+    // yields zeros for non-analytic representations:
+    //   1. sample AskFaceProps on a 3u x 2v grid: cylinder <=> every sample
+    //      has one common finite principal radius R and one ~infinite one
+    //      (probed: plane reports BOTH as NX's infinite constant ~3.94e8 mm,
+    //      sphere/torus have both finite -> excluded; cone: R varies)
+    //   2. axis direction = cross of the two most separated normals; the
+    //      global +/- sign of the axis point P +/- R*n is fixed by checking
+    //      which sign makes the per-sample axis candidates collinear
+    //   3. depth = axial extent from param-span probes (exact for partial
+    //      walls and any orientation); angular walk over the ~0-axial-span
+    //      param gives full_wall (theta >= 6.0 rad)
+    //   4. kind = UF_MODL_ask_point_containment at the axis mid-point
+    //      (1 = inside solid -> boss, 2 = outside solid -> hole)
+    // x/y/z is the axis point at the bbox mid-height (so a blind hole reads
+    // z = start + depth/2); coordinates are model space (mm). Draft-angle
+    // walls below the 1% radius-consistency tolerance read as cylinders with
+    // the mean radius; cones/drill points, fillets and spheres are excluded
+    // by the same test. Read-only companion of nx_export_hole_table_csv.
+    private static string ListHoles(string[] parts)
+    {
+        if (_part == null) return ErrJson("no active part");
+        Body body = null;
+        string bidUsed = parts.Length > 1 ? parts[1] : "";
+        if (bidUsed.Length > 0)
+        {
+            try { body = GetBody(bidUsed); }
+            catch (Exception e) { return ErrJson("no body: " + e.Message); }
+        }
+        else
+        {
+            // Fall back to the first solid body that actually has faces:
+            // the Bodies collection keeps CONSUMED boolean tool bodies
+            // (GetFaces() = 0) after nx_unite, and landing on one would
+            // report an empty scan (probed 2026-11-06).
+            foreach (Body b in _part.Bodies.ToArray())
+            {
+                if (!b.IsSolidBody) continue;
+                try { if (b.GetFaces().Length > 0) { body = b; break; } }
+                catch { }
+            }
+            if (body == null) return ErrJson("no body with faces in work part");
+        }
+        NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+        Face[] faces = body.GetFaces();
+        var rows = new StringBuilder();
+        var skipped = new SortedDictionary<int, int>();
+        int nHole = 0, nBoss = 0, nUnknown = 0, nCyl = 0;
+        for (int i = 0; i < faces.Length; i++)
+        {
+            Face fc = faces[i];
+            Tag fTag = fc.Tag;
+            int ftype = 0;
+            double[] fPoint = new double[3];
+            double[] fDir = new double[3];
+            double[] fBox = new double[6];
+            double fRad = 0.0, fRadData = 0.0;
+            int fNorm = 0;
+            try
+            {
+                uf.Modl.AskFaceData(fTag, out ftype, fPoint, fDir, fBox,
+                    out fRad, out fRadData, out fNorm);
+            }
+            catch (Exception ex)
+            {
+                if (!skipped.ContainsKey(-1)) skipped[-1] = 0;
+                skipped[-1] = skipped[-1] + 1;
+                Log("list_holes face " + i + " AskFaceData failed: " + ex.Message);
+                continue;
+            }
+
+            double R = 0.0, depth = 0.0, theta = 0.0;
+            double[] axisPt = new double[3];
+            double[] axisDir = new double[3];
+            // spheres (18) and tori/blend rings (19) are not hole walls;
+            // excluding them upfront kills the hole-rim fillet false positive
+            if (ftype == 18 || ftype == 19)
+            {
+                if (!skipped.ContainsKey(ftype)) skipped[ftype] = 0;
+                skipped[ftype] = skipped[ftype] + 1;
+                continue;
+            }
+            string fitErr = FitCylinder(uf, fTag, fBox,
+                ref R, axisPt, axisDir, ref depth, ref theta);
+            if (fitErr.Length > 0)
+            {
+                if (!skipped.ContainsKey(ftype)) skipped[ftype] = 0;
+                skipped[ftype] = skipped[ftype] + 1;
+                Log("list_holes face " + i + " ufType=" + ftype + " rejected: " + fitErr);
+                continue;
+            }
+            nCyl++;
+
+            // axis point at the bbox mid-height (axial projection of the
+            // bbox centre onto the axis)
+            double tMid = ((0.5 * (fBox[0] + fBox[3]) - axisPt[0]) * axisDir[0])
+                 + ((0.5 * (fBox[1] + fBox[4]) - axisPt[1]) * axisDir[1])
+                 + ((0.5 * (fBox[2] + fBox[5]) - axisPt[2]) * axisDir[2]);
+            double[] aMid = new double[3] {
+                axisPt[0] + tMid * axisDir[0],
+                axisPt[1] + tMid * axisDir[1],
+                axisPt[2] + tMid * axisDir[2] };
+
+            string err = "";
+            string kind = "unknown";
+            int resp = 0;
+            try
+            {
+                double[] probe = new double[3] { aMid[0], aMid[1], aMid[2] };
+                uf.Modl.AskPointContainment(probe, body.Tag, out resp);
+            }
+            catch (Exception ec) { err = "containment: " + ec.Message; }
+            // UF_MODL_ask_point_containment: 1 = inside, 2 = outside, 3 = on
+            if (resp == 1) kind = "boss";
+            else if (resp == 2) kind = "hole";
+            if (kind == "hole") nHole++;
+            else if (kind == "boss") nBoss++;
+            else nUnknown++;
+
+            bool fullWall = theta >= 6.0;
+            double area = theta * R * depth;    // arc length x height, exact
+            if (rows.Length > 0) rows.Append(",");
+            rows.Append("{\"index\":").Append(nCyl - 1)
+              .Append(",\"face_index\":").Append(i)
+              .Append(",\"tag\":").Append(fTag.ToString())
+              .Append(",\"kind\":\"").Append(kind).Append("\"")
+              .Append(",\"uf_type\":").Append(ftype)
+              .Append(",\"diameter\":").Append(F(2.0 * R))
+              .Append(",\"radius\":").Append(F(R))
+              .Append(",\"depth\":").Append(F(depth))
+              .Append(",\"x\":").Append(F(aMid[0]))
+              .Append(",\"y\":").Append(F(aMid[1]))
+              .Append(",\"z\":").Append(F(aMid[2]))
+              .Append(",\"area\":").Append(F(area))
+              .Append(",\"sweep_rad\":").Append(F(theta))
+              .Append(",\"full_wall\":").Append(fullWall ? "true" : "false")
+              .Append(",\"containment\":").Append(resp)
+              .Append(",\"axis_uf\":[").Append(F(fDir[0])).Append(",").Append(F(fDir[1]))
+              .Append(",").Append(F(fDir[2])).Append("]")
+              .Append(",\"point_uf\":[").Append(F(fPoint[0])).Append(",").Append(F(fPoint[1]))
+              .Append(",").Append(F(fPoint[2])).Append("]")
+              .Append(",\"err\":\"").Append(Esc(err)).Append("\"")
+              .Append("}");
+        }
+        var sk = new StringBuilder();
+        foreach (KeyValuePair<int, int> kv in skipped)
+        {
+            if (sk.Length > 0) sk.Append(",");
+            sk.Append("\"").Append(kv.Key).Append("\":").Append(kv.Value);
+        }
+        string msg = "cylindrical faces=" + nCyl + " on " + faces.Length + " face(s);"
+            + " hole=" + nHole + " boss=" + nBoss + " unknown=" + nUnknown;
+        if (sk.Length > 0)
+            msg += "; skipped non-cylinder by UF type: {" + sk.ToString() + "}";
+        var sb = new StringBuilder();
+        sb.Append("{\"ok\":true,\"body_id\":\"").Append(Esc(parts.Length > 1 ? parts[1] : ""))
+          .Append("\",\"face_count\":").Append(faces.Length)
+          .Append(",\"cylinder_count\":").Append(nCyl)
+          .Append(",\"holes\":[").Append(rows.ToString()).Append("]")
+          .Append(",\"skipped\":{").Append(sk.ToString()).Append("}")
+          .Append(",\"result\":\"").Append(Esc(msg)).Append("\"}");
+        return sb.ToString();
+    }
+
+    // nx_probe_face <body_id> <face_index>
+    // Raw UF evaluator dump for diagnosing face parametrization semantics
+    // (uv bounds order, AskFaceProps outputs at (0,0) and (1,1)). Temporary
+    // diagnostic helper for the nx_list_holes cylinder fit.
+    private static string ProbeFace(string[] parts)
+    {
+        if (parts.Length < 3) return ErrJson("usage: nx_probe_face <body_id> <face_index>");
+        Body body = GetBody(parts[1]);
+        Face[] faces = body.GetFaces();
+        int fi = (int)double.Parse(parts[2], CultureInfo.InvariantCulture);
+        if (fi < 0 || fi >= faces.Length) return ErrJson("face index out of range 0.." + (faces.Length - 1));
+        NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+        Tag fTag = faces[fi].Tag;
+        int ftype = 0;
+        double[] fPoint = new double[3];
+        double[] fDir = new double[3];
+        double[] fBox = new double[6];
+        double fRad = 0.0, fRadData = 0.0;
+        int fNorm = 0;
+        uf.Modl.AskFaceData(fTag, out ftype, fPoint, fDir, fBox, out fRad, out fRadData, out fNorm);
+        double[] mm = new double[4];
+        string mmErr = "";
+        try { uf.Modl.AskFaceUvMinmax(fTag, mm); } catch (Exception e) { mmErr = e.Message; }
+        double[] uv = new double[2];
+        double[] pt = new double[3];
+        double[] u1 = new double[3];
+        double[] v1 = new double[3];
+        double[] u2 = new double[3];
+        double[] v2 = new double[3];
+        double[] nm = new double[3];
+        double[] rr = new double[2];
+        string fpErr = "";
+        try { uf.Modl.AskFaceProps(fTag, uv, pt, u1, v1, u2, v2, nm, rr); }
+        catch (Exception e) { fpErr = e.Message; }
+        double[] uvB = new double[2] { 1.0, 1.0 };
+        double[] ptB = new double[3];
+        double[] nmB = new double[3];
+        double[] rrB = new double[2];
+        string fpErrB = "";
+        try { uf.Modl.AskFaceProps(fTag, uvB, ptB, u1, v1, u2, v2, nmB, rrB); }
+        catch (Exception e) { fpErrB = e.Message; }
+        var sb = new StringBuilder();
+        sb.Append("{\"ok\":true,\"uf_type\":").Append(ftype)
+          .Append(",\"rad\":").Append(F(fRad))
+          .Append(",\"uvminmax\":[").Append(F(mm[0])).Append(",").Append(F(mm[1]))
+          .Append(",").Append(F(mm[2])).Append(",").Append(F(mm[3])).Append("]")
+          .Append(",\"uvminmax_err\":\"").Append(Esc(mmErr)).Append("\"")
+          .Append(",\"at00\":{\"pt\":[").Append(F(pt[0])).Append(",").Append(F(pt[1]))
+          .Append(",").Append(F(pt[2])).Append("]")
+          .Append(",\"normal\":[").Append(F(nm[0])).Append(",").Append(F(nm[1]))
+          .Append(",").Append(F(nm[2])).Append("]")
+          .Append(",\"radii\":[").Append(F(rr[0])).Append(",").Append(F(rr[1])).Append("]")
+          .Append(",\"err\":\"").Append(Esc(fpErr)).Append("\"}")
+          .Append(",\"at11\":{\"pt\":[").Append(F(ptB[0])).Append(",").Append(F(ptB[1]))
+          .Append(",").Append(F(ptB[2])).Append("]")
+          .Append(",\"normal\":[").Append(F(nmB[0])).Append(",").Append(F(nmB[1]))
+          .Append(",").Append(F(nmB[2])).Append("]")
+          .Append(",\"radii\":[").Append(F(rrB[0])).Append(",").Append(F(rrB[1])).Append("]")
+          .Append(",\"err\":\"").Append(Esc(fpErrB)).Append("\"}")
+          .Append("}");
+        return sb.ToString();
+    }
+
+    // One AskFaceProps evaluation at (u,v): point + unit normal + the two
+    // principal curvature radii. Plain double-array out pattern, same as the
+    // proven AskFaceData call (marshal-safe, no strings/nested structs).
+    private static bool FacePropsAt(NXOpen.UF.UFSession uf, Tag fTag,
+        double u, double v, double[] pt, double[] normal, double[] radii)
+    {
+        double[] uv = new double[2] { u, v };
+        double[] u1 = new double[3];
+        double[] v1 = new double[3];
+        double[] u2 = new double[3];
+        double[] v2 = new double[3];
+        try
+        {
+            uf.Modl.AskFaceProps(fTag, uv, pt, u1, v1, u2, v2, normal, radii);
+            return true;
+        }
+        catch { return false; }
+    }
+
+    // Axial component of the point displacement across a param range at a
+    // fixed second parameter. ~0 when the param is the angular one, the
+    // axial extent when it is the axial one.
+    private static double AxialSpan(NXOpen.UF.UFSession uf, Tag fTag,
+        double ua, double ub, double v, double[] axisDir)
+    {
+        double[] pa = new double[3];
+        double[] na = new double[3];
+        double[] ra = new double[2];
+        double[] pb = new double[3];
+        double[] nb = new double[3];
+        double[] rb = new double[2];
+        if (!FacePropsAt(uf, fTag, ua, v, pa, na, ra)) return 0.0;
+        if (!FacePropsAt(uf, fTag, ub, v, pb, nb, rb)) return 0.0;
+        double d = (pb[0] - pa[0]) * axisDir[0]
+                 + (pb[1] - pa[1]) * axisDir[1]
+                 + (pb[2] - pa[2]) * axisDir[2];
+        return Math.Abs(d);
+    }
+
+    // Fit a circular cylinder wall to an arbitrary face by sampling.
+    // Returns "" on success (fills R, axisPt, axisDir, depth, theta) or a
+    // short rejection reason ("planar", "radius varies", ...).
+    private static string FitCylinder(NXOpen.UF.UFSession uf, Tag fTag,
+        double[] fBox, ref double R, double[] axisPt, double[] axisDir,
+        ref double depth, ref double theta)
+    {
+        double[] mm = new double[4];
+        try { uf.Modl.AskFaceUvMinmax(fTag, mm); }
+        catch (Exception e) { return "uvminmax: " + e.Message; }
+        // Probed 2026-11-06: the .NET wrapper fills [umin, umax, vmin, vmax]
+        // (NOT the doc order [umin, vmin, umax, vmax]). Param scales are
+        // arbitrary for B-surfaces (a 100 mm plate came back as [0, 0.1]),
+        // so always sample by range fraction.
+        double u0 = mm[0], u1 = mm[1], v0 = mm[2], v1 = mm[3];
+        if (!(u1 > u0) || !(v1 > v0)) return "degenerate uv";
+        double du = u1 - u0, dv = v1 - v0;
+
+        double[] us = new double[3] { u0 + 0.17 * du, u0 + 0.5 * du, u0 + 0.83 * du };
+        double[] vs = new double[2] { v0 + 0.25 * dv, v0 + 0.75 * dv };
+        double[,] pts = new double[6, 3];
+        double[,] nrm = new double[6, 3];
+        double[] rfin = new double[6];
+        for (int k = 0; k < 6; k++)
+        {
+            double[] pt = new double[3];
+            double[] nm = new double[3];
+            double[] rr = new double[2];
+            if (!FacePropsAt(uf, fTag, us[k % 3], vs[k / 3], pt, nm, rr))
+                return "props failed";
+            double a = Math.Abs(rr[0]), b = Math.Abs(rr[1]);
+            double rbig = Math.Max(a, b);
+            // Probed: a planar face reports BOTH principal radii as NX's
+            // infinite-radius constant (~3.94e8 mm); a cylinder reports
+            // {R, infinite}. So the finite radius is the SMALLER one, and
+            // the infinite one must dwarf it.
+            if (rbig > 1e7 && Math.Min(a, b) > 0.02 * rbig) return "planar";
+            if (Math.Min(a, b) > 0.02 * rbig) return "double curved";
+            rfin[k] = Math.Min(a, b);
+            for (int c = 0; c < 3; c++) { pts[k, c] = pt[c]; nrm[k, c] = nm[c]; }
+        }
+        double Rm = 0.0;
+        for (int k = 0; k < 6; k++) Rm += rfin[k];
+        Rm /= 6.0;
+        if (Rm <= 1e-9) return "zero radius";
+        for (int k = 0; k < 6; k++)
+            if (Math.Abs(rfin[k] - Rm) > 0.01 * Rm) return "radius varies";
+        R = Rm;
+
+        // axis direction from the most separated normal pair
+        int bi = 0, bj = 1;
+        double best = -1.0;
+        for (int a = 0; a < 6; a++)
+        {
+            for (int b = a + 1; b < 6; b++)
+            {
+                double cx = nrm[a, 1] * nrm[b, 2] - nrm[a, 2] * nrm[b, 1];
+                double cy = nrm[a, 2] * nrm[b, 0] - nrm[a, 0] * nrm[b, 2];
+                double cz = nrm[a, 0] * nrm[b, 1] - nrm[a, 1] * nrm[b, 0];
+                double m = Math.Sqrt(cx * cx + cy * cy + cz * cz);
+                if (m > best) { best = m; bi = a; bj = b; }
+            }
+        }
+        if (best < 0.05) return "degenerate normals";
+        axisDir[0] = (nrm[bi, 1] * nrm[bj, 2] - nrm[bi, 2] * nrm[bj, 1]) / best;
+        axisDir[1] = (nrm[bi, 2] * nrm[bj, 0] - nrm[bi, 0] * nrm[bj, 2]) / best;
+        axisDir[2] = (nrm[bi, 0] * nrm[bj, 1] - nrm[bi, 1] * nrm[bj, 0]) / best;
+
+        // axis position: P +/- R*n is the same global line; the sign that
+        // makes the candidates collinear along axisDir wins
+        int bk = (bi + 2) % 6;   // third sample for the consistency check
+        double tol = 0.02 * R + 0.005;
+        double tol3 = 0.05 * R + 0.01;
+        bool found = false;
+        for (int s = 0; s < 2 && !found; s++)
+        {
+            double sg = (s == 0) ? 1.0 : -1.0;
+            double[] A1 = new double[3] {
+                pts[bi, 0] + sg * R * nrm[bi, 0],
+                pts[bi, 1] + sg * R * nrm[bi, 1],
+                pts[bi, 2] + sg * R * nrm[bi, 2] };
+            double[] A2 = new double[3] {
+                pts[bj, 0] + sg * R * nrm[bj, 0],
+                pts[bj, 1] + sg * R * nrm[bj, 1],
+                pts[bj, 2] + sg * R * nrm[bj, 2] };
+            double dx = A2[0] - A1[0], dy = A2[1] - A1[1], dz = A2[2] - A1[2];
+            double t = dx * axisDir[0] + dy * axisDir[1] + dz * axisDir[2];
+            double px = dx - t * axisDir[0];
+            double py = dy - t * axisDir[1];
+            double pz = dz - t * axisDir[2];
+            if (Math.Sqrt(px * px + py * py + pz * pz) > tol) continue;
+            double[] A3 = new double[3] {
+                pts[bk, 0] + sg * R * nrm[bk, 0],
+                pts[bk, 1] + sg * R * nrm[bk, 1],
+                pts[bk, 2] + sg * R * nrm[bk, 2] };
+            double dx3 = A3[0] - A1[0], dy3 = A3[1] - A1[1], dz3 = A3[2] - A1[2];
+            double t3 = dx3 * axisDir[0] + dy3 * axisDir[1] + dz3 * axisDir[2];
+            double qx = dx3 - t3 * axisDir[0];
+            double qy = dy3 - t3 * axisDir[1];
+            double qz = dz3 - t3 * axisDir[2];
+            if (Math.Sqrt(qx * qx + qy * qy + qz * qz) > tol3) continue;
+            axisPt[0] = A1[0];
+            axisPt[1] = A1[1];
+            axisPt[2] = A1[2];
+            found = true;
+        }
+        if (!found) return "no consistent axis";
+
+        // depth: axial extent across each param range (the angular param
+        // gives ~0, the axial one the true extent). Probe the exact bounds
+        // first; fall back to a 0.1%-inset pair scaled back up if the
+        // boundary evaluation is rejected (trimmed-face edges).
+        double spanU = AxialSpan(uf, fTag, u0, u1, v0 + 0.5 * dv, axisDir);
+        if (spanU <= 0.0)
+            spanU = AxialSpan(uf, fTag, u0 + 0.001 * du, u1 - 0.001 * du,
+                v0 + 0.5 * dv, axisDir) / 0.998;
+        double spanV = AxialSpanV(uf, fTag, u0 + 0.5 * du, v0, v1, axisDir);
+        if (spanV <= 0.0)
+            spanV = AxialSpanV(uf, fTag, u0 + 0.5 * du,
+                v0 + 0.001 * dv, v1 - 0.001 * dv, axisDir) / 0.998;
+        depth = Math.Max(spanU, spanV);
+        if (depth <= 1e-9) return "zero axial extent";
+
+        // angular coverage: walk the param whose axial span is the smaller
+        theta = AngularSweep(uf, fTag,
+            (spanU <= spanV) ? 0 : 1,
+            u0, du, v0, dv, axisDir);
+        return "";
+    }
+
+    // Axial span across a v range at fixed u (v is the moving parameter).
+    private static double AxialSpanV(NXOpen.UF.UFSession uf, Tag fTag,
+        double u, double va, double vb, double[] axisDir)
+    {
+        double[] pa = new double[3];
+        double[] na = new double[3];
+        double[] ra = new double[2];
+        double[] pb = new double[3];
+        double[] nb = new double[3];
+        double[] rb = new double[2];
+        if (!FacePropsAt(uf, fTag, u, va, pa, na, ra)) return 0.0;
+        if (!FacePropsAt(uf, fTag, u, vb, pb, nb, rb)) return 0.0;
+        double d = (pb[0] - pa[0]) * axisDir[0]
+                 + (pb[1] - pa[1]) * axisDir[1]
+                 + (pb[2] - pa[2]) * axisDir[2];
+        return Math.Abs(d);
+    }
+
+    // Total angular coverage of the wall around the axis, walked over the
+    // angular parameter (whichParam: 0 = u, 1 = v) in 8 steps. ~2*pi for a
+    // full wall, less for partial (cross-drilled / milled) walls.
+    private static double AngularSweep(NXOpen.UF.UFSession uf, Tag fTag,
+        int whichParam, double u0, double du, double v0, double dv,
+        double[] axisDir)
+    {
+        double[] p0 = new double[3];
+        double[] n0 = new double[3];
+        double[] r0 = new double[2];
+        double[] p1 = new double[3];
+        double[] n1 = new double[3];
+        double[] r1 = new double[2];
+        double total = 0.0;
+        int N = 8;
+        bool havePrev = false;
+        for (int s = 0; s <= N; s++)
+        {
+            double f = 0.02 + 0.96 * ((double)s / (double)N);
+            double uu, vv;
+            if (whichParam == 0) { uu = u0 + f * du; vv = v0 + 0.5 * dv; }
+            else { uu = u0 + 0.5 * du; vv = v0 + f * dv; }
+            if (!FacePropsAt(uf, fTag, uu, vv, p1, n1, r1)) break;
+            if (havePrev)
+            {
+                double dot = n0[0] * n1[0] + n0[1] * n1[1] + n0[2] * n1[2];
+                double cx = n0[1] * n1[2] - n0[2] * n1[1];
+                double cy = n0[2] * n1[0] - n0[0] * n1[2];
+                double cz = n0[0] * n1[1] - n0[1] * n1[0];
+                double sgn = cx * axisDir[0] + cy * axisDir[1] + cz * axisDir[2];
+                double ang = Math.Atan2(sgn, dot);
+                total += Math.Abs(ang);
+            }
+            for (int c = 0; c < 3; c++) { p0[c] = p1[c]; n0[c] = n1[c]; }
+            havePrev = true;
+        }
+        return total;
     }
 
     private static string EdgeBlend(string[] parts)

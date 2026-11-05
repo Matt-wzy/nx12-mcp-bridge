@@ -120,6 +120,11 @@ def test_read_sketch():
     )
 
 
+def test_list_holes_wire_format():
+    assert _command("nx_list_holes", {}) == "nx_list_holes"
+    assert _command("nx_list_holes", {"body_id": "BODY_1"}) == "nx_list_holes BODY_1"
+
+
 def test_set_dimension_value_formats_numbers():
     cmd = _command(
         "nx_set_dimension_value",
@@ -587,6 +592,76 @@ def test_adapt_list_attributes_structured():
     assert adapted["count"] == 3
     assert adapted["attributes"]["名称"] == "阶梯轴"
     assert adapted["attributes"]["OP10_NAME"] == "车"
+
+
+def test_adapt_list_holes_counts_holes_only():
+    from nx_mcp.loader_bridge import _adapt
+
+    adapted = _adapt(
+        "nx_list_holes",
+        {},
+        {
+            "ok": True,
+            "face_count": 12,
+            "cylinder_count": 3,
+            "holes": [
+                {
+                    "index": 0, "face_index": 2, "tag": 555, "kind": "hole",
+                    "diameter": 10.0, "radius": 5.0, "depth": 20.0,
+                    "x": 30.0, "y": 30.0, "z": 10.0, "area": 628.3,
+                    "sweep_rad": 6.283, "full_wall": True, "containment": 2,
+                    "uf_type": 20,
+                    "axis_uf": [0, 0, 1], "point_uf": [30, 30, 10],
+                    "err": "",
+                },
+                {
+                    "index": 1, "face_index": 5, "kind": "boss",
+                    "diameter": 12.0, "depth": 30.0, "x": 50, "y": 50, "z": 35,
+                    "area": 1130.9, "full_wall": True, "containment": 1,
+                },
+                {
+                    "index": 2, "face_index": 9, "kind": "unknown",
+                    "diameter": 6.0, "depth": 0.0, "err": "containment: boom",
+                },
+            ],
+            "result": "cylindrical faces=3 on 12 face(s); hole=1 boss=1 unknown=1",
+        },
+    )
+    assert adapted["count"] == 1  # kind=hole only
+    assert adapted["cylinders"] == 3
+    assert adapted["face_count"] == 12
+    assert adapted["holes"][0]["diameter"] == 10.0
+    assert adapted["holes"][0]["full_wall"] is True
+    assert adapted["holes"][1]["kind"] == "boss"
+    # legacy/partial rows still map with defaults
+    assert adapted["holes"][1]["axis_uf"] == []
+    assert adapted["holes"][2]["err"] == "containment: boom"
+
+
+def test_hole_csv_writes_rows_and_dia_summary(tmp_path):
+    from nx_mcp.certified import _write_hole_csv
+
+    out = str(tmp_path / "holes.csv")
+    msg = _write_hole_csv(
+        out,
+        [
+            {"diameter": 8.0, "x": 30.0, "y": 30.0, "z": 10.0, "depth": 20.0,
+             "face_index": 2, "full_wall": True},
+            {"diameter": 8.0, "x": 70.0, "y": 30.0, "z": 10.0, "depth": 20.0,
+             "face_index": 4, "full_wall": True},
+            {"diameter": 10.0, "x": 50.0, "y": 50.0, "z": 5.0, "depth": 10.0,
+             "face_index": 7, "full_wall": False},
+        ],
+    )
+    assert "3 hole(s)" in msg
+    assert "d8x2" in msg and "d10x1" in msg
+    assert "partial wall" in msg
+    text = open(out, encoding="utf-8-sig").read()
+    lines = text.strip().splitlines()
+    assert lines[0] == "hole_no,dia_mm,x_mm,y_mm,z_mm,depth_mm,face_index"
+    assert lines[1].startswith("1,8.0,30.0,30.0,10.0,20.0,2")
+    assert lines[2].startswith("2,8.0,70.0,30.0,10.0,20.0,4")
+    assert lines[3].startswith("3,10.0,50.0,50.0,5.0,10.0,7")
 
 
 def _write_card(tmp_path, attributes, fmt="text"):

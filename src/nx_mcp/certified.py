@@ -19,6 +19,7 @@ from nx_mcp.contracts import (
     ComponentAddResult,
     ExportResult,
     ExtrudeResult,
+    HoleListResult,
     MassPropertiesResult,
     MeasureAngleResult,
     NXToolError,
@@ -153,6 +154,53 @@ def _write_bom_csv(path: str, rows: list[dict[str, Any]]) -> str:
                 ]
             )
     return "exported %d BOM row(s) to %s" % (len(rows), out_abs)
+
+
+def _write_hole_csv(path: str, rows: list[dict[str, Any]]) -> str:
+    """Write hole rows (nx_list_holes kind=hole) as a CSV hole table.
+
+    utf-8-sig so Excel opens it correctly; one row per hole instance with
+    the model-space axis position (z = wall mid-height, so a blind hole
+    reads z = start + depth/2) and the area-derived depth. The message
+    carries the per-diameter totals a process sheet needs (e.g. d8x4 d10x1)
+    and a warning count for partial walls (cross-drilled / milled), whose
+    centroid positions are off-axis and must be verified manually.
+    """
+    out_abs = os.path.abspath(path)
+    outdir = os.path.dirname(out_abs)
+    if outdir:
+        os.makedirs(outdir, exist_ok=True)
+    with open(out_abs, "w", newline="", encoding="utf-8-sig") as fh:
+        writer = csv.writer(fh)
+        writer.writerow(
+            ["hole_no", "dia_mm", "x_mm", "y_mm", "z_mm", "depth_mm", "face_index"]
+        )
+        for i, h in enumerate(rows, start=1):
+            writer.writerow(
+                [
+                    i,
+                    round(float(h.get("diameter", 0.0)), 3),
+                    round(float(h.get("x", 0.0)), 3),
+                    round(float(h.get("y", 0.0)), 3),
+                    round(float(h.get("z", 0.0)), 3),
+                    round(float(h.get("depth", 0.0)), 3),
+                    int(h.get("face_index", 0)),
+                ]
+            )
+    by_dia: dict[float, int] = {}
+    partial = 0
+    for h in rows:
+        dia = round(float(h.get("diameter", 0.0)), 1)
+        by_dia[dia] = by_dia.get(dia, 0) + 1
+        if not h.get("full_wall", False):
+            partial += 1
+    summary = " ".join(
+        "d%sx%d" % (("%g" % dia), n) for dia, n in sorted(by_dia.items())
+    )
+    message = "exported %d hole(s) to %s; by dia: %s" % (len(rows), out_abs, summary)
+    if partial:
+        message += "; %d partial wall row(s) - verify positions manually" % partial
+    return message
 
 
 # ---- 工序卡（process card）模板 --------------------------------------------
@@ -374,6 +422,8 @@ CERTIFIED_TOOL_NAMES = {
     # 装配树拍平 + BOM CSV 导出（工艺路线表基础）
     "nx_list_assembly",
     "nx_export_bom_csv",
+    "nx_list_holes",
+    "nx_export_hole_table_csv",
     # 装配添加组件（工序装配/合件建模；装配工艺路线第一步）
     "nx_add_component",
     # 焊接符号（GB/T 324 焊缝标注，WeldCollection.CreateLineWeldBuilder 路线）
@@ -1545,6 +1595,61 @@ def create_certified_server(
                 )
             )
         message = await asyncio.to_thread(_write_bom_csv, resolved, rows)
+        return ExportResult(status="success", path=resolved, message=message)
+
+    @mcp.tool()
+    async def nx_list_holes(body_id: str = "") -> HoleListResult:
+        """Scan the model for cylindrical walls: hole vs boss table data.
+
+        One row per cylindrical wall: kind (hole = void on the axis, boss =
+        material on the axis), diameter, depth and axis position x/y/z in
+        model space (mm). Both analytic cylinder faces (UF type 16) and the
+        parametric swept walls this project's nx_hole / sketch-extrude
+        booleans produce (UF type 20) are covered via a sampled cylinder fit;
+        cones/drill points, fillets, spheres and planar faces are excluded
+        (counted in the skipped-by-type message). kind comes from a point
+        containment probe at the axis mid-point. full_wall=False flags
+        partial walls (cross-drilled or milled flats) - geometry is still
+        exact, but verify those positions before use. body_id defaults to
+        the first solid body. Read-only companion of nx_export_hole_table_csv;
+        the drafting-side HoleTableBuilder route stays blocked (see
+        交接清单档案).
+        """
+        params: dict[str, Any] = {}
+        if body_id:
+            params["body_id"] = body_id
+        return HoleListResult(**await call("nx_list_holes", params))
+
+    @mcp.tool()
+    async def nx_export_hole_table_csv(path: str, body_id: str = "") -> ExportResult:
+        """Export the model's hole table (孔表) as CSV for process sheets.
+
+        Runs nx_list_holes, keeps the kind=hole rows and writes
+        hole_no,dia_mm,x_mm,y_mm,z_mm,depth_mm,face_index into the workspace
+        file ``path`` (UTF-8 BOM, so Excel opens it correctly). z is the wall
+        mid-height, so a blind hole reads z = hole start + depth/2. The
+        message summarizes per-diameter totals (e.g. d8x4 d10x1) and counts
+        partial-wall rows that need manual verification. Errors out when no
+        hole wall exists - run nx_list_holes first to see what the scan
+        classified (bosses are excluded).
+        """
+        resolved = resolve_path(path)
+        resp = await call("nx_list_holes", {"body_id": body_id} if body_id else {})
+        holes = resp.get("holes") or []
+        rows = [h for h in holes if h.get("kind") == "hole"]
+        if not rows:
+            raise MCPToolError(
+                json.dumps(
+                    NXToolError(
+                        "NX_EMPTY_HOLE_TABLE",
+                        "no cylindrical hole wall found (bosses, cones, fillets "
+                        "and planar faces are excluded); run nx_list_holes to see "
+                        "what the scan classified",
+                    ).as_dict(),
+                    ensure_ascii=False,
+                )
+            )
+        message = await asyncio.to_thread(_write_hole_csv, resolved, rows)
         return ExportResult(status="success", path=resolved, message=message)
 
     @mcp.tool()
