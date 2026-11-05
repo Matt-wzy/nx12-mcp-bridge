@@ -48,12 +48,16 @@
 //                                                    路径不能含空格)
 //   nx_create_id_symbol <type> <x> <y> [size=k] [lower=t] [upper text...]  (球标/ID 符号，
 //                                                   装配工艺零件序号气泡，type 见 CreateIdSymbol)
-//   nx_create_datum_symbol <letter> <x> <y>        (基准符号 GD&T，GB/T 17851 基准字母框，
-//                                                   GdtDatumCollection 路线，坐标为图纸坐标)
+//   nx_create_datum_symbol <letter> <x> <y> [lv=<view> lb=<body> le=<edge> [side=..]]
+//                                                   (基准符号 GD&T，GB/T 17851 基准字母框，
+//                                                   GdtDatumCollection 路线，坐标为图纸坐标；
+//                                                   带可选指引线 lv/lb/le=视图/体/边索引)
 //   nx_create_gdt_frame <char> <tol> <x> <y> [d1=A] [d2=B] [d3=C] [shape=...] [mat=...]
+//                        [lv=<view> lb=<body> le=<edge> [side=..]]
 //                                                   (形位公差框 GD&T，GB/T 1182 特征项目+公差值+
 //                                                   基准字母；DraftingFeatureControlFrameBuilder
-//                                                   路线，坐标为图纸坐标，中文特征名在 Python 侧映射)
+//                                                   路线，坐标为图纸坐标，中文特征名在 Python 侧映射；
+//                                                   带可选指引线指向被测要素边)
 //   nx_create_weld_symbol <type> <size> <x> <y> [side=arrow|other|both] [length_pitch=nxp]
 //                         [tail=none|tail|box] [contour=..] [finish=..] [std=gb|iso|ansi]
 //                                                   (焊接符号 GB/T 324：角焊缝/V形/坡口焊，
@@ -1043,14 +1047,134 @@ public static class NX_MCP_Loader
         }
     }
 
-    // nx_create_note <pos_x> <pos_y> <text...>
+    // ------------------------------------------------------------------
+    // Optional leader-line support shared by the annotation commands
+    // (note / roughness / datum symbol / GDT frame).
+    //
+    // Option tokens, placed right after the fixed positional args (and
+    // before any free text): lv=<view_id> lb=<body_id> le=<edge_index>
+    // [side=left|right]. The leader terminates with a filled arrow on the
+    // midpoint of the given model edge as seen in the given drafting view -
+    // the same model-edge + ObjectView resolution the dimensions use
+    // (Associativity.FirstObject + ObjectView), so no view-curve conversion
+    // is needed.
+    //
+    // Reflected 2026-11-06: DraftingNoteBuilder, FeatureControlFrameBuilder
+    // (via DraftingFeatureControlFrameBuilder), DatumFeatureSymbolBuilder
+    // (via DraftingDatumFeatureSymbolBuilder) and BaseSurfaceFinishBuilder
+    // (via PmiAttributeBuilder -> DraftingSurfaceFinishBuilder) ALL expose
+    // "LeaderBuilder Leader". LeaderData comes from
+    // AnnotationManager.CreateLeaderData(); LeaderData.Leader is a
+    // SelectDisplayableObject with the (obj, view, point) SetValue overload;
+    // LeaderBuilder.Leaders is a LeaderDataList with Append().
+    private class LeaderOpts
+    {
+        public string View = "";
+        public string Body = "";
+        public string Edge = "";
+        public string Side = "";
+        // Optional lettering font name for the note text (font=<name>, e.g.
+        // font=chinesef). NX fonts are integer IDs; resolved by name below.
+        public string Font = "";
+        public bool AnySet
+        {
+            get { return View.Length > 0 || Body.Length > 0 || Edge.Length > 0 || Side.Length > 0; }
+        }
+        public bool Complete
+        {
+            get { return View.Length > 0 && Body.Length > 0 && Edge.Length > 0; }
+        }
+    }
+
+    // Scans tokens from index i while they look like lv=/lb=/le=/side=/font=;
+    // returns the index of the first token that is not an option.
+    private static int ParseLeaderOpts(string[] parts, int i, LeaderOpts o)
+    {
+        while (i < parts.Length)
+        {
+            string t = parts[i];
+            if (t.StartsWith("lv=", StringComparison.OrdinalIgnoreCase)) { o.View = t.Substring(3).Trim(); i++; }
+            else if (t.StartsWith("lb=", StringComparison.OrdinalIgnoreCase)) { o.Body = t.Substring(3).Trim(); i++; }
+            else if (t.StartsWith("le=", StringComparison.OrdinalIgnoreCase)) { o.Edge = t.Substring(3).Trim(); i++; }
+            else if (t.StartsWith("side=", StringComparison.OrdinalIgnoreCase)) { o.Side = t.Substring(5).Trim().ToLowerInvariant(); i++; }
+            else if (t.StartsWith("font=", StringComparison.OrdinalIgnoreCase)) { o.Font = t.Substring(5).Trim(); i++; }
+            else break;
+        }
+        return i;
+    }
+
+    // Character-font lookup by name. NX lettering fonts are integer IDs
+    // (indexes into the part font table); UFDrf.GetCharFont maps id -> name.
+    // Returns the id, or 0 when not found ('avail' then lists all names in
+    // the table so the caller can show usable font= values in the error).
+    private static int FindCharacterFontByName(string want, out string avail)
+    {
+        avail = "";
+        try
+        {
+            NXOpen.UF.UFSession uf = NXOpen.UF.UFSession.GetUFSession();
+            var names = new List<string>();
+            for (int i = 1; i <= 40; i++)
+            {
+                string nm = null;
+                try { uf.Drf.GetCharFont(i, out nm); } catch { continue; }
+                if (string.IsNullOrEmpty(nm)) continue;
+                names.Add(i + "=" + nm);
+                if (string.Equals(nm, want, StringComparison.OrdinalIgnoreCase)) return i;
+            }
+            avail = string.Join(",", names.ToArray());
+        }
+        catch (Exception ex) { avail = "font lookup failed: " + ex.Message; }
+        return 0;
+    }
+
+    // Appends one straight leader to the builder's LeaderBuilder. Returns an
+    // error message or null on success / when no leader was requested. Must
+    // be called BEFORE Commit() so the annotation is created with the leader.
+    private static string AttachLeader(LeaderOpts o, NXOpen.Annotations.LeaderBuilder lb)
+    {
+        if (!o.AnySet) return null;
+        if (!o.Complete)
+            return "leader needs lv=<view_id> lb=<body_id> le=<edge_index> together"
+                + " (got lv='" + o.View + "' lb='" + o.Body + "' le='" + o.Edge + "')";
+        try
+        {
+            DrawingSheet sheet;
+            DraftingView view = ResolveViewAnySheet(o.View, out sheet);
+            Body body = ResolveBody(o.Body);
+            Edge[] edges = body.GetEdges();
+            int ei;
+            if (!int.TryParse(o.Edge, NumberStyles.Integer, CultureInfo.InvariantCulture, out ei))
+                return "leader edge index is not a number: '" + o.Edge + "'";
+            if (ei < 0 || ei >= edges.Length)
+                return "leader edge_index out of range: " + ei + " (have " + edges.Length + ")";
+            Edge e = edges[ei];
+
+            NXOpen.Annotations.LeaderData ld = _part.Annotations.CreateLeaderData();
+            ld.Leader.SetValue(e, view, MidpointOfObject(e));
+            ld.Arrowhead = NXOpen.Annotations.LeaderData.ArrowheadType.FilledArrow;
+            // TerminatorType is the NESTED enum LeaderData.LeaderType, not the
+            // top-level NXOpen.Annotations.LeaderType (same trap as the FCF
+            // ZoneShape nested enum).
+            ld.TerminatorType = NXOpen.Annotations.LeaderData.LeaderType.Plain;
+            if (o.Side == "left") ld.StubSide = NXOpen.Annotations.LeaderSide.Left;
+            else if (o.Side == "right") ld.StubSide = NXOpen.Annotations.LeaderSide.Right;
+            else ld.StubSide = NXOpen.Annotations.LeaderSide.Inferred;
+            lb.Leaders.Append(ld);
+            return null;
+        }
+        catch (Exception ex) { return "attach leader failed: " + ex.Message; }
+    }
+
+    // nx_create_note <pos_x> <pos_y> [lv=.. lb=.. le=.. [side=..]] <text...>
     // Technical-requirement / process text on the current drawing sheet.
-    // Text is everything after the position (spaces allowed); use '|' for line breaks.
+    // Text is everything after the position and leader options (spaces
+    // allowed); use '|' for line breaks.
     // Ported from CAD-Agent-Hub _op_create_drafting_note (validated sequence).
     private static string CreateNote(string[] parts)
     {
         if (parts.Length < 4)
-            return ErrJson("usage: nx_create_note <pos_x> <pos_y> <text...> (use | for line breaks)");
+            return ErrJson("usage: nx_create_note <pos_x> <pos_y> [lv=<view> lb=<body> le=<edge> [side=left|right]] <text...> (use | for line breaks)");
         try
         {
             _session = Session.GetSession();
@@ -1059,11 +1183,16 @@ public static class NX_MCP_Loader
             double posx = D(parts[1]);
             double posy = D(parts[2]);
 
+            // Optional leader options occupy tokens right after the position;
+            // the free text starts at the first non-option token.
+            LeaderOpts lo = new LeaderOpts();
+            int ti = ParseLeaderOpts(parts, 3, lo);
+
             // Text == all remaining tokens re-joined, so it may contain spaces.
             var sb = new StringBuilder();
-            for (int i = 3; i < parts.Length; i++)
+            for (int i = ti; i < parts.Length; i++)
             {
-                if (i > 3) sb.Append(" ");
+                if (i > ti) sb.Append(" ");
                 sb.Append(parts[i]);
             }
             string raw = sb.ToString().Trim();
@@ -1073,23 +1202,51 @@ public static class NX_MCP_Loader
             for (int i = 0; i < lines.Length; i++) lines[i] = lines[i].Trim();
 
             string jid = "";
+            string kind = "note";
             NXOpen.Annotations.DraftingNoteBuilder nb =
                 // C# has no SimpleDraftingAid.Null (that is the Python spelling);
                 // passing null creates a brand-new note, same as the other builders here.
                 _part.Annotations.CreateDraftingNoteBuilder(null);
             try
             {
+                string lerr = AttachLeader(lo, nb.Leader);
+                if (lerr != null) return ErrJson(lerr);
+                if (lo.Font.Length > 0)
+                {
+                    // CJK notes: the default lettering font has no Chinese
+                    // glyphs (renders as boxes in PDF). Resolve the font by
+                    // name; a fresh part's table may only hold Arial/blockfont/
+                    // NX ANSI Symbols, so load the font on demand via
+                    // BasePart.Fonts.AddFont (NX font name like chinesef or a
+                    // Windows TTF name like SimSun - whatever NX can find).
+                    string avail;
+                    int fid = FindCharacterFontByName(lo.Font, out avail);
+                    if (fid <= 0)
+                    {
+                        try { fid = _part.Fonts.AddFont(lo.Font); }
+                        catch (Exception af) { avail = avail + "; AddFont failed: " + af.Message; }
+                    }
+                    if (fid <= 0)
+                        return ErrJson("note font '" + lo.Font + "' not resolvable (table: " + avail + ")");
+                    nb.Style.LetteringStyle.GeneralTextFont = fid;
+                }
                 nb.Text.TextBlock.SetText(lines);
                 nb.Origin.OriginPoint = new Point3d(posx, posy, 0.0);
                 nb.Origin.Anchor = NXOpen.Annotations.OriginBuilder.AlignmentPosition.TopLeft;
-                NXOpen.Annotations.Note note = (NXOpen.Annotations.Note)nb.Commit();
-                try { note.SetName("MCP_NOTE"); } catch { }
-                try { jid = note.JournalIdentifier; } catch { }
+                // A note WITHOUT a leader commits as Note; WITH a leader NX
+                // returns a Label (label = note + leader line). Cast to the
+                // common base for naming/id; report the concrete kind.
+                NXObject annObj = nb.Commit();
+                NXOpen.Annotations.Note note = annObj as NXOpen.Annotations.Note;
+                try { annObj.SetName("MCP_NOTE"); } catch { }
+                try { jid = annObj.JournalIdentifier; } catch { }
+                kind = (note != null) ? "note" : "label";
             }
             finally { try { nb.Destroy(); } catch { } }
 
             try { _part.DrawingSheets.RefreshCurrentSheet(); } catch { }
-            return OkJson("note", jid, "created note lines=" + lines.Length);
+            return OkJson("note", jid, "created " + kind + " lines=" + lines.Length
+                + (lo.AnySet ? " leader=yes" : ""));
         }
         catch (Exception e)
         {
@@ -1699,13 +1856,13 @@ public static class NX_MCP_Loader
         }
     }
 
-    // nx_create_roughness <pos_x> <pos_y> [value] [text]
+    // nx_create_roughness <pos_x> <pos_y> [lv=.. lb=.. le=.. [side=..]] [value] [text]
     // Surface finish (Ra) symbol - very common on machining drawings.
     // Entry: Part.Annotations.DraftingSurfaceFinishSymbols.CreateDraftingSurfaceFinishBuilder.
     private static string CreateRoughness(string[] parts)
     {
         if (parts.Length < 3)
-            return ErrJson("usage: nx_create_roughness <pos_x> <pos_y> [value] [text]");
+            return ErrJson("usage: nx_create_roughness <pos_x> <pos_y> [lv=<view> lb=<body> le=<edge> [side=left|right]] [value] [text]");
         try
         {
             _session = Session.GetSession();
@@ -1715,13 +1872,19 @@ public static class NX_MCP_Loader
 
             double posx = D(parts[1]);
             double posy = D(parts[2]);
-            string value = (parts.Length > 3) ? parts[3].Trim() : "1.6";
+
+            // Optional leader options first, then the positional value.
+            LeaderOpts lo = new LeaderOpts();
+            int vi = ParseLeaderOpts(parts, 3, lo);
+            string value = (vi < parts.Length) ? parts[vi].Trim() : "1.6";
 
             NXOpen.Annotations.DraftingSurfaceFinishBuilder rb =
                 _part.Annotations.DraftingSurfaceFinishSymbols.CreateDraftingSurfaceFinishBuilder(null);
             string jid = "";
             try
             {
+                string lerr = AttachLeader(lo, rb.Leader);
+                if (lerr != null) return ErrJson(lerr);
                 rb.Origin.OriginPoint = new Point3d(posx, posy, 0.0);
                 rb.Origin.Anchor = NXOpen.Annotations.OriginBuilder.AlignmentPosition.TopLeft;
                 // A1 is the roughness value field (the "a1" slot of the symbol).
@@ -5561,7 +5724,7 @@ public static class NX_MCP_Loader
     private static string CreateDatumSymbol(string[] parts)
     {
         if (parts.Length < 4)
-            return ErrJson("usage: nx_create_datum_symbol <letter> <x> <y>");
+            return ErrJson("usage: nx_create_datum_symbol <letter> <x> <y> [lv=<view> lb=<body> le=<edge> [side=left|right]]");
         try
         {
             _session = Session.GetSession();
@@ -5575,6 +5738,10 @@ public static class NX_MCP_Loader
             double posx = D(parts[2]);
             double posy = D(parts[3]);
 
+            // Optional leader: arrow lands on the referenced feature's edge.
+            LeaderOpts lo = new LeaderOpts();
+            ParseLeaderOpts(parts, 4, lo);
+
             // DraftingDatum : BaseDatum : Gdt, so the part-level Gdt collection
             // (_part.Gdts) is the counter that moves; Annotations.Datums did NOT
             // change (0 -> 0) even when the commit produced a real object.
@@ -5586,6 +5753,8 @@ public static class NX_MCP_Loader
             string jid = "";
             try
             {
+                string lerr = AttachLeader(lo, db.Leader);
+                if (lerr != null) return ErrJson(lerr);
                 db.Letter = letter;
                 db.Origin.OriginPoint = new Point3d(posx, posy, 0.0);
                 NXOpen.Annotations.DraftingDatum sym =
@@ -5653,7 +5822,12 @@ public static class NX_MCP_Loader
                 FcfZoneShape.None;
             FcfMatMod mat =
                 FcfMatMod.None;
-            for (int i = 5; i < parts.Length; i++)
+
+            // Optional leader options (lv=/lb=/le=/side=) come first among the
+            // key=value tokens, then the existing frame options.
+            LeaderOpts lo = new LeaderOpts();
+            int oi = ParseLeaderOpts(parts, 5, lo);
+            for (int i = oi; i < parts.Length; i++)
             {
                 string tok = parts[i];
                 if (tok.StartsWith("d1=", StringComparison.OrdinalIgnoreCase))
@@ -5706,6 +5880,8 @@ public static class NX_MCP_Loader
             string jid = "";
             try
             {
+                string lerr = AttachLeader(lo, fb.Leader);
+                if (lerr != null) return ErrJson(lerr);
                 fb.Characteristic = ch;
                 // SingleFrame style renders ONLY the builder's initial first row;
                 // an appended second row is silently ignored (default value then

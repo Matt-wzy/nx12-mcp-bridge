@@ -45,6 +45,35 @@ def _fmt(value: Any) -> str:
     return str(value)
 
 
+def _leader_tokens(params: dict[str, Any]) -> str:
+    """Serialize the optional leader-line options shared by the annotation
+    commands (note / roughness / datum symbol / GDT frame).
+
+    Loader-side tokens (must sit right after the fixed positional args and
+    before any free text): lv=<view_id> lb=<body_id> le=<edge_index>
+    [side=left|right]. All three of lv/lb/le must be given together or the
+    loader rejects the command; side is optional. note_font=<name> is a
+    note-only option (CJK lettering font, e.g. chinesef).
+    """
+    lv = str(params.get("leader_view_id", "") or "").strip()
+    lb = str(params.get("leader_body_id", "") or "").strip()
+    le = params.get("leader_edge_index", None)
+    tokens = ""
+    if lv:
+        tokens += " lv=" + lv
+    if lb:
+        tokens += " lb=" + lb
+    if le is not None and int(le) >= 0:
+        tokens += " le=" + str(int(le))
+    side = str(params.get("leader_side", "") or "").strip().lower()
+    if side:
+        tokens += " side=" + side
+    font = str(params.get("note_font", "") or "").strip()
+    if font:
+        tokens += " font=" + font
+    return tokens
+
+
 def _p2(params: dict[str, Any], key: str) -> tuple[float, float]:
     pt = params[key]
     if isinstance(pt, dict):
@@ -105,10 +134,12 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
                 cmd += " " + name
         return cmd
     if method == "nx_create_note":
-        # text goes last so it may contain spaces; '|' marks a line break
-        return "nx_create_note %s %s %s" % (
+        # text goes last so it may contain spaces; '|' marks a line break;
+        # optional leader tokens sit between the position and the text
+        return "nx_create_note %s %s%s %s" % (
             _fmt(params.get("pos_x", 0.0)),
             _fmt(params.get("pos_y", 0.0)),
+            _leader_tokens(params),
             str(params.get("text", "")),
         )
     if method == "nx_create_diameter_dimension":
@@ -200,10 +231,12 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
         return "nx_delete_view " + str(params.get("view_id", ""))
     if method == "nx_create_datum_symbol":
         # Loader 语法: nx_create_datum_symbol <letter> <x> <y>（图纸坐标 mm）
-        return "nx_create_datum_symbol %s %s %s" % (
+        #              [lv=<view> lb=<body> le=<edge> [side=..]]（可选指引线）
+        return "nx_create_datum_symbol %s %s %s%s" % (
             str(params.get("letter", "")),
             _fmt(float(params.get("pos_x", 0.0))),
             _fmt(float(params.get("pos_y", 0.0))),
+            _leader_tokens(params),
         )
     if method == "nx_list_assembly":
         return "nx_list_assembly"
@@ -300,9 +333,11 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
             str(params.get("view_name", "")),
         )
     if method == "nx_create_roughness":
-        return "nx_create_roughness %s %s %s" % (
+        # optional leader tokens come before the positional value
+        return "nx_create_roughness %s %s%s %s" % (
             _fmt(params.get("pos_x", 0.0)),
             _fmt(params.get("pos_y", 0.0)),
+            _leader_tokens(params),
             str(params.get("value", "1.6")),
         )
     if method == "nx_create_centerline":
@@ -488,6 +523,7 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
         mat = str(params.get("material_modifier", "none") or "none").strip().lower()
         if mat and mat != "none":
             cmd += " mat=" + mat
+        cmd += _leader_tokens(params)
         return cmd
     return None  # unsupported by the phase-1 Loader
 

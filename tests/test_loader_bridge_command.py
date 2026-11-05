@@ -292,6 +292,112 @@ def test_gdt_frame_wire_format():
     )
 
 
+def test_note_leader_wire_format():
+    # no leader options -> identical to the legacy plain-note grammar
+    assert _command(
+        "nx_create_note", {"text": "技术要求", "pos_x": 20.0, "pos_y": 20.0}
+    ) == "nx_create_note 20 20 技术要求"
+    # full leader: options sit between the position and the free text
+    cmd = _command(
+        "nx_create_note",
+        {
+            "text": "精铣此面 Ra1.6",
+            "pos_x": 100.0,
+            "pos_y": 50.0,
+            "leader_view_id": "TOP",
+            "leader_body_id": "BODY_1",
+            "leader_edge_index": 3,
+        },
+    )
+    assert cmd == "nx_create_note 100 50 lv=TOP lb=BODY_1 le=3 精铣此面 Ra1.6"
+    # side option is appended after le
+    cmd2 = _command(
+        "nx_create_note",
+        {
+            "text": "留磨量 0.3",
+            "pos_x": 1.0,
+            "pos_y": 2.0,
+            "leader_view_id": "FRONT",
+            "leader_body_id": "B",
+            "leader_edge_index": 0,
+            "leader_side": "left",
+        },
+    )
+    assert cmd2 == "nx_create_note 1 2 lv=FRONT lb=B le=0 side=left 留磨量 0.3"
+    # note-only CJK font option rides in the same option block
+    cmd3 = _command(
+        "nx_create_note",
+        {
+            "text": "精铣此面",
+            "pos_x": 100.0,
+            "pos_y": 170.0,
+            "note_font": "chinesef",
+            "leader_view_id": "V_FRONT",
+            "leader_body_id": "BODY_1",
+            "leader_edge_index": 6,
+        },
+    )
+    assert cmd3 == (
+        "nx_create_note 100 170 lv=V_FRONT lb=BODY_1 le=6 font=chinesef 精铣此面"
+    )
+
+
+def test_roughness_leader_wire_format():
+    assert (
+        _command("nx_create_roughness", {"pos_x": 60.0, "pos_y": 40.0, "value": "3.2"})
+        == "nx_create_roughness 60 40 3.2"
+    )
+    cmd = _command(
+        "nx_create_roughness",
+        {
+            "pos_x": 60.0,
+            "pos_y": 40.0,
+            "value": "1.6",
+            "leader_view_id": "TOP",
+            "leader_body_id": "BODY_1",
+            "leader_edge_index": 5,
+            "leader_side": "right",
+        },
+    )
+    assert cmd == "nx_create_roughness 60 40 lv=TOP lb=BODY_1 le=5 side=right 1.6"
+
+
+def test_datum_symbol_leader_wire_format():
+    cmd = _command(
+        "nx_create_datum_symbol",
+        {
+            "letter": "A",
+            "pos_x": 100.0,
+            "pos_y": 40.0,
+            "leader_view_id": "TOP",
+            "leader_body_id": "BODY_1",
+            "leader_edge_index": 2,
+        },
+    )
+    assert cmd == "nx_create_datum_symbol A 100 40 lv=TOP lb=BODY_1 le=2"
+
+
+def test_gdt_frame_leader_wire_format():
+    cmd = _command(
+        "nx_create_gdt_frame",
+        {
+            "characteristic": "position",
+            "tolerance": "0.05",
+            "pos_x": 10.5,
+            "pos_y": 0.0,
+            "datum_primary": "A",
+            "zone_shape": "diameter",
+            "leader_view_id": "TOP",
+            "leader_body_id": "BODY_1",
+            "leader_edge_index": 7,
+        },
+    )
+    assert cmd == (
+        "nx_create_gdt_frame position 0.05 10.5 0 d1=A shape=diameter"
+        " lv=TOP lb=BODY_1 le=7"
+    )
+
+
 def test_add_section_segment_wire_format():
     cmd = _command(
         "nx_add_section_segment",

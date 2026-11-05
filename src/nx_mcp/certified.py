@@ -1043,18 +1043,31 @@ def create_certified_server(
         pos_x: float = 20.0,
         pos_y: float = 20.0,
         value: str = "1.6",
+        leader_view_id: str = "",
+        leader_body_id: str = "",
+        leader_edge_index: int = -1,
+        leader_side: Literal["", "left", "right"] = "",
     ) -> OperationResult:
         """Create a surface finish (roughness) symbol on the current drawing sheet.
 
         value goes into the symbol's a1 slot - e.g. "1.6" for Ra 1.6, "3.2" for Ra 3.2.
         Position is in sheet coordinates (mm).
+
+        Optional leader line (GB/T 131 加工面指向): pass leader_view_id +
+        leader_body_id + leader_edge_index together (edge from nx_list_edges
+        on the body) and the symbol points at that surface edge inside the
+        view; leader_side nudges which side the stub leaves from.
         """
-        return OperationResult(
-            **await call(
-                "nx_create_roughness",
-                {"pos_x": pos_x, "pos_y": pos_y, "value": value},
-            )
-        )
+        params: dict[str, Any] = {"pos_x": pos_x, "pos_y": pos_y, "value": value}
+        if leader_view_id:
+            params["leader_view_id"] = leader_view_id
+        if leader_body_id:
+            params["leader_body_id"] = leader_body_id
+        if leader_edge_index >= 0:
+            params["leader_edge_index"] = leader_edge_index
+        if leader_side:
+            params["leader_side"] = leader_side
+        return OperationResult(**await call("nx_create_roughness", params))
 
     @mcp.tool()
     async def nx_create_title_block(
@@ -1296,6 +1309,10 @@ def create_certified_server(
         letter: Annotated[str, Field(min_length=1, max_length=2)],
         pos_x: float,
         pos_y: float,
+        leader_view_id: str = "",
+        leader_body_id: str = "",
+        leader_edge_index: int = -1,
+        leader_side: Literal["", "left", "right"] = "",
     ) -> OperationResult:
         """Create a datum feature symbol (基准符号) on the current drawing sheet.
 
@@ -1303,16 +1320,24 @@ def create_certified_server(
         the datum letter, e.g. [A]. Pair it with form/position tolerance
         annotations - a datum is meaningless without a tolerance frame that
         references it. letter is uppercased (1-2 characters), pos_x/pos_y are
-        sheet coordinates (mm). Placement is standalone (no leader): put it on
-        the extension line of a dimension or next to the surface edge; NX does
-        not attach it to geometry in this route.
+        sheet coordinates (mm).
+
+        Optional leader line: pass leader_view_id + leader_body_id +
+        leader_edge_index together (edge from nx_list_edges) and the frame
+        attaches with a Gb-style leader to that edge inside the view; without
+        them the symbol is standalone - put it on the extension line of a
+        dimension or next to the surface edge.
         """
-        return OperationResult(
-            **await call(
-                "nx_create_datum_symbol",
-                {"letter": letter, "pos_x": pos_x, "pos_y": pos_y},
-            )
-        )
+        params: dict[str, Any] = {"letter": letter, "pos_x": pos_x, "pos_y": pos_y}
+        if leader_view_id:
+            params["leader_view_id"] = leader_view_id
+        if leader_body_id:
+            params["leader_body_id"] = leader_body_id
+        if leader_edge_index >= 0:
+            params["leader_edge_index"] = leader_edge_index
+        if leader_side:
+            params["leader_side"] = leader_side
+        return OperationResult(**await call("nx_create_datum_symbol", params))
 
     @mcp.tool()
     async def nx_create_gdt_frame(
@@ -1325,6 +1350,10 @@ def create_certified_server(
         datum_tertiary: str = "",
         zone_shape: Literal["none", "diameter", "spherical", "square"] = "none",
         material_modifier: Literal["none", "mmc", "lmc", "rfs"] = "none",
+        leader_view_id: str = "",
+        leader_body_id: str = "",
+        leader_edge_index: int = -1,
+        leader_side: Literal["", "left", "right"] = "",
     ) -> OperationResult:
         """Create a feature control frame (形位公差框, GD&T) on the drawing sheet.
 
@@ -1338,29 +1367,38 @@ def create_certified_server(
         Ø symbol in front of the value (axial holes/axis zones); material
         modifier applies to the tolerance ( mmc/lmc ). Datum letters are
         uppercased single characters, e.g. datum_primary="A". pos_x/pos_y are
-        sheet coordinates (mm); placement is standalone (no leader) - put it
-        under the dimension line it controls, then pair it with
+        sheet coordinates (mm).
+
+        Optional leader line pointing at the toleranced feature: pass
+        leader_view_id + leader_body_id + leader_edge_index together (edge
+        from nx_list_edges) - the frame connects to that edge with a filled
+        arrow; without them placement is standalone - put it under the
+        dimension line it controls, then pair it with
         nx_create_datum_symbol for referenced datums.
         """
         key = _FCF_CHARACTERISTIC_ALIASES.get(characteristic.strip())
         if key is None:
             key = characteristic.strip().lower().replace(" ", "")
-        return OperationResult(
-            **await call(
-                "nx_create_gdt_frame",
-                {
-                    "characteristic": key,
-                    "tolerance": tolerance.strip(),
-                    "pos_x": pos_x,
-                    "pos_y": pos_y,
-                    "datum_primary": datum_primary.strip().upper(),
-                    "datum_secondary": datum_secondary.strip().upper(),
-                    "datum_tertiary": datum_tertiary.strip().upper(),
-                    "zone_shape": zone_shape,
-                    "material_modifier": material_modifier,
-                },
-            )
-        )
+        params: dict[str, Any] = {
+            "characteristic": key,
+            "tolerance": tolerance.strip(),
+            "pos_x": pos_x,
+            "pos_y": pos_y,
+            "datum_primary": datum_primary.strip().upper(),
+            "datum_secondary": datum_secondary.strip().upper(),
+            "datum_tertiary": datum_tertiary.strip().upper(),
+            "zone_shape": zone_shape,
+            "material_modifier": material_modifier,
+        }
+        if leader_view_id:
+            params["leader_view_id"] = leader_view_id
+        if leader_body_id:
+            params["leader_body_id"] = leader_body_id
+        if leader_edge_index >= 0:
+            params["leader_edge_index"] = leader_edge_index
+        if leader_side:
+            params["leader_side"] = leader_side
+        return OperationResult(**await call("nx_create_gdt_frame", params))
 
     @mcp.tool()
     async def nx_create_weld_symbol(
@@ -1576,15 +1614,41 @@ def create_certified_server(
         text: str,
         pos_x: float = 20.0,
         pos_y: float = 20.0,
+        leader_view_id: str = "",
+        leader_body_id: str = "",
+        leader_edge_index: int = -1,
+        leader_side: Literal["", "left", "right"] = "",
+        note_font: str = "",
     ) -> OperationResult:
         """Add technical-requirement / process text to the current drawing sheet.
 
         Use "|" to start a new line, e.g. "技术要求|1. 未注倒角 C0.5|2. 调质 28-32HRC".
         Position is in sheet coordinates (mm).
+
+        IMPORTANT for Chinese text: the default lettering font has NO Chinese
+        glyphs (renders as hollow boxes). Pass note_font="chinesef" (NX built-in
+        FangSong-style CJK font, auto-added to the part font table on demand)
+        whenever text contains CJK characters.
+
+        Optional leader line (工序图指向加工面的说明文字): pass leader_view_id
+        (from nx_list_drafting_views), leader_body_id and leader_edge_index
+        (from nx_list_edges) together - the leader runs from the text to a
+        filled arrow on that edge's midpoint inside the view (the annotation
+        becomes a NX "label"). leader_side selects which side of the text the
+        stub leaves from (default: inferred).
         """
-        return OperationResult(
-            **await call("nx_create_note", {"text": text, "pos_x": pos_x, "pos_y": pos_y})
-        )
+        params: dict[str, Any] = {"text": text, "pos_x": pos_x, "pos_y": pos_y}
+        if leader_view_id:
+            params["leader_view_id"] = leader_view_id
+        if leader_body_id:
+            params["leader_body_id"] = leader_body_id
+        if leader_edge_index >= 0:
+            params["leader_edge_index"] = leader_edge_index
+        if leader_side:
+            params["leader_side"] = leader_side
+        if note_font:
+            params["note_font"] = note_font
+        return OperationResult(**await call("nx_create_note", params))
 
     @mcp.tool()
     async def nx_create_diameter_dimension(
