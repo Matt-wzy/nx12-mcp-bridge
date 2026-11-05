@@ -426,6 +426,8 @@ public static class NX_MCP_Loader
                 return UpdateViewsCmd();
             case "nx_create_dimension":
                 return CreateDimension(parts);
+            case "nx_create_angle_dimension":
+                return CreateAngleDimension(parts);
             case "nx_export_step":
                 return ExportStep(parts);
             case "nx_open_part":
@@ -881,6 +883,63 @@ public static class NX_MCP_Loader
         return null;
     }
 
+    // Builds the two-edge DimensionData shared by the linear and angular
+    // dimension commands: model edges + ObjectView (the Associativity pattern
+    // validated by nx_create_dimension).
+    // For ANGULAR dimensions the recipe that actually computes an angle is
+    // LineOption=ExistingLine with the pick points at the SHARED ENDPOINT of
+    // the two edges (2026-11-06 matrix: Angle+midpoint and Angle+vertex both
+    // compute 0/360 deg, None+vertex fails with NX "internal error",
+    // ExistingLine+vertex measured 129.806 deg on a 50.19/129.81 edge pair;
+    // ComputedSize is DEGREES for angular dims despite the name).
+    private static NXOpen.Annotations.DimensionData NewTwoEdgeDimensionData(
+        DraftingView view, Edge e1, Edge e2, bool angular)
+    {
+        NXOpen.Annotations.DimensionData ddd = _part.Annotations.NewDimensionData();
+        NXOpen.Annotations.Associativity a1 = _part.Annotations.NewAssociativity();
+        NXOpen.Annotations.Associativity a2 = _part.Annotations.NewAssociativity();
+
+        NXOpen.Annotations.AssociativityLineOption lo = angular
+            ? NXOpen.Annotations.AssociativityLineOption.ExistingLine
+            : NXOpen.Annotations.AssociativityLineOption.None;
+
+        Point3d p1 = MidpointOfObject(e1);
+        Point3d p2 = MidpointOfObject(e2);
+        if (angular)
+        {
+            // Shared endpoint of the two edges (nearest start/end pair).
+            Point3d s1 = new Point3d(), e1e = new Point3d(), s2 = new Point3d(), e2e = new Point3d();
+            try { e1.GetVertices(out s1, out e1e); e2.GetVertices(out s2, out e2e); } catch { }
+            Point3d[] ends1 = { s1, e1e };
+            Point3d[] ends2 = { s2, e2e };
+            Point3d best = p1; double bd = double.MaxValue;
+            foreach (Point3d q1 in ends1) foreach (Point3d q2 in ends2)
+            {
+                double dd = (q1.X - q2.X) * (q1.X - q2.X) + (q1.Y - q2.Y) * (q1.Y - q2.Y) + (q1.Z - q2.Z) * (q1.Z - q2.Z);
+                if (dd < bd) { bd = dd; best = q1; }
+            }
+            p1 = best; p2 = best;
+        }
+
+        a1.FirstObject = e1;
+        a1.SecondObject = null;
+        a1.ObjectView = view;
+        a1.PickPoint = p1;
+        a1.PointOption = NXOpen.Annotations.AssociativityPointOption.OnCurve;
+        a1.LineOption = lo;
+
+        a2.FirstObject = e2;
+        a2.SecondObject = null;
+        a2.ObjectView = view;
+        a2.PickPoint = p2;
+        a2.PointOption = NXOpen.Annotations.AssociativityPointOption.OnCurve;
+        a2.LineOption = lo;
+
+        ddd.SetAssociativity(1, new NXOpen.Annotations.Associativity[] { a1 });
+        ddd.SetAssociativity(2, new NXOpen.Annotations.Associativity[] { a2 });
+        return ddd;
+    }
+
     private static string CreateDimension(string[] parts)
     {
         if (parts.Length < 7)
@@ -913,26 +972,7 @@ public static class NX_MCP_Loader
             string dimName = (parts.Length > 10 && !string.IsNullOrEmpty(parts[10].Trim()))
                 ? parts[10].Trim() : "MCP_DIMENSION";
 
-            NXOpen.Annotations.DimensionData ddd = _part.Annotations.NewDimensionData();
-            NXOpen.Annotations.Associativity a1 = _part.Annotations.NewAssociativity();
-            NXOpen.Annotations.Associativity a2 = _part.Annotations.NewAssociativity();
-
-            a1.FirstObject = e1;
-            a1.SecondObject = null;
-            a1.ObjectView = view;
-            a1.PickPoint = MidpointOfObject(e1);
-            a1.PointOption = NXOpen.Annotations.AssociativityPointOption.OnCurve;
-            a1.LineOption = NXOpen.Annotations.AssociativityLineOption.None;
-
-            a2.FirstObject = e2;
-            a2.SecondObject = null;
-            a2.ObjectView = view;
-            a2.PickPoint = MidpointOfObject(e2);
-            a2.PointOption = NXOpen.Annotations.AssociativityPointOption.OnCurve;
-            a2.LineOption = NXOpen.Annotations.AssociativityLineOption.None;
-
-            ddd.SetAssociativity(1, new NXOpen.Annotations.Associativity[] { a1 });
-            ddd.SetAssociativity(2, new NXOpen.Annotations.Associativity[] { a2 });
+            NXOpen.Annotations.DimensionData ddd = NewTwoEdgeDimensionData(view, e1, e2, false);
 
             Point3d origin = new Point3d(posx, posy, 0.0);
             NXOpen.Annotations.Dimension dim;
@@ -993,6 +1033,85 @@ public static class NX_MCP_Loader
         catch (Exception e)
         {
             return ErrJson("create_dimension failed: " + e.Message);
+        }
+    }
+
+    // nx_create_angle_dimension <view_id> <body_id> <e1> <e2> <pos_x> <pos_y> [arc=minor|major] [dim_name]
+    // Angular dimension between two straight edges (斜面/锥面/倾角标注).
+    // Same Associativity pattern as the linear dimension; the shortcut
+    // factories CreateMajor/MinorAngularDimension(DimensionData, Point3d)
+    // pick which arc between the lines gets measured (minor = the acute-ish
+    // side, default; major = the reflex side). No linear tolerance here -
+    // angular tolerances use d/m/s and are out of scope for now.
+    private static string CreateAngleDimension(string[] parts)
+    {
+        if (parts.Length < 7)
+            return ErrJson("usage: nx_create_angle_dimension <view_id> <body_id> <first_edge_index> <second_edge_index> <pos_x> <pos_y> [arc=minor|major] [dim_name]");
+        try
+        {
+            _session = Session.GetSession();
+            if (_part == null) return ErrJson("no active part; run nx_create_part first");
+
+            DrawingSheet sheet;
+            DraftingView view = ResolveViewAnySheet(parts[1].Trim(), out sheet);
+            try { sheet.Open(); } catch { }
+
+            Body body = ResolveBody(parts[2].Trim());
+            Edge[] edges = body.GetEdges();
+            int ei1 = int.Parse(parts[3], CultureInfo.InvariantCulture);
+            int ei2 = int.Parse(parts[4], CultureInfo.InvariantCulture);
+            if (ei1 < 0 || ei1 >= edges.Length) return ErrJson("first_edge_index out of range: " + ei1 + " (have " + edges.Length + ")");
+            if (ei2 < 0 || ei2 >= edges.Length) return ErrJson("second_edge_index out of range: " + ei2 + " (have " + edges.Length + ")");
+            Edge e1 = edges[ei1];
+            Edge e2 = edges[ei2];
+
+            double posx = D(parts[5]);
+            double posy = D(parts[6]);
+
+            string arc = "minor";
+            string dimName = "MCP_ANGLE";
+            for (int i = 7; i < parts.Length; i++)
+            {
+                string tok = parts[i];
+                if (tok.StartsWith("arc=", StringComparison.OrdinalIgnoreCase))
+                    arc = tok.Substring(4).Trim().ToLowerInvariant();
+                else if (tok.StartsWith("name=", StringComparison.OrdinalIgnoreCase))
+                    dimName = tok.Substring(5).Trim();
+            }
+            if (arc != "minor" && arc != "major")
+                return ErrJson("arc must be minor or major, got '" + arc + "'");
+
+            NXOpen.Annotations.DimensionData ddd = NewTwoEdgeDimensionData(view, e1, e2, true);
+            Point3d origin = new Point3d(posx, posy, 0.0);
+
+            NXOpen.Annotations.Dimension dim;
+            if (arc == "major")
+                dim = _part.Dimensions.CreateMajorAngularDimension(ddd, origin);
+            else
+                dim = _part.Dimensions.CreateMinorAngularDimension(ddd, origin);
+            try { dim.SetName(dimName); } catch { }
+
+            // 2-decimal nominal (degrees) so 45.5 does not round to 46.
+            try
+            {
+                dim.NominalDecimalPlaces = 2;
+                dim.MetricNominalDecimalPlaces = 2;
+            }
+            catch (Exception ep) { Log("angle precision warn: " + ep.Message); }
+
+            try { ForceUpdateSheet(sheet); } catch { }
+
+            string jid = ""; try { jid = dim.JournalIdentifier; } catch { }
+            // ComputedSize for angular dimensions is already DEGREES
+            // (verified 2026-11-06: 129.806 on a 129.81 deg edge pair).
+            double deg = 0.0; try { deg = dim.ComputedSize; } catch { }
+            return OkJson("angle_dimension", jid,
+                "created " + arc + " angle dim name=" + dimName
+                + " value=" + F(deg) + " deg");
+        }
+        catch (Exception e)
+        {
+            return ErrJson("create_angle_dimension failed: " + e.Message);
         }
     }
 

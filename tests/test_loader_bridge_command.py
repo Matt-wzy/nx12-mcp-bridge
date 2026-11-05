@@ -398,6 +398,35 @@ def test_gdt_frame_leader_wire_format():
     )
 
 
+def test_angle_dimension_wire_format():
+    cmd = _command(
+        "nx_create_angle_dimension",
+        {
+            "view_id": "TOP",
+            "body_id": "BODY_1",
+            "first_edge_index": 2,
+            "second_edge_index": 5,
+            "pos_x": 100.0,
+            "pos_y": 60.0,
+        },
+    )
+    assert cmd == "nx_create_angle_dimension TOP BODY_1 2 5 100 60"
+    cmd2 = _command(
+        "nx_create_angle_dimension",
+        {
+            "view_id": "TOP",
+            "body_id": "BODY_1",
+            "first_edge_index": 2,
+            "second_edge_index": 5,
+            "pos_x": 100.0,
+            "pos_y": 60.0,
+            "arc": "major",
+            "dim_name": "ANG1",
+        },
+    )
+    assert cmd2 == "nx_create_angle_dimension TOP BODY_1 2 5 100 60 arc=major name=ANG1"
+
+
 def test_add_section_segment_wire_format():
     cmd = _command(
         "nx_add_section_segment",

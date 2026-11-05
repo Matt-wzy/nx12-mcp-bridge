@@ -349,6 +349,7 @@ CERTIFIED_TOOL_NAMES = {
     "nx_list_drafting_views",
     "nx_update_views",
     "nx_create_dimension",
+    "nx_create_angle_dimension",
     "nx_list_dimensions",
     "nx_list_annotations",
     "nx_create_note",
@@ -1649,6 +1650,44 @@ def create_certified_server(
         if note_font:
             params["note_font"] = note_font
         return OperationResult(**await call("nx_create_note", params))
+
+    @mcp.tool()
+    async def nx_create_angle_dimension(
+        view_id: str = "",
+        body_id: str = "",
+        first_edge_index: int = 0,
+        second_edge_index: int = 0,
+        pos_x: float = 0.0,
+        pos_y: float = 0.0,
+        arc: Literal["minor", "major"] = "minor",
+        dim_name: str = "MCP_ANGLE",
+    ) -> OperationResult:
+        """Create an associative ANGULAR dimension between two straight edges.
+
+        The angle annotation for inclined faces / chamfer walls / taper flanks
+        on process drawings. Edges are 0-based indices from nx_list_edges on
+        the given body; both must be straight lines. arc=minor measures the
+        acute-ish arc between the lines (default, what NX picks interactively),
+        arc=major measures the reflex side. The value reads back in the
+        result message in degrees; no linear tolerance is applied (angular
+        tolerances use d/m/s and are not supported yet). pos_x/pos_y are
+        sheet coordinates (mm) for the dimension text.
+        """
+        return OperationResult(
+            **await call(
+                "nx_create_angle_dimension",
+                {
+                    "view_id": view_id,
+                    "body_id": body_id,
+                    "first_edge_index": first_edge_index,
+                    "second_edge_index": second_edge_index,
+                    "pos_x": pos_x,
+                    "pos_y": pos_y,
+                    "arc": arc,
+                    "dim_name": dim_name,
+                },
+            )
+        )
 
     @mcp.tool()
     async def nx_create_diameter_dimension(

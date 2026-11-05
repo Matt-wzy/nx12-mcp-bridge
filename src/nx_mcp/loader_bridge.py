@@ -229,6 +229,24 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
         return cmd
     if method == "nx_delete_view":
         return "nx_delete_view " + str(params.get("view_id", ""))
+    if method == "nx_create_angle_dimension":
+        # Loader 语法: nx_create_angle_dimension <view> <body> <e1> <e2> <x> <y>
+        #              [arc=minor|major] [name=..]
+        cmd = "nx_create_angle_dimension %s %s %s %s %s %s" % (
+            str(params.get("view_id", "")),
+            str(params.get("body_id", "")),
+            str(params.get("first_edge_index", 0)),
+            str(params.get("second_edge_index", 0)),
+            _fmt(params.get("pos_x", 0.0)),
+            _fmt(params.get("pos_y", 0.0)),
+        )
+        arc = str(params.get("arc", "minor") or "minor").strip().lower()
+        if arc and arc != "minor":
+            cmd += " arc=" + arc
+        name = str(params.get("dim_name", "") or "").strip()
+        if name and name != "MCP_ANGLE":
+            cmd += " name=" + name
+        return cmd
     if method == "nx_create_datum_symbol":
         # Loader 语法: nx_create_datum_symbol <letter> <x> <y>（图纸坐标 mm）
         #              [lv=<view> lb=<body> le=<edge> [side=..]]（可选指引线）
