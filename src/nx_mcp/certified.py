@@ -21,7 +21,9 @@ from nx_mcp.contracts import (
     ExplosionResult,
     ExportResult,
     ExtrudeResult,
+    FeatureSuppressResult,
     HoleListResult,
+    InterferenceResult,
     MassPropertiesResult,
     MeasureAngleResult,
     NXToolError,
@@ -30,6 +32,7 @@ from nx_mcp.contracts import (
     OperationResult,
     PartResult,
     Point2D,
+    SaveAsResult,
     StatusResult,
     StockResult,
     TableResult,
@@ -436,6 +439,14 @@ CERTIFIED_TOOL_NAMES = {
     # 表格注解（UF_TABNOT 路线：孔表/工艺参数表/齿轮参数表上图纸；
     # 制图侧 HoleTableBuilder 受阻的替代呈现层，cells 行'|'列','）
     "nx_create_table",
+    # 特征抑制/取消抑制（工序模型核心操作：抑制后道工序特征得中间工序件；
+    # Feature.Suppress()/Unsuppress()，状态回读+计数验证，无效果显式报错）
+    "nx_set_feature_suppressed",
+    # 装配干涉/间隙检查（Assemblies.ClearanceAnalysisBuilder 路线，
+    # Analysis > Assembly Clearance；bodies/组件/双集合三模式 + zone 软干涉）
+    "nx_check_interference",
+    # 另存工序件（BasePart.SaveAs，工作部件切到新文件；OP10/OP20 工序模型管理）
+    "nx_save_part_as",
     "nx_create_explosion",
     "nx_explode_component",
     "nx_unexplode_component",
@@ -1248,6 +1259,77 @@ def create_certified_server(
                 },
             )
         )
+
+    @mcp.tool()
+    async def nx_set_feature_suppressed(feature: str, suppress: bool) -> FeatureSuppressResult:
+        """Suppress or unsuppress a feature (intermediate operation models).
+
+        The OP-model workflow: suppress the features added by LATER operations
+        to get the intermediate operation-state solid, or unsuppress to bring
+        them back. ``feature`` is a 1-based index in the nx_list_features
+        order, or a feature name / JournalIdentifier (exact match first, then
+        unique case-insensitive substring; ambiguous names are rejected).
+        NOTE: feature NAMES are locale-dependent (zh NX reports 拉伸(1) not
+        Extrude(1)) - prefer the index or the JournalIdentifier. Idempotent;
+        the read-back echoes before/after state and the part-wide suppressed
+        count, and a call that leaves the state unchanged is an explicit error
+        (some features, e.g. the datum csys, do not support suppression).
+        """
+        return FeatureSuppressResult(
+            **await call(
+                "nx_set_feature_suppressed",
+                {"feature": feature, "suppress": suppress},
+            )
+        )
+
+    @mcp.tool()
+    async def nx_check_interference(
+        asm: bool = False,
+        collection_one: str = "",
+        collection_two: str = "",
+        zone_mm: float = 0.0,
+        keep_set: bool = False,
+    ) -> InterferenceResult:
+        """Check interference / clearance between bodies or assembly parts.
+
+        装配干涉检查 - a QUERY: reports interference pairs and cleans the
+        analysis set up afterwards (keep_set=True leaves it for inspection).
+        Default (bodies mode): all solid bodies of the work part.
+        collection_one / collection_two: comma-separated BODY ids to restrict
+        the check; both given -> cross-set pairs only
+        (e.g. workpiece vs fixture). asm=True: pairs among the LEAF components
+        of the work part assembly (component names are reported). zone_mm > 0
+        additionally flags pairs closer than the zone as SOFT clearance
+        violations; 0 (default) reports only HARD/TOUCH/containment. items
+        lines look like "HARD BODY_1 BODY_2 depth=12.5" or "SOFT A B
+        clearance<2". Max 60 objects per call - subset with collections first
+        for large assemblies.
+        """
+        return InterferenceResult(
+            **await call(
+                "nx_check_interference",
+                {
+                    "asm": asm,
+                    "collection_one": collection_one,
+                    "collection_two": collection_two,
+                    "zone_mm": zone_mm,
+                    "keep_set": keep_set,
+                },
+            )
+        )
+
+    @mcp.tool()
+    async def nx_save_part_as(path: str) -> SaveAsResult:
+        """Save the active part to a new file (另存工序件).
+
+        The work part switches to the new file (same as interactive File >
+        Save As) - subsequent tools operate on the copy, the original file
+        stays as it was. Use it to cut intermediate operation-state parts from
+        one master model (OP10 blank / OP20 semi-finished / ...), typically
+        together with nx_set_feature_suppressed. Path is workspace-resolved
+        and must not contain spaces (same wire restriction as nx_open_part).
+        """
+        return SaveAsResult(**await call("nx_save_part_as", {"path": resolve_path(path)}))
 
     @mcp.tool()
     async def nx_mass_properties(

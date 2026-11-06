@@ -436,3 +436,91 @@ async def test_export_iges_resolves_path(tmp_path: Path):
     assert method == "nx_export_iges"
     assert params["path"] == str(tmp_path / "out.iges")
     assert result.structured_content["path"] == "x.iges"
+
+
+@pytest.mark.asyncio
+async def test_set_feature_suppressed_roundtrip():
+    bridge = RecordingBridge(
+        {
+            "status": "success",
+            "feature_index": 3,
+            "feature_name": "拉伸(1)",
+            "suppressed_before": False,
+            "suppressed_after": True,
+            "suppressed_count": 1,
+            "message": "feature[3] '拉伸(1)' suppressed 0 -> 1; suppressed total 1/3",
+        }
+    )
+    server = create_server(bridge)
+
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "nx_set_feature_suppressed", {"feature": "extrude", "suppress": True}
+        )
+
+    assert result.is_error is False
+    method, params = bridge.calls[0]
+    assert method == "nx_set_feature_suppressed"
+    assert params == {"feature": "extrude", "suppress": True}
+    content = result.structured_content
+    assert content["feature_index"] == 3
+    assert content["suppressed_after"] is True
+    assert content["suppressed_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_check_interference_roundtrip():
+    bridge = RecordingBridge(
+        {
+            "status": "success",
+            "mode": "components",
+            "objects_checked": 2,
+            "pairs_checked": 1,
+            "interference_count": 1,
+            "nx_count": 1,
+            "items": ["HARD B A depth=10"],
+            "set_deleted": True,
+            "message": "1 interference pair(s) of 1 checked",
+        }
+    )
+    server = create_server(bridge)
+
+    async with Client(server) as client:
+        result = await client.call_tool(
+            "nx_check_interference",
+            {"asm": True, "collection_one": "BODY_1", "zone_mm": 0.0},
+        )
+
+    assert result.is_error is False
+    method, params = bridge.calls[0]
+    assert method == "nx_check_interference"
+    assert params["asm"] is True
+    # empty collections / zero zone / keep_set default stay off the wire
+    assert params["collection_one"] == "BODY_1"
+    assert params["collection_two"] == ""
+    assert params["zone_mm"] == 0.0
+    assert params["keep_set"] is False
+    content = result.structured_content
+    assert content["mode"] == "components"
+    assert content["interference_count"] == 1
+    assert content["items"] == ["HARD B A depth=10"]
+    assert content["set_deleted"] is True
+
+
+@pytest.mark.asyncio
+async def test_save_part_as_resolves_workspace(tmp_path: Path):
+    bridge = RecordingBridge(
+        {
+            "status": "success",
+            "saved_path": str(tmp_path / "OP10.prt"),
+            "message": "saved as",
+        }
+    )
+    server = create_server(bridge, Workspace(tmp_path))
+
+    async with Client(server) as client:
+        result = await client.call_tool("nx_save_part_as", {"path": "OP10.prt"})
+
+    assert result.is_error is False
+    assert bridge.calls == [("nx_save_part_as", {"path": str(tmp_path / "OP10.prt")})]
+    assert result.structured_content["saved_path"] == str(tmp_path / "OP10.prt")

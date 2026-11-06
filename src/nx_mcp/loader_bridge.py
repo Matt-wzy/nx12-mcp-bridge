@@ -148,6 +148,37 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
         return cmd
     if method == "nx_undo":
         return "nx_undo"
+    # ---- feature suppression (工序模型: 抑制后道工序特征得中间工序件) --------
+    if method == "nx_set_feature_suppressed":
+        # Loader 语法: nx_set_feature_suppressed <feature> <0|1>
+        # <feature> 是 nx_list_features 顺序的 1 基索引，或特征名/JournalIdentifier
+        return "nx_set_feature_suppressed %s %d" % (
+            str(params.get("feature", "") or ""),
+            1 if params.get("suppress") else 0,
+        )
+    # ---- interference / clearance check (装配干涉/间隙检查) ------------------
+    if method == "nx_check_interference":
+        # Loader 语法: nx_check_interference [asm=1] [c1=<ids>] [c2=<ids>]
+        #              [zone=<mm>] [keep_set=1]   ids 逗号分隔
+        cmd = "nx_check_interference"
+        if params.get("asm"):
+            cmd += " asm=1"
+        for key, flag in (("collection_one", "c1="), ("collection_two", "c2=")):
+            val = params.get(key) or ""
+            if isinstance(val, (list, tuple)):
+                val = ",".join(str(x) for x in val)
+            val = str(val).strip()
+            if val:
+                cmd += " " + flag + val
+        zone = float(params.get("zone_mm", 0.0) or 0.0)
+        if zone > 0.0:
+            cmd += " zone=" + _fmt(zone)
+        if params.get("keep_set"):
+            cmd += " keep_set=1"
+        return cmd
+    if method == "nx_save_part_as":
+        # 协议按空格分词，路径不能包含空格（与 nx_open_part 同一限制）
+        return "nx_save_part_as " + str(params["path"])
     if method == "nx_release":
         return "nx_release"
     # ---- drafting (2D drawing) -------------------------------------------
@@ -1159,6 +1190,36 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
             "tables_after": int(resp.get("tables_after", 0)),
             "cell_echo": str(resp.get("cell_echo", "")),
             "font": str(resp.get("font", "")),
+            "message": msg,
+        }
+    if method == "nx_set_feature_suppressed":
+        return {
+            "status": "success",
+            "feature_index": int(resp.get("feature_index", 0) or 0),
+            "feature_name": str(resp.get("feature_name", "")),
+            "suppressed_before": bool(resp.get("suppressed_before", False)),
+            "suppressed_after": bool(resp.get("suppressed_after", False)),
+            "suppressed_count": int(resp.get("suppressed_count", 0) or 0),
+            "message": msg,
+        }
+    if method == "nx_check_interference":
+        nx_count = resp.get("nx_count")
+        return {
+            "status": "success",
+            "mode": str(resp.get("mode", params.get("asm") and "components" or "bodies")),
+            "objects_checked": int(resp.get("objects", 0) or 0),
+            "pairs_checked": int(resp.get("pairs_checked", 0) or 0),
+            "loaded_children": int(resp.get("loaded_children", 0) or 0),
+            "interference_count": int(resp.get("count", 0) or 0),
+            "nx_count": None if nx_count is None else int(nx_count),
+            "items": [str(x) for x in (resp.get("items") or [])],
+            "set_deleted": bool(resp.get("set_deleted", False)),
+            "message": msg,
+        }
+    if method == "nx_save_part_as":
+        return {
+            "status": "success",
+            "saved_path": str(resp.get("saved_as", params.get("path", ""))),
             "message": msg,
         }
     return {"status": "success", "message": msg}

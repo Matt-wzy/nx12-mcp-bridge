@@ -850,3 +850,46 @@ def test_table_head_loc_token():
         {"pos_x": 30.0, "pos_y": 200.0, "cells": "A,B|1,2", "head_loc": "bottom"},
     )
     assert cmd2 == "nx_create_table 30 200 head_loc=bottom A,B|1,2"
+
+
+def test_set_feature_suppressed_wire_format():
+    assert (
+        _command("nx_set_feature_suppressed", {"feature": "3", "suppress": True})
+        == "nx_set_feature_suppressed 3 1"
+    )
+    assert (
+        _command("nx_set_feature_suppressed", {"feature": "extrude", "suppress": False})
+        == "nx_set_feature_suppressed extrude 0"
+    )
+
+
+def test_check_interference_wire_format_minimal():
+    assert _command("nx_check_interference", {}) == "nx_check_interference"
+    assert (
+        _command("nx_check_interference", {"asm": True})
+        == "nx_check_interference asm=1"
+    )
+
+
+def test_check_interference_wire_format_collections_zone_keep():
+    cmd = _command(
+        "nx_check_interference",
+        {
+            "asm": False,
+            "collection_one": ["BODY_1", "BODY_2"],
+            "collection_two": "BODY_3",
+            "zone_mm": 2.0,
+            "keep_set": True,
+        },
+    )
+    assert cmd == "nx_check_interference c1=BODY_1,BODY_2 c2=BODY_3 zone=2 keep_set=1"
+    # zero defaults stay off the wire
+    cmd2 = _command("nx_check_interference", {"zone_mm": 0.0, "keep_set": False})
+    assert cmd2 == "nx_check_interference"
+
+
+def test_save_part_as_wire_format():
+    assert (
+        _command("nx_save_part_as", {"path": "C:/w/OP10.prt"})
+        == "nx_save_part_as C:/w/OP10.prt"
+    )

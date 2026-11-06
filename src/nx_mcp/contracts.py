@@ -17,8 +17,10 @@ __all__ = [
     "ExplosionListResult",
     "ExplosionResult",
     "ExtrudeResult",
+    "FeatureSuppressResult",
     "HoleInfo",
     "HoleListResult",
+    "InterferenceResult",
     "MassPropertiesResult",
     "MeasureAngleResult",
     "NXToolError",
@@ -29,6 +31,7 @@ __all__ = [
     "OperationResult",
     "PartResult",
     "Point2D",
+    "SaveAsResult",
     "StockResult",
     "StatusResult",
     "TableResult",
@@ -321,4 +324,59 @@ class TableResult(BaseModel):
     tables_after: int = 0
     cell_echo: str = ""
     font: str = ""
+    message: str = ""
+
+
+class FeatureSuppressResult(BaseModel):
+    """Result of nx_set_feature_suppressed: read-back of one feature's state.
+
+    suppressed_before/after are the Feature.Suppressed read-backs around the
+    call and suppressed_count is the part-wide suppressed total (verification
+    by counting). A state that did not change as requested never reaches this
+    model - the loader turns it into an explicit error."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["success"] = "success"
+    feature_index: int = 0
+    feature_name: str = ""
+    suppressed_before: bool = False
+    suppressed_after: bool = False
+    suppressed_count: int = 0
+    message: str = ""
+
+
+class InterferenceResult(BaseModel):
+    """Result of nx_check_interference: per-pair interference report.
+
+    items lines look like "HARD BODY_1 BODY_2 depth=12.5" or
+    "SOFT A B clearance<2" (zone check). nx_count echoes the loader's
+    GetNumberOfInterferences so a pair read-back mismatch is visible; the
+    analysis set is deleted after read-back unless keep_set was requested."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["success"] = "success"
+    mode: str = "bodies"
+    objects_checked: int = 0
+    pairs_checked: int = 0
+    loaded_children: int = 0
+    interference_count: int = 0
+    nx_count: int | None = None
+    items: list[str] = Field(default_factory=list)
+    set_deleted: bool = False
+    message: str = ""
+
+
+class SaveAsResult(BaseModel):
+    """Result of nx_save_part_as: the work part switched to the new file.
+
+    saved_path is the loader's FullPath read-back (may differ in separators
+    from the request); the loader's active-part tracking follows the new
+    file, so subsequent tools operate on the copy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["success"] = "success"
+    saved_path: str = ""
     message: str = ""

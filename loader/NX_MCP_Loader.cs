@@ -543,6 +543,12 @@ public static class NX_MCP_Loader
                 return CreateStock(parts);
             case "nx_create_table":
                 return CreateTableCmd(parts);
+            case "nx_set_feature_suppressed":
+                return SetFeatureSuppressed(parts);
+            case "nx_check_interference":
+                return CheckInterference(parts);
+            case "nx_save_part_as":
+                return SavePartAs(parts);
             default:
                 return ErrJson("unknown command: " + cmd);
         }
@@ -8569,6 +8575,413 @@ public static class NX_MCP_Loader
             Log("probe7 outer: " + ex.Message);
             return OkJsonList("steps", steps, "probe7 done with outer error");
         }
+    }
+
+    // ---- 2026-11-07 (shift 6) process-engineering additions ------------
+
+    // Resolves a body to the display id used in reports: _bodies reverse map,
+    // falling back to the JournalIdentifier (same convention as list output).
+    private static string BodyIdOf(Body b)
+    {
+        foreach (var kv in _bodies)
+        {
+            if (kv.Value != null && kv.Value.Tag == b.Tag) return kv.Key;
+        }
+        string jid = "";
+        try { jid = b.JournalIdentifier; } catch { }
+        return (jid.Length > 0) ? jid : ("BODY_TAG_" + b.Tag.ToString());
+    }
+
+    // Strict body resolver for explicit id lists (no fallback-to-first-solid:
+    // an unknown id must be an error, not a silently wrong analysis target).
+    private static Body StrictResolveBody(string id)
+    {
+        Body b;
+        if (!string.IsNullOrEmpty(id) && _bodies.TryGetValue(id, out b)) return b;
+        Body[] all = _part.Bodies.ToArray();
+        foreach (Body x in all)
+        {
+            string jid = "";
+            try { jid = x.JournalIdentifier; } catch { }
+            if (jid == id) return x;
+        }
+        throw new Exception("unknown body_id: " + id + " (see nx_list_bodies)");
+    }
+
+    // Collects LEAF components (no children) of an assembly for interference
+    // pairs. GetChildren is defensive (broken components degrade to a skip) -
+    // same convention as nx_list_assembly.
+    private static void CollectLeafComponents(NXOpen.Assemblies.Component parent,
+        List<DisplayableObject> acc, List<string> ids)
+    {
+        if (parent == null) return;
+        NXOpen.Assemblies.Component[] kids = null;
+        try { kids = parent.GetChildren(); } catch { kids = null; }
+        if (kids == null || kids.Length == 0) return;
+        foreach (NXOpen.Assemblies.Component c in kids)
+        {
+            if (c == null) continue;
+            NXOpen.Assemblies.Component[] grand = null;
+            try { grand = c.GetChildren(); } catch { grand = null; }
+            if (grand != null && grand.Length > 0) { CollectLeafComponents(c, acc, ids); continue; }
+            acc.Add(c);
+            string nm = "";
+            try { nm = c.Name; } catch { }
+            if (string.IsNullOrEmpty(nm)) { try { nm = c.JournalIdentifier; } catch { } }
+            ids.Add(nm);
+        }
+    }
+
+    // nx_set_feature_suppressed <feature> <0|1>
+    // Suppress (1) or unsuppress (0) a feature -> intermediate operation models
+    // (suppress the features added by LATER operations to get the OP-state
+    // solid). <feature> is a 1-based index into the _part.Features order
+    // nx_list_features reports, or a feature name / JournalIdentifier (exact
+    // match first, then unique case-insensitive substring; ambiguous names are
+    // rejected with the match count). Idempotent: suppressing an already
+    // suppressed feature is a no-op success. Echoes before/after state and the
+    // total suppressed count (count-verification, project standard).
+    private static string SetFeatureSuppressed(string[] parts)
+    {
+        if (_part == null) return ErrJson("no active part");
+        if (parts.Length < 3)
+            return ErrJson("usage: nx_set_feature_suppressed <feature> <0|1>");
+        string want = parts[1];
+        int mode;
+        if (!int.TryParse(parts[2], out mode) || (mode != 0 && mode != 1))
+            return ErrJson("usage: nx_set_feature_suppressed <feature> <0|1> (1=suppress 0=unsuppress)");
+        NXOpen.Features.Feature[] all = _part.Features.ToArray();
+        if (all.Length == 0) return ErrJson("no features in work part");
+        NXOpen.Features.Feature target = null;
+        int index = 0, hits = 0;
+        int asInt;
+        if (int.TryParse(want, out asInt))
+        {
+            if (asInt < 1 || asInt > all.Length)
+                return ErrJson("feature index out of range 1.." + all.Length +
+                    " (nx_list_features order)");
+            target = all[asInt - 1];
+            index = asInt;
+            hits = 1;
+        }
+        else
+        {
+            for (int i = 0; i < all.Length; i++)
+            {
+                string jid = "", nm = "";
+                try { jid = all[i].JournalIdentifier; } catch { }
+                try { nm = all[i].GetFeatureName(); } catch { }
+                bool exact = (jid == want) || (nm == want);
+                bool sub = !exact &&
+                    ((jid.Length > 0 && jid.IndexOf(want, StringComparison.OrdinalIgnoreCase) >= 0) ||
+                     (nm.Length > 0 && nm.IndexOf(want, StringComparison.OrdinalIgnoreCase) >= 0));
+                if (exact) { target = all[i]; index = i + 1; hits = 1; break; }
+                if (sub) { hits++; if (target == null) { target = all[i]; index = i + 1; } }
+            }
+            if (target == null)
+                return ErrJson("feature not found: " + want + " (see nx_list_features)");
+            if (hits > 1)
+                return ErrJson("ambiguous feature name '" + want + "' matches " + hits +
+                    " features; pass the 1-based index from nx_list_features instead");
+        }
+        bool before = false;
+        try { before = target.Suppressed; } catch { }
+        string fname = "";
+        try { fname = target.GetFeatureName(); } catch { }
+        try
+        {
+            if (mode == 1) { if (!before) target.Suppress(); }
+            else { if (before) target.Unsuppress(); }
+        }
+        catch (Exception ex)
+        {
+            return ErrJson("feature " + (mode == 1 ? "suppress" : "unsuppress") +
+                " failed: " + ex.Message);
+        }
+        bool after = before;
+        try { after = target.Suppressed; } catch { }
+        // Silent no-op guard (project standard: "Commit 成功但没产出" is the
+        // classic NX trap): Suppress() may neither throw nor change state on
+        // features that do not support suppression (probed 2026-11-07: datum
+        // csys 基准坐标系 stays 0 -> 0). Turn that into an explicit error.
+        if (mode == 1 && !before && !after)
+            return ErrJson("suppress had no effect on feature '" + fname +
+                "' (may not support suppression); state unchanged");
+        if (mode == 0 && before && after)
+            return ErrJson("unsuppress had no effect on feature '" + fname +
+                "' (parent/dependency may keep it suppressed); state unchanged");
+        int suppressedCount = 0;
+        foreach (NXOpen.Features.Feature f in all)
+        {
+            try { if (f.Suppressed) suppressedCount++; } catch { }
+        }
+        string res = "feature[" + index + "] '" + fname + "' suppressed " +
+            (before ? "1" : "0") + " -> " + (after ? "1" : "0") +
+            "; suppressed total " + suppressedCount + "/" + all.Length;
+        return "{\"ok\":true,\"feature_index\":" + index +
+            ",\"feature_name\":\"" + Esc(fname) + "\"" +
+            ",\"suppressed_before\":" + (before ? "true" : "false") +
+            ",\"suppressed_after\":" + (after ? "true" : "false") +
+            ",\"suppressed_count\":" + suppressedCount +
+            ",\"result\":\"" + Esc(res) + "\"}";
+    }
+
+    // nx_check_interference [asm=1] [c1=<ids>] [c2=<ids>] [zone=<mm>] [keep_set=1]
+    // Assembly interference / clearance check via NXOpen.Assemblies
+    // .ClearanceAnalysisBuilder (the Analysis > Assembly Clearance feature).
+    // Bodies mode (default): pairs among the work part's solid bodies (0-face
+    // consumed bodies skipped, same defense as nx_list_holes), or the explicit
+    // c1=/c2= BODY id subsets (c2 given -> cross-set pairs only, e.g. workpiece
+    // vs fixture). asm=1: pairs among the LEAF components of the work part
+    // assembly. zone=<mm> additionally reports clearance violations (< zone) as
+    // SOFT hits; 0 (default) reports only HARD/TOUCH/containment. Pair
+    // read-back iterates the pairs WE submitted (GetNextInterference has no
+    // documented first-pair entry; nx_count echoes GetNumberOfInterferences so
+    // a mismatch is visible). The clearance set is deleted after read-back
+    // unless keep_set=1 (query tools must not leave state behind). Items look
+    // like "HARD BODY_1 BODY_2 depth=12.5" / "TOUCH COMP_A COMP_B".
+    private static string CheckInterference(string[] parts)
+    {
+        if (_part == null) return ErrJson("no active part");
+        bool asmMode = false, keepSet = false;
+        double zone = 0.0;
+        string c1spec = "", c2spec = "";
+        for (int i = 1; i < parts.Length; i++)
+        {
+            string p = parts[i];
+            if (p.StartsWith("asm=", StringComparison.Ordinal)) asmMode = (D(p.Substring(4)) != 0.0);
+            else if (p.StartsWith("zone=", StringComparison.Ordinal)) zone = D(p.Substring(5));
+            else if (p.StartsWith("c1=", StringComparison.Ordinal)) c1spec = p.Substring(3);
+            else if (p.StartsWith("c2=", StringComparison.Ordinal)) c2spec = p.Substring(3);
+            else if (p.StartsWith("keep_set=", StringComparison.Ordinal)) keepSet = (D(p.Substring(9)) != 0.0);
+            else return ErrJson("unknown option: " + p + " (asm= c1= c2= zone= keep_set=)");
+        }
+        List<DisplayableObject> setA = new List<DisplayableObject>();
+        List<string> idsA = new List<string>();
+        List<DisplayableObject> setB = new List<DisplayableObject>();
+        List<string> idsB = new List<string>();
+        string mode = asmMode ? "components" : "bodies";
+        int loadNotes = 0;
+        try
+        {
+            if (asmMode)
+            {
+                CollectLeafComponents(_part.ComponentAssembly.RootComponent, setA, idsA);
+                // NX reopens assemblies with children structure-only; an exact
+                // clearance analysis on unloaded bodies silently finds NOTHING
+                // (probed 2026-11-07: fresh assembly reports the overlap HARD,
+                // the saved+reopened one reported 0). Pull every leaf
+                // component's geometry in first - same managed prototype
+                // LoadFully route as nx_add_component / OpenPart.
+                for (int i = 0; i < setA.Count; i++)
+                {
+                    var c = setA[i] as NXOpen.Assemblies.Component;
+                    if (c == null) continue;
+                    try
+                    {
+                        NXOpen.BasePart cp = c.Prototype as NXOpen.BasePart;
+                        if (cp != null)
+                        {
+                            NXOpen.PartLoadStatus pls = cp.LoadFully();
+                            if (pls != null) { try { pls.Dispose(); } catch { } }
+                            loadNotes++;
+                        }
+                    }
+                    catch (Exception el) { Log("interference load warn: " + el.Message); }
+                }
+            }
+            else if (c1spec.Length > 0 || c2spec.Length > 0)
+            {
+                if (c1spec.Length > 0)
+                    foreach (string id in c1spec.Split(','))
+                        if (id.Length > 0)
+                        {
+                            Body b = StrictResolveBody(id);
+                            setA.Add(b); idsA.Add(BodyIdOf(b));
+                        }
+            }
+            else
+            {
+                foreach (Body b in _part.Bodies.ToArray())
+                {
+                    if (!b.IsSolidBody) continue;
+                    try { if (b.GetFaces().Length == 0) continue; } catch { continue; }
+                    setA.Add(b);
+                    idsA.Add(BodyIdOf(b));
+                }
+            }
+            if (c2spec.Length > 0)
+            {
+                if (asmMode)
+                    return ErrJson("c2= applies to bodies mode only (asm=1 checks leaf components)");
+                foreach (string id in c2spec.Split(','))
+                    if (id.Length > 0)
+                    {
+                        Body b = StrictResolveBody(id);
+                        setB.Add(b); idsB.Add(BodyIdOf(b));
+                    }
+            }
+        }
+        catch (Exception ex)
+        {
+            return ErrJson("interference collection failed: " + ex.Message);
+        }
+        // explicit c2-only usage: the c2 list becomes the within-set collection
+        if (setA.Count == 0 && setB.Count > 0)
+        {
+            setA = setB; idsA = idsB;
+            setB = new List<DisplayableObject>(); idsB = new List<string>();
+        }
+        int totalObjs = setA.Count + setB.Count;
+        if (totalObjs < 2)
+            return ErrJson("need at least 2 objects for interference check (got " + totalObjs + ")");
+        if (totalObjs > 60)
+            return ErrJson("too many objects (" + totalObjs +
+                "); use c1=/c2= subsets (limit 60)");
+        _session = Session.GetSession();
+        NXOpen.Assemblies.ClearanceSet set = null;
+        var items = new List<string>();
+        int pairsChecked = 0, nxCount = -1;
+        try
+        {
+            var bld = _part.AssemblyManager.CreateClearanceAnalysisBuilder(null);
+            try
+            {
+                bld.ClearanceBetween = asmMode
+                    ? NXOpen.Assemblies.ClearanceAnalysisBuilder.ClearanceBetweenEntity.Components
+                    : NXOpen.Assemblies.ClearanceAnalysisBuilder.ClearanceBetweenEntity.Bodies;
+                bld.CalculationMethod =
+                    NXOpen.Assemblies.ClearanceAnalysisBuilder.CalculationMethodType.Exact;
+                bld.IsCalculatePenetrationDepth = true;
+                bld.SaveInterferenceGeometry = false;
+                if (!asmMode) bld.IsIgnorePairsWithinSamePart = false;
+                if (zone > 0.0)
+                    bld.SetDefaultClearanceZone(bld.CreateClearanceZoneExpression(F(zone)));
+                foreach (DisplayableObject o in setA) bld.CollectionOneObjects.Add(o);
+                foreach (DisplayableObject o in setB) bld.CollectionTwoObjects.Add(o);
+                set = bld.Commit() as NXOpen.Assemblies.ClearanceSet;
+                if (set == null)
+                    return ErrJson("clearance analysis Commit did not return a ClearanceSet");
+            }
+            finally { try { bld.Destroy(); } catch { } }
+            try
+            {
+                set.PerformAnalysis(NXOpen.Assemblies.ClearanceSet.ReanalyzeOutOfDateExcludedPairs.True);
+            }
+            catch (Exception pe) { Log("perform_analysis warn: " + pe.Message); }
+            try { nxCount = set.GetNumberOfInterferences(); } catch { }
+            // pair read-back over the pairs we submitted
+            List<DisplayableObject> other = setB;
+            List<string> otherIds = idsB;
+            for (int i = 0; i < setA.Count; i++)
+            {
+                int jStart;
+                if (setB.Count > 0) { other = setB; otherIds = idsB; jStart = 0; }
+                else { other = setA; otherIds = idsA; jStart = i + 1; }
+                for (int j = jStart; j < other.Count; j++)
+                {
+                    pairsChecked++;
+                    NXOpen.Assemblies.ClearanceSet.InterferenceType it =
+                        NXOpen.Assemblies.ClearanceSet.InterferenceType.NoInterference;
+                    bool flag1 = false;
+                    NXOpen.DisplayableObject[] geo = null;
+                    Point3d p1 = new Point3d(), p2 = new Point3d();
+                    string info = "";
+                    int i1 = 0, i2 = 0, i3 = 0;
+                    double depth = 0.0;
+                    Vector3d v1 = new Vector3d();
+                    Point3d p3 = new Point3d(), p4 = new Point3d();
+                    try
+                    {
+                        set.GetInterferenceData(setA[i], other[j], out it, out flag1,
+                            out geo, out p1, out p2, out info, out i1, out i2, out i3,
+                            out depth, out v1, out p3, out p4);
+                    }
+                    catch (Exception ge)
+                    {
+                        Log("get_interference_data warn: " + ge.Message);
+                        continue;
+                    }
+                    if (it == NXOpen.Assemblies.ClearanceSet.InterferenceType.NoInterference)
+                        continue;
+                    string line = it.ToString().ToUpperInvariant() + " " + idsA[i] + " " + otherIds[j];
+                    if (it == NXOpen.Assemblies.ClearanceSet.InterferenceType.Soft)
+                        line += " clearance<" + F(zone);
+                    else if (it == NXOpen.Assemblies.ClearanceSet.InterferenceType.Hard)
+                        line += " depth=" + F(depth);
+                    items.Add(line);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            return ErrJson("check_interference failed: " + ex.Message);
+        }
+        // leave the part clean: delete the analysis set unless explicitly kept
+        bool setDeleted = false;
+        string setMsg = "";
+        if (set != null && !keepSet)
+        {
+            try { set.Delete(); setDeleted = true; }
+            catch (Exception de) { setMsg = "set_delete failed: " + de.Message; }
+        }
+        else if (set != null)
+        {
+            try { setMsg = "set kept: " + set.Name; } catch { }
+        }
+        var sb = new System.Text.StringBuilder();
+        sb.Append("{\"ok\":true,\"mode\":\"").Append(mode).Append("\"");
+        sb.Append(",\"objects\":").Append(totalObjs);
+        sb.Append(",\"pairs_checked\":").Append(pairsChecked);
+        sb.Append(",\"loaded_children\":").Append(loadNotes);
+        sb.Append(",\"count\":").Append(items.Count);
+        sb.Append(",\"nx_count\":").Append(nxCount);
+        sb.Append(",\"set_deleted\":").Append(setDeleted ? "true" : "false");
+        sb.Append(",\"set_msg\":\"").Append(Esc(setMsg)).Append("\"");
+        sb.Append(",\"items\":[");
+        for (int i = 0; i < items.Count; i++)
+        {
+            if (i > 0) sb.Append(",");
+            sb.Append("\"").Append(Esc(items[i])).Append("\"");
+        }
+        sb.Append("]");
+        string res = (items.Count == 0)
+            ? ("no interference in " + pairsChecked + " pair(s), " + totalObjs + " object(s)")
+            : (items.Count + " interference pair(s) of " + pairsChecked + " checked");
+        if (nxCount > items.Count)
+            res += "; NX reports " + nxCount + " hit(s) but pair read-back found " +
+                items.Count + " - rerun with keep_set=1 to inspect the set";
+        sb.Append(",\"result\":\"").Append(Esc(res)).Append("\"}");
+        return sb.ToString();
+    }
+
+    // nx_save_part_as <path> - Save As (intermediate operation states from one
+    // master model: OP10 blank / OP20 semi-finished / finished). The work part
+    // switches to the new file (same as interactive File > Save As); loader
+    // active-part tracking follows the new FullPath. Same CGM modal-prompt
+    // guard as nx_save_part.
+    private static string SavePartAs(string[] parts)
+    {
+        if (_part == null) return ErrJson("no active part");
+        if (parts.Length < 2) return ErrJson("usage: nx_save_part_as <path>");
+        string path = parts[1];
+        try { _part.SaveOptions.DrawingCgmData = false; }
+        catch (Exception e) { Log("save options warn: " + e.Message); }
+        NXOpen.PartSaveStatus st = null;
+        try
+        {
+            st = _part.SaveAs(path);
+            _partPath = _part.FullPath;
+            int unsaved = 0;
+            try { unsaved = st.NumberUnsavedParts; } catch { }
+            return OkJson("saved_as", _part.FullPath, "saved as " + _part.FullPath +
+                " unsaved_parts=" + unsaved);
+        }
+        catch (Exception ex)
+        {
+            return ErrJson("save_as failed: " + ex.Message);
+        }
+        finally { if (st != null) { try { st.Dispose(); } catch { } } }
     }
 
     private static string Undo()
