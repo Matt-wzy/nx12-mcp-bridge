@@ -94,6 +94,8 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
         return "nx_close_part " + _fmt(params.get("save", True))
     if method == "nx_export_step":
         return "nx_export_step " + params["path"]
+    if method == "nx_export_iges":
+        return "nx_export_iges " + params["path"]
     if method in ("nx_list_sketches", "nx_list_bodies", "nx_list_features"):
         return method
     if method == "nx_list_edges":
@@ -292,6 +294,9 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
             cmd += " rh=" + _fmt(rh)
         if params.get("header"):
             cmd += " header=1"
+        head_loc = str(params.get("head_loc", "") or "")
+        if head_loc:
+            cmd += " head_loc=" + head_loc
         font = str(params.get("font", "") or "")
         if font:
             cmd += " font=" + font
@@ -865,6 +870,8 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
         return {"status": "success", "message": msg}
     if method == "nx_export_step":
         return {"status": "success", "path": resp.get("step", params["path"]), "message": msg}
+    if method == "nx_export_iges":
+        return {"status": "success", "path": resp.get("iges", params["path"]), "message": msg}
     if method == "nx_save_part":
         return {"status": "success", "message": "saved"}
     if method == "nx_fit_view":

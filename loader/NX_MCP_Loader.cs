@@ -88,6 +88,8 @@
 //   nx_unexplode_component <explosion> <component_name>  (还原单组件)
 //   nx_list_explosions               (列出当前部件的爆炸状态)
 //   nx_export_pdf <path> [ALL|sheet]  (ALL = 全部图纸页导出到一个多页 PDF)
+//   nx_export_iges <path>             (IGES 导出，DexManager.IgesCreator 路线，
+//                                      仅供老 CAM/CMM 对接；实体 only)
 //   nx_create_stock <box|cyl> [body_id] [allow=a] [axis=x|y|z] [dia=d] [len=l] [ra=r] [aa=r]
 //                                    (毛坯生成：包络体 bbox 加工余量 box=长方体/cyl=圆柱
 //                                     棒料（径向盖 bbox 对角线，dia= 可传标准棒料直径），
@@ -469,6 +471,8 @@ public static class NX_MCP_Loader
                 return CreateAngleDimension(parts);
             case "nx_export_step":
                 return ExportStep(parts);
+            case "nx_export_iges":
+                return ExportIges(parts);
             case "nx_open_part":
                 return OpenPart(parts);
             case "nx_close_part":
@@ -4678,6 +4682,40 @@ public static class NX_MCP_Loader
         return OkJson("view fitted");
     }
 
+    // nx_export_iges <path> — IGES export via DexManager (IgesCreator),
+    // the same in-process Commit() route as nx_export_step (2026-11-06).
+    // Legacy CAM/CMM systems still ask for IGES; solids only, settings file
+    // from the install's IGES/igesexport.def when UGII_BASE_DIR is set.
+    private static string ExportIges(string[] parts)
+    {
+        if (parts.Length < 2) return ErrJson("usage: nx_export_iges <path>");
+        if (_part == null) return ErrJson("no active part");
+        string igesPath = parts[1];
+        if (File.Exists(igesPath)) { try { File.Delete(igesPath); } catch { } }
+        if (_session == null) _session = Session.GetSession();
+        var creator = _session.DexManager.CreateIgesCreator();
+        try
+        {
+            creator.OutputFile = igesPath;
+            creator.InputFile = _partPath;
+            creator.ObjectTypes.Solids = true;
+            string baseDir = Environment.GetEnvironmentVariable("UGII_BASE_DIR");
+            if (!string.IsNullOrEmpty(baseDir))
+            {
+                string settings = Path.Combine(baseDir, "IGES", "igesexport.def");
+                if (File.Exists(settings)) creator.SettingsFile = settings;
+            }
+            creator.Commit();
+        }
+        finally
+        {
+            try { creator.Destroy(); } catch { }
+        }
+        if (File.Exists(igesPath))
+            return OkJson("iges", igesPath, "exported IGES " + new FileInfo(igesPath).Length + " bytes");
+        return OkJson("iges", igesPath, "commit ok (file not found yet - IGES translator may lag)");
+    }
+
     private static string ExportStep(string[] parts)
     {
         if (parts.Length < 2) return ErrJson("usage: nx_export_step <path>");
@@ -7702,6 +7740,7 @@ public static class NX_MCP_Loader
             double cw = 20.0, rh = 6.0;
             string font = "";
             bool header = false;
+            string headLoc = "";
             int i = 3;
             while (i < parts.Length)
             {
@@ -7710,6 +7749,7 @@ public static class NX_MCP_Loader
                 else if (t.StartsWith("rh=", StringComparison.OrdinalIgnoreCase)) { rh = D(t.Substring(3)); i++; }
                 else if (t.StartsWith("font=", StringComparison.OrdinalIgnoreCase)) { font = t.Substring(5).Trim(); i++; }
                 else if (t.StartsWith("header=", StringComparison.OrdinalIgnoreCase)) { header = t.Substring(7).Trim() == "1"; i++; }
+                else if (t.StartsWith("head_loc=", StringComparison.OrdinalIgnoreCase)) { headLoc = t.Substring(9).Trim().ToLowerInvariant(); i++; }
                 else break;
             }
             string cells = string.Join(" ", parts, i, parts.Length - i).Trim();
@@ -7772,6 +7812,25 @@ public static class NX_MCP_Loader
             catch (Exception ep) { Log("tabnot default prefs: " + ep.Message); }
             secPrefs.continuation_note = null;   // char* field: pass NULL, not
                                                  // a marshaller-owned buffer
+            // header row location: NX default is Below (header renders at the
+            // BOTTOM of the table - the AskDefaultSectionPrefs dump showed
+            // HeaderLocationBelow); head_loc=top moves it above the body
+            // rows like a conventional table. SectionPrefs holds only
+            // scalar fields, so patching the asked defaults is marshal-safe.
+            // ONLY Below is usable: probed 2026-11-06 (batch2_tbl2.pdf matrix)
+            // tables with HeaderLocation.Above DO NOT RENDER at all (the 3-row
+            // top table vanished while the default-Below and top+header ones
+            // rendered fine - another NX12 resident-environment render gap,
+            // same family as blocked items 4/11). Reject top/none explicitly;
+            // the patch code stays for journal-comparison experiments.
+            if (headLoc == "top" || headLoc == "none")
+                return ErrJson("head_loc=" + headLoc + " unusable: tables with "
+                    + "HeaderLocation " + (headLoc == "top" ? "Above" : "None")
+                    + " do NOT render in NX12 drafting (probed 2026-11-06, see "
+                    + "受阻项调研档案 section 12); omit head_loc (Below "
+                    + "is the NX default and renders correctly)");
+            if (headLoc == "bottom")
+                secPrefs.header_location = NXOpen.UF.UFTabnot.HeaderLocation.HeaderLocationBelow;
             Tag noteTag = Tag.Null;
             double[] origin = { x, y, 0.0 };
             uf.Tabnot.Create(ref secPrefs, origin, out noteTag);

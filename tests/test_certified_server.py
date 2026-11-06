@@ -419,3 +419,20 @@ async def test_create_table_allow_cjk_passes_through():
     assert method == "nx_create_table"
     assert params["allow_cjk"] is True
     assert params["cells"] == "孔号,直径"
+
+
+@pytest.mark.asyncio
+async def test_export_iges_resolves_path(tmp_path: Path):
+    bridge = RecordingBridge(
+        {"status": "success", "path": "x.iges", "message": "exported IGES 4321 bytes"}
+    )
+    server = create_server(bridge, Workspace(tmp_path))
+
+    async with Client(server) as client:
+        result = await client.call_tool("nx_export_iges", {"path": "out.iges"})
+
+    assert result.is_error is False
+    method, params = bridge.calls[0]
+    assert method == "nx_export_iges"
+    assert params["path"] == str(tmp_path / "out.iges")
+    assert result.structured_content["path"] == "x.iges"

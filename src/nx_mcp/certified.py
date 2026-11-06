@@ -412,6 +412,8 @@ CERTIFIED_TOOL_NAMES = {
     # DXF/DWG：NX 内 Commit() 从不 spawn translator（实测），由 Python 侧
     # 进程外官方 translator 实现（loader_bridge._export_dwg_external）
     "nx_export_dwg",
+    # IGES 导出（老 CAM/CMM 对接；DexManager.IgesCreator 路线，实体 only）
+    "nx_export_iges",
     "nx_measure_distance",
     # 两直线边夹角（装夹/工序定位常用）
     "nx_measure_angle",
@@ -549,6 +551,16 @@ def create_certified_server(
     async def nx_export_step(path: str) -> ExportResult:
         """Export the active work part as STEP inside the configured workspace."""
         return ExportResult(**await call("nx_export_step", {"path": resolve_path(path)}))
+
+    @mcp.tool()
+    async def nx_export_iges(path: str) -> ExportResult:
+        """Export the active work part as IGES inside the configured workspace.
+
+        Solids only; for legacy CAM/CMM systems that still require IGES -
+        prefer nx_export_step (AP214) when the receiving system accepts it.
+        The message reports the exported file size when the translator has
+        finished in time."""
+        return ExportResult(**await call("nx_export_iges", {"path": resolve_path(path)}))
 
     @mcp.tool()
     async def nx_list_sketches() -> ObjectListResult:
@@ -1714,6 +1726,7 @@ def create_certified_server(
         col_width: float = 0.0,
         row_height: float = 0.0,
         header: bool = False,
+        head_loc: Literal["top", "bottom", "none"] = "bottom",
         font: str = "",
         allow_cjk: bool = False,
     ) -> TableResult:
@@ -1724,7 +1737,11 @@ def create_certified_server(
         newlines or leading cw=/rh=/font=/header= (they would be eaten as
         options). All rows must have the same column count (1..30 cols,
         1..50 rows). Sheet coordinates in mm; defaults col_width=20,
-        row_height=6 when 0. ``header`` marks the first row as header row.
+        row_height=6 when 0. ``header`` marks the first row as header row;
+        it renders at the BOTTOM of the table (NX default). head_loc="top"/
+        "none" are rejected by the loader - tables with HeaderLocation
+        Above/None do NOT render in NX12 drafting (probed 2026-11-07; see
+        受阻项调研档案).
 
         LIMITATION (NX12, probed 2026-11-06): only ASCII cell text renders -
         CJK cells are stored byte-correctly but render as boxes because no
@@ -1767,6 +1784,8 @@ def create_certified_server(
             params["row_height"] = row_height
         if header:
             params["header"] = True
+        if head_loc and head_loc != "bottom":
+            params["head_loc"] = head_loc
         if font:
             params["font"] = font
         return TableResult(**await call("nx_create_table", params))

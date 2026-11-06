@@ -829,3 +829,24 @@ def test_table_wire_format_cells_last_and_may_contain_spaces():
     assert cmd == (
         "nx_create_table 30 200 cw=25 header=1 font=chinesef NO,DIA,DEPTH|1, 8,15"
     )
+
+
+def test_iges_wire_format():
+    assert (
+        _command("nx_export_iges", {"path": "C:/m/part.iges"})
+        == "nx_export_iges C:/m/part.iges"
+    )
+
+
+def test_table_head_loc_token():
+    cmd = _command(
+        "nx_create_table",
+        {"pos_x": 30.0, "pos_y": 200.0, "cells": "A,B|1,2", "head_loc": "top"},
+    )
+    assert cmd == "nx_create_table 30 200 head_loc=top A,B|1,2"
+    # the bridge encodes literally; the tool layer omits the "bottom" default
+    cmd2 = _command(
+        "nx_create_table",
+        {"pos_x": 30.0, "pos_y": 200.0, "cells": "A,B|1,2", "head_loc": "bottom"},
+    )
+    assert cmd2 == "nx_create_table 30 200 head_loc=bottom A,B|1,2"
