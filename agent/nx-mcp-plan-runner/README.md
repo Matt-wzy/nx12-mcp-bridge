@@ -63,6 +63,9 @@ python runner.py run   <executable-plan.json> [--workspace DIR] [--report out.js
                        [--repair-attempt 0|1] [--repair-report attempt1.json]
 python runner.py check <plan.json> [--frozen] [--drawing <drawing.json>]
 python runner.py build <frozen-plan.json> <out.json> [--drawing <drawing.json>] [--task-root <task.json>]
+python runner.py verify <executable-plan.json> --report <attempt-report.json>
+                       [--drawing <drawing.json>] [--tol 0.05] [--extra review|fail]
+                       [--workspace DIR] [--out verify-result.json]
 python runner.py test  #（等价：运行 tests/test_plan_resolution.py）
 ```
 
@@ -72,6 +75,44 @@ python runner.py test  #（等价：运行 tests/test_plan_resolution.py）
 - `check`：不触 NX 的静态检查（工具合法性、参数合法性、引用可解析、占位符
   清零、selection criteria 语法）。
 - `build`：冻结 → 可执行转换（无 NX）。Mode B 必须传 `--drawing` 和 Gate A 返回的 `--task-root`；build 只能消费该 task 已冻结的 drawing。required thread 优先使用 drawing 输入 surrogate，否则只允许消费 `validate-drawing` 返回的参数化 resolver 结果。Gate B 会重新计算 resolver，并从实际 `nx_hole` 或 sketch-circle + subtract operation 规范化 axis、center、depth、canonical axial interval 与 count；任一项不同、依赖 Loader 默认、缺失支持集 pitch 或 provenance 不符都会失败。drawing/plan 语义指纹、canonical executed geometry 与 approximation 明细写入 executable，供 repair lineage 与最终报告校验。
+- `verify`：run 成功后的**读回审计**（需 NX 在线）。从 executable plan 自身推导
+  期望几何，经 Loader 读回实际模型并比对；不修改任何冻结契约。详见下文
+  [读回校验（verify 子命令）](#读回校验verify-子命令)。
+
+### 读回校验（verify 子命令）
+
+`verify` 是"规划→建模→验证"闭环里缺失的一环：Gate A/B 校验的是**证据链与计划**，
+verify 校验的是**NX 里实际长出来的模型**。期望值永远由机器从 executable plan 推导
+（模式 A 来自 plan 的 hole/pattern operations；模式 B 的 plan 已被 Gate B 证明与
+drawing 等价），禁止手写期望。
+
+前置条件（任一不满足即 exit **2**，未做任何测量）：executable plan、`check_plan`
+通过、design_guard 几何指纹一致、`--report` 存在且 `status="success"`、Loader ping 通。
+
+测量家族（facts + 四态 verdict，借鉴 text-to-cad 的测量/判决分离）：
+
+- **holes**：从 plan 的 `nx_hole` / `nx_counterbore_hole` / `nx_countersink_hole`
+  推导期望圆柱清单（countersink 锥面座位不在圆柱普查内；pattern 乘到目标孔的
+  实例数），`nx_list_holes` 读回（只取 `kind=="hole"`），按直径/深度/位置
+  （非 pattern 的单实例还须 x/y 命中）贪心匹配。缺孔/参数不符 = `fail`；
+  读回中多余孔 = `review`（`--extra fail` 收紧为 `fail`，用于座位/镜像件误报
+  需要硬阻塞时）；pattern 目标无法溯源到孔 = 整族 `unverified`（fail-closed，
+  禁止猜测）。plan 无孔操作且读回无孔 = `absent`。
+- **bbox**（仅 `--drawing` 时测量）：drawing `overall_dimensions` 的
+  length/width/height vs 模型线性边极值跨度（`nx_list_bodies` → 逐 body
+  `nx_list_edges`）。只比**跨度**不比摆放位置（摆放属 Gate B / coordinate_sanity）。
+  无线性边可测时 `unverified`。
+- **mass_properties**：永远只报事实（体积/表面积/质量/重心/body_count），不产生
+  设计 verdict；唯一例外：run 报告 `body_count` 与实时读回不一致 =
+  `fail`（说明 run 与 verify 之间工作部件被换过）。
+
+聚合状态与 exit code：任何家族 `fail` 或 `unverified` → status `fail`/`unverified`、
+exit **1**（unverified 永远不得被读成"没有发现"）；只有 `review` 级发现 →
+status `review`、exit **0**，但最终报告必须披露；全部 pass → `pass`、exit **0**。
+
+已知边界（诚实声明）：mirror 产生的孔、镜像/阵列位置不参与位置断言（只有实例数
+断言）；锥面（countersink 座）不进圆柱普查；bbox 依赖线性边（纯回转体当前测不了）。
+以上均以 facts 形式随结果 JSON 输出，供人工扩展。
 
 ### 命令内性能计时
 
@@ -248,6 +289,7 @@ retries / body_count / model_bbox / linear_edge_bbox / selections / prt_path / s
 
 ```text
 python tests/test_plan_resolution.py    # 36 项，全绿，不触 NX
+python tests/test_model_verify.py       # verify 读回审计 24 项，不触 NX
 ```
 
 覆盖：symbol table / result binding（含多值与长度失配报错）/ variable

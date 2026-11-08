@@ -4635,6 +4635,469 @@ def _cmd_build(args: argparse.Namespace) -> int:
     return 0 if not errs else 1
 
 
+# --------------------------------------------------------------------------
+# post-run read-back verification (`verify` subcommand)
+#
+# Machine audit of a *successful* run: expected geometry is derived from the
+# executable plan itself (never hand-written), the live part is read back
+# through the resident Loader, and the two are compared. Families that cannot
+# be measured report `unverified` and must never be read as a clean result;
+# findings are facts with severities, never silent. Exit codes:
+#   0 = every measured family passes (status may still be "review")
+#   1 = any family failed or could not be verified (named in the output)
+#   2 = preconditions rejected (plan/report/transport), nothing was measured
+# --------------------------------------------------------------------------
+VERIFY_DEFAULT_TOL = 0.05
+HOLE_TOOLS = ("nx_hole", "nx_counterbore_hole", "nx_countersink_hole")
+PATTERN_TOOLS = ("nx_linear_pattern", "nx_circular_pattern")
+
+
+def _g(value: Any) -> str:
+    v = _num(value)
+    return "unmeasured" if v is None else f"{v:g}"
+
+
+def _ref_name(value: Any) -> str | None:
+    """'$name' -> 'name'; None for selections, literals and non-strings."""
+    if isinstance(value, str) and value.startswith("$") and not value.startswith("$selection."):
+        return value[1:]
+    return None
+
+
+def _binding_names(op: dict) -> list[str]:
+    names: list[str] = []
+    for bound in (op.get("result_bindings") or {}).values():
+        for n in ([bound] if isinstance(bound, str) else (bound or [])):
+            name = str(n or "").lstrip("$")
+            if name:
+                names.append(name)
+    return names
+
+
+def collect_binding_origins(ops: list) -> dict[str, str]:
+    """Map result-binding names to the tool that created them."""
+    origins: dict[str, str] = {}
+    for op in ops:
+        tool = str(op.get("tool") or "")
+        for name in _binding_names(op):
+            origins.setdefault(name, tool)
+    return origins
+
+
+def derive_expected_holes(plan: dict) -> tuple[list[dict], list[str]]:
+    """Derive the expected hole-cylinder census from executable plan operations.
+
+    Each nx_hole op contributes one primary cylinder; counterbores add their
+    seat cylinder; countersink seats are conical and stay out of the cylinder
+    census. A pattern multiplies the specs of the hole op it targets. A pattern
+    of a non-hole body (boss/rib) contributes no holes. Fail-closed: a pattern
+    whose target cannot be traced yields a derivation error, which leaves the
+    holes family unverified instead of guessing.
+    """
+    ops = plan.get("operations") or []
+    origins = collect_binding_origins(ops)
+    errors: list[str] = []
+    specs: list[dict] = []
+    group_of: dict[str, int] = {}  # hole binding name -> spec group index
+
+    for op in ops:
+        tool = str(op.get("tool") or "")
+        args = op.get("tool_args") or {}
+        step = op.get("step")
+        if tool in HOLE_TOOLS:
+            if tool == "nx_hole":
+                dia, depth = _num(args.get("diameter")), _num(args.get("depth"))
+            else:
+                dia, depth = _num(args.get("hole_diameter")), _num(args.get("hole_depth"))
+            center = args.get("center") if isinstance(args.get("center"), dict) else {}
+            px, py = _num(center.get("x")), _num(center.get("y"))
+            if dia is None or depth is None or dia <= 0:
+                errors.append(f"step {step}: {tool} diameter/depth not resolvable")
+                continue
+            position = {"x": px, "y": py} if (px is not None and py is not None) else None
+            group = len(specs)
+            specs.append({"diameter": dia, "depth": depth, "count": 1,
+                          "position": position, "step": step, "tool": tool,
+                          "role": "hole", "group": group})
+            if tool == "nx_counterbore_hole":
+                cd, cdepth = (_num(args.get("counterbore_diameter")),
+                              _num(args.get("counterbore_depth")))
+                if cd is None or cdepth is None or cd <= 0:
+                    errors.append(f"step {step}: nx_counterbore_hole counterbore "
+                                  "diameter/depth not resolvable")
+                else:
+                    specs.append({"diameter": cd, "depth": cdepth, "count": 1,
+                                  "position": position, "step": step, "tool": tool,
+                                  "role": "counterbore", "group": group})
+            for name in _binding_names(op):
+                group_of.setdefault(name, group)
+        elif tool in PATTERN_TOOLS:
+            count = _num(args.get("count"))
+            target = _ref_name(args.get("body_id"))
+            if count is None or target is None or int(count) < 1:
+                errors.append(f"step {step}: {tool} count/target not resolvable")
+                continue
+            if target in group_of:
+                for spec in specs:
+                    if spec["group"] == group_of[target]:
+                        spec["count"] *= int(count)
+            elif target not in origins:
+                errors.append(f"step {step}: {tool} targets unbound reference "
+                              f"{args.get('body_id')!r}; hole census not derivable")
+            # else: pattern of a non-hole body (boss/rib) -> no hole impact
+    return specs, errors
+
+
+def match_hole_census(expected: list[dict], holes: list[dict], tol: float,
+                      extra_policy: str = "review") -> tuple[list[dict], dict]:
+    """Greedy deterministic multiset match of expected specs vs read-back cylinders.
+
+    Only kind=="hole" cylinders are match candidates; other cylinder kinds are
+    facts only. A non-patterned spec (count==1 with a known center) must also
+    match by x/y position. Unconsumed candidates become `extra_hole` findings
+    with severity from extra_policy ("review" keeps seats/mirror artifacts from
+    blocking, "fail" treats every surplus cylinder as a hard violation).
+    """
+    candidates: list[dict] = []
+    readback_errors: list[dict] = []
+    for h in holes or []:
+        index = h.get("index")
+        err = str(h.get("err") or "")
+        if err:
+            readback_errors.append({"index": index, "err": err})
+            continue
+        if str(h.get("kind") or "") != "hole":
+            continue
+        dia, depth = _num(h.get("diameter")), _num(h.get("depth"))
+        if dia is None or dia <= 0.0:
+            continue
+        candidates.append({
+            "index": index,
+            "diameter": dia,
+            "depth": depth if depth is not None else 0.0,
+            "x": _num(h.get("x")),
+            "y": _num(h.get("y")),
+        })
+    candidates.sort(key=lambda c: (c["diameter"], c["depth"],
+                                   c["x"] if c["x"] is not None else 0.0,
+                                   c["y"] if c["y"] is not None else 0.0,
+                                   c["index"] if c["index"] is not None else 0))
+    consumed = [False] * len(candidates)
+    findings: list[dict] = []
+    matched_total = 0
+    for spec in sorted(expected, key=lambda s: (s["diameter"], s["depth"],
+                                                s.get("step") or 0)):
+        need = int(spec.get("count") or 1)
+        got = 0
+        for i, cand in enumerate(candidates):
+            if consumed[i] or got >= need:
+                continue
+            if abs(cand["diameter"] - spec["diameter"]) > tol:
+                continue
+            if abs(cand["depth"] - spec["depth"]) > tol:
+                continue
+            pos = spec.get("position")
+            if pos and need == 1 and pos.get("x") is not None:
+                if (cand["x"] is None or abs(cand["x"] - pos["x"]) > tol
+                        or cand["y"] is None or abs(cand["y"] - pos["y"]) > tol):
+                    continue
+            consumed[i] = True
+            got += 1
+        matched_total += got
+        if got < need:
+            findings.append({
+                "severity": "fail",
+                "type": "missing_holes",
+                "message": (f"step {spec.get('step')}: expected {need} x "
+                            f"Ø{_g(spec['diameter'])} depth {_g(spec['depth'])} "
+                            f"({spec.get('role', 'hole')}), matched {got}"),
+                "expected": {"diameter": spec["diameter"], "depth": spec["depth"],
+                             "count": need, "position": spec.get("position")},
+                "matched": got,
+            })
+    extras = [c for c, used in zip(candidates, consumed) if not used]
+    for cand in extras:
+        findings.append({
+            "severity": "fail" if extra_policy == "fail" else "review",
+            "type": "extra_hole",
+            "message": (f"read-back hole Ø{_g(cand['diameter'])} depth {_g(cand['depth'])} "
+                        f"at ({_g(cand['x'])}, {_g(cand['y'])}) matches no planned hole"),
+            "actual": cand,
+        })
+    facts = {
+        "readback_hole_entries": len(holes or []),
+        "candidates": len(candidates),
+        "matched": matched_total,
+        "missing_specs": sum(1 for f in findings if f["type"] == "missing_holes"),
+        "extras": len(extras),
+        "readback_errors": readback_errors,
+    }
+    return findings, facts
+
+
+def expected_bbox_spans(drawing: dict) -> tuple[dict, list[str]]:
+    """Drawing overall_dimensions -> {axis: span}; axes with no value are errors."""
+    dims = (drawing or {}).get("overall_dimensions") or {}
+    errors: list[str] = []
+    spans: dict[str, float] = {}
+    for key, axis in (("length", "x"), ("width", "y"), ("height", "z")):
+        v = _num(dims.get(key))
+        if v is None:
+            errors.append(f"drawing overall_dimensions.{key} missing; bbox family unverified")
+        else:
+            spans[axis] = v
+    return spans, errors
+
+
+def bbox_findings(extents: dict | None, expected: dict, tol: float) -> list[dict]:
+    """Span-size comparison (position-independent): model extents vs drawing."""
+    findings: list[dict] = []
+    if not extents:
+        for axis, exp in expected.items():
+            findings.append({
+                "severity": "fail",
+                "type": "bbox_mismatch",
+                "message": (f"model {axis}-span unmeasured while drawing overall "
+                            f"{axis} = {_g(exp)}"),
+                "expected": exp,
+                "actual": None,
+            })
+        return findings
+    for axis, exp in expected.items():
+        hi, lo = extents.get(f"{axis}_max"), extents.get(f"{axis}_min")
+        actual = (hi - lo) if (hi is not None and lo is not None) else None
+        if actual is None or abs(actual - exp) > tol:
+            findings.append({
+                "severity": "fail",
+                "type": "bbox_mismatch",
+                "message": (f"model {axis}-span {_g(actual)} != drawing overall "
+                            f"{axis} {_g(exp)} (tol {tol:g})"),
+                "expected": exp,
+                "actual": actual,
+            })
+    return findings
+
+
+def _verify_verdict(findings: list[dict], blocked: list[str]) -> str:
+    if blocked:
+        return "unverified"
+    if any(f.get("severity") == "fail" for f in findings):
+        return "fail"
+    if any(f.get("severity") == "review" for f in findings):
+        return "review"
+    return "pass"
+
+
+def verify_lineage_errors(report: dict, plan_path: str) -> list[str]:
+    """The audited report must come from the same plan file being verified.
+
+    Expectations are derived from the plan, so a report produced by a
+    different plan would make every comparison meaningless. Legacy reports
+    without a recorded plan path stay auditable (fail-open on absence,
+    fail-closed on mismatch).
+    """
+    recorded = str((report or {}).get("plan") or "")
+    if not recorded:
+        return []
+    if (_norm_path(os.path.abspath(recorded))
+            != _norm_path(os.path.abspath(plan_path))):
+        return [
+            "report was produced from a different plan "
+            f"(report.plan={recorded!r}); verify must audit the same plan that ran"
+        ]
+    return []
+
+
+async def _cmd_verify(args: argparse.Namespace) -> int:
+    def reject(errors: list[str]) -> int:
+        result = {
+            "command": "verify",
+            "status": "rejected",
+            "errors": errors,
+            "families": {},
+        }
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 2
+
+    plan = _load_plan(args.plan)
+    if not _is_executable(plan):
+        return reject(["plan is not in executable format; run `build` first"])
+    check_errors = check_plan(plan, executable=True)
+    if check_errors:
+        return reject(["plan failed check_plan:"] + check_errors[:20])
+    design_guard = plan.get("design_guard")
+    if isinstance(design_guard, dict):
+        current_hash = _json_sha256(plan_geometry_projection(plan))
+        if current_hash != design_guard.get("plan_geometry_sha256"):
+            return reject(["executable plan geometry changed after Gate B build"])
+    try:
+        with open(args.report, encoding="utf-8-sig") as f:
+            report = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        return reject([f"cannot read run report: {exc}"])
+    if not isinstance(report, dict) or report.get("status") != "success":
+        return reject(["verify audits successful runs only; report.status != 'success'"])
+    if report.get("failed_step") is not None:
+        return reject(["run report contains failed_step; nothing to verify"])
+    lineage_errors = verify_lineage_errors(report, args.plan)
+    if lineage_errors:
+        return reject(lineage_errors)
+
+    transport = NXTransport(workspace_root=getattr(args, "workspace", None))
+    if not transport.ping():
+        detail = transport.ping_error()
+        error = "loader health check failed"
+        if detail:
+            error += ": " + detail
+        return reject([error])
+
+    tol = float(args.tol) if args.tol and args.tol > 0 else VERIFY_DEFAULT_TOL
+    extra_policy = args.extra
+    families: dict[str, dict] = {}
+    aggregate = "pass"
+
+    # ---- holes family: plan-derived census vs nx_list_holes read-back -------
+    expected, derive_errors = derive_expected_holes(plan)
+    blocked: list[str] = list(derive_errors)
+    findings: list[dict] = []
+    facts: dict = {"expected_specs": len(expected), "total_instances":
+                   sum(int(s.get("count") or 1) for s in expected)}
+    if not blocked:
+        try:
+            resp = await transport.call("nx_list_holes", {})
+            if resp.get("status") != "success":
+                blocked.append(f"nx_list_holes returned status={resp.get('status')!r}")
+            else:
+                findings, facts = match_hole_census(
+                    expected, resp.get("holes") or [], tol, extra_policy)
+                facts["expected_specs"] = len(expected)
+                facts["total_instances"] = sum(
+                    int(s.get("count") or 1) for s in expected)
+        except Exception as exc:  # transport/loader failures stay named
+            blocked.append(f"nx_list_holes failed: {exc}")
+    if (not blocked and not expected
+            and facts.get("candidates", 0) == 0):
+        families["holes"] = {"verdict": "absent", "findings": [],
+                             "blocked": [], "facts": facts}
+    else:
+        verdict = _verify_verdict(findings, blocked)
+        families["holes"] = {"verdict": verdict, "findings": findings,
+                             "blocked": blocked, "facts": facts}
+        if verdict == "fail" or verdict == "unverified":
+            aggregate = "fail" if aggregate == "fail" else verdict
+
+    # ---- bbox family: drawing overall dimensions vs fresh edge extents ------
+    if getattr(args, "drawing", None):
+        blocked = []
+        findings = []
+        facts = {}
+        drawing = _load_drawing(args.drawing)
+        spans, span_errors = expected_bbox_spans(drawing)
+        blocked.extend(span_errors)
+        extents = None
+        if not blocked:
+            try:
+                bodies = await transport.call("nx_list_bodies", {})
+                if bodies.get("status") != "success":
+                    blocked.append(
+                        f"nx_list_bodies returned status={bodies.get('status')!r}")
+                else:
+                    for obj in bodies.get("objects") or []:
+                        body_id = str(_item_id(obj))
+                        edges = await transport.call(
+                            "nx_list_edges", {"body_id": body_id})
+                        if edges.get("status") != "success":
+                            blocked.append(
+                                f"nx_list_edges {body_id} returned "
+                                f"status={edges.get('status')!r}")
+                            break
+                        extents = merge_extents(
+                            extents,
+                            compute_extents(edges.get("edges") or [], "edges"))
+            except Exception as exc:
+                blocked.append(f"bbox read-back failed: {exc}")
+        if not blocked and extents is None:
+            blocked.append("no linear edges found; bbox not measurable "
+                           "(model-derived extents need linear edges)")
+        facts["model_extents"] = extents
+        facts["expected_spans"] = spans
+        if not blocked:
+            findings = bbox_findings(extents, spans, tol)
+        verdict = _verify_verdict(findings, blocked)
+        families["bbox"] = {"verdict": verdict, "findings": findings,
+                            "blocked": blocked, "facts": facts}
+        if verdict == "fail" or verdict == "unverified":
+            aggregate = "fail" if aggregate == "fail" else verdict
+
+    # ---- mass properties family: facts only + body-count consistency --------
+    blocked = []
+    findings = []
+    facts = {}
+    try:
+        mp = await transport.call("nx_mass_properties", {})
+        if mp.get("status") != "success":
+            blocked.append(f"nx_mass_properties returned status={mp.get('status')!r}")
+        else:
+            facts = {
+                "volume_mm3": mp.get("volume_mm3"),
+                "surface_area_mm2": mp.get("surface_area_mm2"),
+                "mass_kg": mp.get("mass_kg"),
+                "density_kg_m3": mp.get("density_kg_m3"),
+                "body_count": mp.get("body_count"),
+                "center_of_gravity": mp.get("center_of_gravity"),
+            }
+            reported = report.get("body_count")
+            live = mp.get("body_count")
+            if isinstance(reported, int) and isinstance(live, int) and reported != live:
+                findings.append({
+                    "severity": "fail",
+                    "type": "body_count_drift",
+                    "message": (f"run reported body_count={reported} but the live "
+                                f"part now has {live}; the work part changed "
+                                "between run and verify"),
+                    "expected": reported,
+                    "actual": live,
+                })
+    except Exception as exc:
+        blocked.append(f"nx_mass_properties failed: {exc}")
+    verdict = _verify_verdict(findings, blocked)
+    if verdict == "pass":
+        verdict = "facts"  # measurement-only family, no design verdict
+    families["mass_properties"] = {"verdict": verdict, "findings": findings,
+                                   "blocked": blocked, "facts": facts}
+    if verdict == "fail":
+        aggregate = "fail"
+    elif verdict == "unverified" and aggregate == "pass":
+        aggregate = "unverified"
+
+    # ---- aggregate ----------------------------------------------------------
+    if any(f.get("verdict") == "fail" for f in families.values()):
+        aggregate = "fail"
+    elif any(f.get("verdict") == "unverified" for f in families.values()):
+        aggregate = "unverified"
+    elif any(f.get("verdict") == "review" for f in families.values()):
+        aggregate = "review"
+    measured = [name for name, fam in families.items() if fam["verdict"] != "absent"]
+    result = {
+        "command": "verify",
+        "status": aggregate,
+        "measured_families": measured,
+        "plan": args.plan,
+        "report": args.report,
+        "drawing": getattr(args, "drawing", None),
+        "tol": tol,
+        "extra_policy": extra_policy,
+        "prt_path": report.get("prt_path"),
+        "families": families,
+    }
+    print("===VERIFY===")
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    if getattr(args, "out", None):
+        with open(args.out, "w", encoding="utf-8") as f:
+            json.dump(result, f, ensure_ascii=False, indent=2)
+    return 0 if aggregate in ("pass", "review") else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="nx-mcp-plan-runner",
                                 description="Generic plan-driven executor for nx-mcp-modeling-planner plans")
@@ -4681,6 +5144,23 @@ def main(argv: list[str] | None = None) -> int:
     pd.add_argument("--task-root", default=None,
                     help="continue schema retry/validation in an existing Mode B task")
     pd.set_defaults(func=_cmd_validate_drawing)
+
+    pv = sub.add_parser(
+        "verify",
+        help="post-run read-back audit: plan-derived expectations vs live NX (needs NX)")
+    pv.add_argument("plan")
+    pv.add_argument("--report", required=True,
+                    help="attempt report JSON from `run` (must be status=success)")
+    pv.add_argument("--drawing", default=None,
+                    help="Mode B drawing JSON; enables the bbox family")
+    pv.add_argument("--workspace", default=None)
+    pv.add_argument("--tol", type=float, default=VERIFY_DEFAULT_TOL,
+                    help="comparison tolerance in mm (default 0.05)")
+    pv.add_argument("--extra", choices=("review", "fail"), default="review",
+                    help="severity for read-back holes that match no planned hole")
+    pv.add_argument("--out", default=None,
+                    help="write the verify result JSON here")
+    pv.set_defaults(func=_cmd_verify)
 
     args = p.parse_args(argv)
     if inspect.iscoroutinefunction(args.func):
