@@ -105,6 +105,14 @@ def _command(method: str, params: dict[str, Any]) -> str | None:
     if method == "nx_list_holes":
         body_id = str(params.get("body_id", "") or "")
         return ("nx_list_holes " + body_id) if body_id else "nx_list_holes"
+    # ---- selection reflux + face provenance (made_by) -----------------------
+    if method == "nx_get_selection":
+        return "nx_get_selection"
+    if method == "nx_face_provenance":
+        return "nx_face_provenance %s %d" % (
+            str(params.get("body_id", "")),
+            int(params.get("face_index", 0)),
+        )
     # ---- assembly explosion (爆炸视图, 装配工艺卡配图) -----------------------
     if method == "nx_create_explosion":
         name = str(params.get("name", "") or "")
@@ -969,6 +977,62 @@ def _adapt(method: str, params: dict[str, Any], resp: dict[str, Any]) -> dict[st
             "cylinders": int(resp.get("cylinder_count", len(holes))),
             "face_count": int(resp.get("face_count", 0)),
             "holes": holes,
+            "message": msg,
+        }
+    # ---- selection reflux + face provenance (made_by) -----------------------
+    if method == "nx_get_selection":
+        selection = []
+        for s in resp.get("selection") or []:
+            if isinstance(s, dict):
+                owners = []
+                for m in s.get("made_by") or []:
+                    if isinstance(m, dict):
+                        owners.append(
+                            {
+                                "feature": str(m.get("feature", "")),
+                                "type": str(m.get("type", "")),
+                            }
+                        )
+                selection.append(
+                    {
+                        "kind": str(s.get("kind", "unknown")),
+                        "tag": int(s.get("tag", 0)),
+                        "body_id": str(s.get("body_id", "")),
+                        "index": int(s.get("face_index", s.get("edge_index", -1))),
+                        "face_type": str(s.get("face_type", "")),
+                        "name": str(s.get("name", "")),
+                        "owner_count": int(s.get("owner_count", 0)),
+                        "made_by": owners,
+                        "err": str(s.get("err", "")),
+                    }
+                )
+        return {
+            "status": "success",
+            "count": int(resp.get("count", len(selection))),
+            "route": str(resp.get("route", "")),
+            "note": str(resp.get("note", "")),
+            "selection": selection,
+            "message": msg,
+        }
+    if method == "nx_face_provenance":
+        owners = []
+        for m in resp.get("made_by") or []:
+            if isinstance(m, dict):
+                owners.append(
+                    {
+                        "feature": str(m.get("feature", "")),
+                        "type": str(m.get("type", "")),
+                    }
+                )
+        return {
+            "status": "success",
+            "body_id": str(resp.get("body_id", params.get("body_id", ""))),
+            "face_index": int(resp.get("face_index", params.get("face_index", -1))),
+            "tag": int(resp.get("tag", 0)),
+            "face_type": str(resp.get("face_type", "")),
+            "owner_count": int(resp.get("owner_count", 0)),
+            "made_by": owners,
+            "owner_err": str(resp.get("owner_err", "")),
             "message": msg,
         }
     if method == "nx_extrude":

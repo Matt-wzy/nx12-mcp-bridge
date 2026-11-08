@@ -21,6 +21,7 @@ from nx_mcp.contracts import (
     ExplosionResult,
     ExportResult,
     ExtrudeResult,
+    FaceProvenanceResult,
     FeatureSuppressResult,
     HoleListResult,
     InterferenceResult,
@@ -33,6 +34,7 @@ from nx_mcp.contracts import (
     PartResult,
     Point2D,
     SaveAsResult,
+    SelectionResult,
     StatusResult,
     StockResult,
     TableResult,
@@ -422,6 +424,12 @@ CERTIFIED_TOOL_NAMES = {
     "nx_measure_angle",
     # 质量属性查询（体积/表面积/重心/质量）——工艺材料定额/毛坯选用常用
     "nx_mass_properties",
+    # 用户点选回流（读取图形区当前选择，用户点面→AI 拿到 body/face 索引）；
+    # 常驻 Loader 反射路由，需 NX 在线（text-to-cad 选择回流思想的落地）
+    "nx_get_selection",
+    # 面溯源 made_by（face_index 与 nx_list_faces 同索引空间 → 特征名/类型；
+    # 用户点选面后 AI 直接定位生成它的特征）
+    "nx_face_provenance",
     # 简单剖视图（UFUN CreateSimpleSxview 路线，工艺图纸核心刚需）
     "nx_create_section_view",
     # 阶梯剖（向剖切线追加割段，NX 自动转折更新；多孔零件工艺图常用）
@@ -2242,6 +2250,48 @@ def create_certified_server(
             **await call(
                 "nx_set_dimension_value",
                 {"target_size": target_size, "new_value": new_value},
+            )
+        )
+
+    @mcp.tool()
+    async def nx_get_selection() -> SelectionResult:
+        """Read the objects the user currently selected in the NX graphics area.
+
+        Selection reflux: ask the user to click a face/edge/body in NX, then
+        call this - each entry carries kind (face/edge/body or the raw NX type
+        name), tag, body_id and the face/edge index in the SAME index space as
+        nx_list_faces / nx_list_edges, so the picked entity can be fed straight
+        into measure/provenance/edit tools. Faces additionally carry made_by
+        ownership facts (owner_count + made_by feature name/type, the feature
+        that produced the wall). An empty selection reads count=0 with an empty
+        note - that is a fact, not an error; a missing selection-API route on
+        the resident Loader names itself in note (run-time reflection, see
+        nx_probe_uisel probes in the Loader source). Requires the resident
+        Loader (NX 12) with an interactive session.
+        """
+        return SelectionResult(**await call("nx_get_selection", {}))
+
+    @mcp.tool()
+    async def nx_face_provenance(body_id: str, face_index: int) -> FaceProvenanceResult:
+        """Who made this face: map a face back to its owning feature (made_by).
+
+        face_index uses the body.GetFaces() order - the SAME indexing as
+        nx_list_faces and nx_get_selection - so no second index space exists.
+        Returns face_type, tag, owner_count and the made_by list (feature
+        name via Name/JournalIdentifier + NXOpen FeatureType). Ownership
+        follows NX feature entity-set semantics: the scan reports every
+        feature whose entity set contains the face, oldest first - boolean
+        results can therefore attribute modified faces to the body-level
+        feature (e.g. a hole wall reporting EXTRUDE). owner_count=0 is a
+        fact, not an error: post-unite bodies can lose face ownership
+        (known NX unite limitation, see 受阻项调研档案); owner_err
+        names any read failure. Pair with nx_list_faces for geometry facts
+        (area/centroid) and nx_get_selection for user-picked faces.
+        """
+        return FaceProvenanceResult(
+            **await call(
+                "nx_face_provenance",
+                {"body_id": body_id, "face_index": face_index},
             )
         )
 

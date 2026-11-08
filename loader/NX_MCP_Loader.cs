@@ -491,6 +491,12 @@ public static class NX_MCP_Loader
                 return ListHoles(parts);
             case "nx_probe_face":
                 return ProbeFace(parts);
+            case "nx_get_selection":
+                return GetSelection();
+            case "nx_face_provenance":
+                return FaceProvenance(parts);
+            case "nx_probe_uisel":
+                return ProbeUiSelection();
             case "nx_read_sketch":
                 return ReadSketch(parts);
             case "nx_undo":
@@ -4328,6 +4334,433 @@ public static class NX_MCP_Loader
     // nx_probe_face <body_id> <face_index>
     // Raw UF evaluator dump for diagnosing face parametrization semantics    // (uv bounds order, AskFaceProps outputs at (0,0) and (1,1)). Temporary
     // diagnostic helper for the nx_list_holes cylinder fit.
+    // ---- selection reflux + face provenance --------------------------------
+    // made_by idea borrowed from text-to-cad's inspection layer: every face
+    // answers "which feature produced it", so a picked/listed face maps back
+    // to the modeling step that owns it. Facts only: owner lists keep count
+    // and errors visible; post-unite bodies may report zero owners (known NX
+    // unite limitation, see 受阻项调研档案).
+    private static string OwnersJson(Face face, out int count, out string err)
+    {
+        var sb = new StringBuilder();
+        count = 0;
+        err = "";
+        try
+        {
+            foreach (Feature feat in _part.Features.ToArray())
+            {
+                Face[] ff = null;
+                // Feature.GetFaces() is not in the NX12 managed API surface;
+                // discover it (then GetEntities) by reflection at run time.
+                try
+                {
+                    var mi = feat.GetType().GetMethod("GetFaces", new System.Type[0]);
+                    if (mi != null) ff = mi.Invoke(feat, null) as Face[];
+                }
+                catch { ff = null; }
+                if (ff == null)
+                {
+                    try
+                    {
+                        var mi = feat.GetType().GetMethod("GetEntities", new System.Type[0]);
+                        object[] ents = (mi != null) ? mi.Invoke(feat, null) as object[] : null;
+                        if (ents != null && ents.Length > 0)
+                        {
+                            var faces = new System.Collections.Generic.List<Face>();
+                            foreach (object e in ents)
+                            {
+                                var f = e as Face;
+                                if (f != null) faces.Add(f);
+                            }
+                            ff = faces.ToArray();
+                        }
+                    }
+                    catch { ff = null; }
+                }
+                if (ff == null || ff.Length == 0) continue;
+                bool hit = false;
+                foreach (Face f in ff) { if (f.Tag == face.Tag) { hit = true; break; } }
+                if (!hit) continue;
+                string fname = "", ftype = "";
+                try { fname = feat.Name ?? ""; } catch { }
+                // Feature.Name is frequently empty/localized (经验总结档案 特征名
+                // 本地化坑) - fall back to JournalIdentifier, the same stable
+                // "EXTRUDE(1)" convention nx_list_bodies reports.
+                if (fname.Length == 0)
+                {
+                    try { fname = feat.JournalIdentifier ?? ""; } catch { }
+                }
+                try { ftype = feat.FeatureType ?? ""; } catch { }
+                if (count > 0) sb.Append(",");
+                sb.Append("{\"feature\":\"").Append(Esc(fname))
+                  .Append("\",\"type\":\"").Append(Esc(ftype)).Append("\"}");
+                count++;
+            }
+        }
+        catch (Exception e) { err = e.Message; }
+        return "[" + sb.ToString() + "]";
+    }
+
+    private static Body FindOwningBody(Face face)
+    {
+        try
+        {
+            Body[] all = _part.Bodies.ToArray();
+            foreach (Body b in all)
+            {
+                try
+                {
+                    Face[] fs = b.GetFaces();
+                    foreach (Face f in fs) { if (f.Tag == face.Tag) return b; }
+                }
+                catch { }
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    private static int FaceIndexInBody(Body body, Face face)
+    {
+        if (body == null) return -1;
+        try
+        {
+            Face[] fs = body.GetFaces();
+            for (int i = 0; i < fs.Length; i++)
+            {
+                if (fs[i].Tag == face.Tag) return i;
+            }
+        }
+        catch { }
+        return -1;
+    }
+
+    private static int EdgeIndexInBody(Body body, Edge edge)
+    {
+        if (body == null) return -1;
+        try
+        {
+            Edge[] es = body.GetEdges();
+            for (int i = 0; i < es.Length; i++)
+            {
+                if (es[i].Tag == edge.Tag) return i;
+            }
+        }
+        catch { }
+        return -1;
+    }
+
+    // nx_face_provenance <body_id> <face_index>
+    // face_index uses the SAME indexing as nx_list_faces (body.GetFaces()
+    // order), so the agent can pair geometry facts (area/centroid) with
+    // ownership facts without a second index space.
+    private static string FaceProvenance(string[] parts)
+    {
+        if (parts.Length < 3) return ErrJson("usage: nx_face_provenance <body_id> <face_index>");
+        if (_part == null) return ErrJson("no active part");
+        Body body;
+        try { body = GetBody(parts[1]); }
+        catch (Exception e) { return ErrJson("body not found: " + e.Message); }
+        Face[] faces;
+        try { faces = body.GetFaces(); }
+        catch (Exception e) { return ErrJson("GetFaces failed: " + e.Message); }
+        int fi = (int)double.Parse(parts[2], CultureInfo.InvariantCulture);
+        if (fi < 0 || fi >= faces.Length)
+            return ErrJson("face index out of range 0.." + (faces.Length - 1));
+        Face face = faces[fi];
+        string ftype = "";
+        try { ftype = face.SolidFaceType.ToString(); } catch { }
+        int count = 0;
+        string err = "";
+        string owners = OwnersJson(face, out count, out err);
+        var sb = new StringBuilder();
+        sb.Append("{\"ok\":true,\"body_id\":\"").Append(Esc(parts[1]))
+          .Append("\",\"face_index\":").Append(fi)
+          .Append(",\"tag\":").Append(face.Tag)
+          .Append(",\"face_type\":\"").Append(Esc(ftype)).Append("\"")
+          .Append(",\"owner_count\":").Append(count)
+          .Append(",\"made_by\":").Append(owners)
+          .Append(",\"owner_err\":\"").Append(Esc(err)).Append("\"")
+          .Append("}");
+        return sb.ToString();
+    }
+
+    // Reflection probe: what does this NX build expose for reading the
+    // current graphics-area selection? Dumps UI properties plus every
+    // candidate selection-manager member, so the reflux route is chosen from
+    // evidence instead of API-doc guesses (probe methodology, 经验总结档案).
+    private static string ProbeUiSelection()
+    {
+        var sb = new StringBuilder();
+        sb.Append("{\"ok\":true");
+        try
+        {
+            var ui = UI.GetUI();
+            sb.Append(",\"ui_type\":\"").Append(Esc(ui.GetType().FullName)).Append("\"");
+            sb.Append(",\"ui_properties\":[");
+            bool first = true;
+            foreach (var p in ui.GetType().GetProperties())
+            {
+                if (!first) sb.Append(",");
+                first = false;
+                sb.Append("\"").Append(Esc(p.Name + ":" + p.PropertyType.Name)).Append("\"");
+            }
+            sb.Append("]");
+            foreach (string pname in new string[] { "SelectionManager", "Selection", "UISelectionManager" })
+            {
+                var pi = ui.GetType().GetProperty(pname);
+                if (pi == null) continue;
+                object mgr = null;
+                string err = "";
+                try { mgr = pi.GetValue(ui, null); }
+                catch (Exception e) { err = e.Message; }
+                sb.Append(",\"").Append(pname).Append("\":{");
+                if (mgr == null)
+                {
+                    sb.Append("\"null\":true");
+                    if (err != "") sb.Append(",\"err\":\"").Append(Esc(err)).Append("\"");
+                }
+                else
+                {
+                    sb.Append("\"type\":\"").Append(Esc(mgr.GetType().FullName)).Append("\",\"members\":[");
+                    bool f2 = true;
+                    foreach (var m in mgr.GetType().GetProperties())
+                    {
+                        if (!f2) sb.Append(",");
+                        f2 = false;
+                        sb.Append("\"p:").Append(Esc(m.Name + ":" + m.PropertyType.Name)).Append("\"");
+                    }
+                    foreach (var m in mgr.GetType().GetMethods())
+                    {
+                        if (!f2) sb.Append(",");
+                        f2 = false;
+                        sb.Append("\"m:").Append(Esc(m.Name)).Append("\"");
+                    }
+                    sb.Append("]");
+                    var so = mgr.GetType().GetProperty("SelectedObjects");
+                    if (so != null)
+                    {
+                        try
+                        {
+                            object val = so.GetValue(mgr, null);
+                            int n = 0;
+                            var arr = val as System.Collections.IEnumerable;
+                            if (arr != null) foreach (object o in arr) n++;
+                            sb.Append(",\"selected_objects_count\":").Append(n);
+                        }
+                        catch (Exception e)
+                        {
+                            sb.Append(",\"selected_objects_err\":\"").Append(Esc(e.Message)).Append("\"");
+                        }
+                    }
+                }
+                sb.Append("}");
+            }
+        }
+        catch (Exception e)
+        {
+            sb.Append(",\"err\":\"").Append(Esc(e.Message)).Append("\"");
+        }
+        sb.Append("}");
+        return sb.ToString();
+    }
+
+    private static object FindSelectionManager(out string route)
+    {
+        route = "";
+        try
+        {
+            var ui = UI.GetUI();
+            foreach (string pname in new string[] { "SelectionManager", "Selection" })
+            {
+                var pi = ui.GetType().GetProperty(pname);
+                if (pi == null) continue;
+                object mgr = null;
+                try { mgr = pi.GetValue(ui, null); } catch { mgr = null; }
+                if (mgr == null) continue;
+                route = pname;
+                return mgr;
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    private static object[] ToObjectArray(object value)
+    {
+        var arr = value as System.Collections.IEnumerable;
+        if (arr == null) return null;
+        object[] oa = value as object[];
+        if (oa != null) return oa;
+        var list = new System.Collections.Generic.List<object>();
+        foreach (object o in arr) list.Add(o);
+        return list.ToArray();
+    }
+
+    private static object[] ReadSelectedObjects(object mgr)
+    {
+        if (mgr == null) return null;
+        // Probed route (nx_probe_uisel, NX 12): UI.SelectionManager is of type
+        // NXOpen.Selection with GetNumSelectedObjects() + GetSelectedObject(i).
+        // An EMPTY selection is a valid read (empty array), not a route
+        // failure - null is reserved for "this route could not read".
+        try
+        {
+            var mNum = mgr.GetType().GetMethod("GetNumSelectedObjects", new System.Type[0]);
+            if (mNum != null)
+            {
+                int n = System.Convert.ToInt32(mNum.Invoke(mgr, null));
+                var mGet = mgr.GetType().GetMethod("GetSelectedObject", new System.Type[] { typeof(int) });
+                if (mGet == null)
+                    mGet = mgr.GetType().GetMethod("GetSelectedTaggedObject", new System.Type[] { typeof(int) });
+                if (mGet != null)
+                {
+                    var list = new System.Collections.Generic.List<object>();
+                    for (int i = 0; i < n; i++)
+                    {
+                        try { list.Add(mGet.Invoke(mgr, new object[] { i })); } catch { }
+                    }
+                    return list.ToArray();
+                }
+            }
+        }
+        catch { }
+        // Generic fallbacks for other NX builds: SelectedObjects property /
+        // GetSelectedObjects() method.
+        try
+        {
+            var pi = mgr.GetType().GetProperty("SelectedObjects");
+            if (pi != null)
+            {
+                object[] arr = ToObjectArray(pi.GetValue(mgr, null));
+                if (arr != null) return arr;
+            }
+        }
+        catch { }
+        try
+        {
+            var mi = mgr.GetType().GetMethod("GetSelectedObjects", new System.Type[0]);
+            if (mi != null) return ToObjectArray(mi.Invoke(mgr, null));
+        }
+        catch { }
+        return null;
+    }
+
+    private static string SelectionEntityJson(object o)
+    {
+        var face = o as Face;
+        var edge = o as Edge;
+        var body = o as Body;
+        var sb = new StringBuilder();
+        if (face != null)
+        {
+            Body owner = null;
+            try { owner = face.GetBody(); } catch { owner = null; }
+            if (owner == null) owner = FindOwningBody(face);
+            string bid = (owner != null) ? BodyIdOf(owner) : "";
+            int idx = FaceIndexInBody(owner, face);
+            string ftype = "";
+            try { ftype = face.SolidFaceType.ToString(); } catch { }
+            int count = 0;
+            string err = "";
+            string owners = (owner != null) ? OwnersJson(face, out count, out err) : "[]";
+            sb.Append("{\"kind\":\"face\",\"tag\":").Append(face.Tag)
+              .Append(",\"body_id\":\"").Append(Esc(bid)).Append("\"")
+              .Append(",\"face_index\":").Append(idx)
+              .Append(",\"face_type\":\"").Append(Esc(ftype)).Append("\"")
+              .Append(",\"owner_count\":").Append(count)
+              .Append(",\"made_by\":").Append(owners)
+              .Append(",\"err\":\"").Append(Esc(err)).Append("\"")
+              .Append("}");
+            return sb.ToString();
+        }
+        if (edge != null)
+        {
+            Body owner = null;
+            try { owner = edge.GetBody(); } catch { owner = null; }
+            if (owner == null) owner = FindOwningBodyOfEdge(edge);
+            string bid = (owner != null) ? BodyIdOf(owner) : "";
+            int idx = EdgeIndexInBody(owner, edge);
+            sb.Append("{\"kind\":\"edge\",\"tag\":").Append(edge.Tag)
+              .Append(",\"body_id\":\"").Append(Esc(bid)).Append("\"")
+              .Append(",\"edge_index\":").Append(idx)
+              .Append(",\"err\":\"\"")
+              .Append("}");
+            return sb.ToString();
+        }
+        if (body != null)
+        {
+            string bid = BodyIdOf(body);
+            string name = "";
+            try { name = body.Name ?? ""; } catch { }
+            sb.Append("{\"kind\":\"body\",\"tag\":").Append(body.Tag)
+              .Append(",\"body_id\":\"").Append(Esc(bid)).Append("\"")
+              .Append(",\"name\":\"").Append(Esc(name)).Append("\"")
+              .Append(",\"err\":\"\"")
+              .Append("}");
+            return sb.ToString();
+        }
+        string typeName = (o == null) ? "null" : o.GetType().Name;
+        TaggedObject t = o as TaggedObject;
+        string tag = (t != null) ? t.Tag.ToString() : "0";
+        sb.Append("{\"kind\":\"").Append(Esc(typeName)).Append("\",\"tag\":").Append(tag)
+          .Append(",\"err\":\"\"")
+          .Append("}");
+        return sb.ToString();
+    }
+
+    private static Body FindOwningBodyOfEdge(Edge edge)
+    {
+        try
+        {
+            Body[] all = _part.Bodies.ToArray();
+            foreach (Body b in all)
+            {
+                try
+                {
+                    Edge[] es = b.GetEdges();
+                    foreach (Edge e in es) { if (e.Tag == edge.Tag) return b; }
+                }
+                catch { }
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    // nx_get_selection: read the user's current graphics-area selection.
+    // Route is discovered by reflection (see nx_probe_uisel); every failure
+    // stays a named fact in the response instead of a silent empty list.
+    private static string GetSelection()
+    {
+        if (_part == null) return ErrJson("no active part");
+        string route = "";
+        object mgr = FindSelectionManager(out route);
+        var sb = new StringBuilder();
+        sb.Append("{\"ok\":true,\"route\":\"").Append(Esc(route)).Append("\"");
+        if (mgr == null)
+        {
+            sb.Append(",\"count\":0,\"selection\":[],\"note\":\"no selection-manager route found on this NX build; run nx_probe_uisel\"}");
+            return sb.ToString();
+        }
+        object[] objs = ReadSelectedObjects(mgr);
+        if (objs == null)
+        {
+            sb.Append(",\"count\":0,\"selection\":[],\"note\":\"selection manager responded but no SelectedObjects member; run nx_probe_uisel\"}");
+            return sb.ToString();
+        }
+        sb.Append(",\"count\":").Append(objs.Length).Append(",\"selection\":[");
+        bool first = true;
+        foreach (object o in objs)
+        {
+            if (!first) sb.Append(",");
+            first = false;
+            sb.Append(SelectionEntityJson(o));
+        }
+        sb.Append("]}");
+        return sb.ToString();
+    }
+
     private static string ProbeFace(string[] parts)
     {
         if (parts.Length < 3) return ErrJson("usage: nx_probe_face <body_id> <face_index>");

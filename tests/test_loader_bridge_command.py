@@ -730,6 +730,105 @@ def test_hole_csv_writes_rows_and_dia_summary(tmp_path):
     assert lines[3].startswith("3,10.0,50.0,50.0,5.0,10.0,7")
 
 
+# ---- selection reflux + face provenance (made_by) ---------------------------
+def test_selection_wire_format():
+    assert _command("nx_get_selection", {}) == "nx_get_selection"
+
+
+def test_face_provenance_wire_format():
+    assert (
+        _command("nx_face_provenance", {"body_id": "BODY_1", "face_index": 3})
+        == "nx_face_provenance BODY_1 3"
+    )
+
+
+def test_adapt_get_selection_normalizes_entities():
+    from nx_mcp.loader_bridge import _adapt
+
+    adapted = _adapt(
+        "nx_get_selection",
+        {},
+        {
+            "ok": True,
+            "route": "SelectionManager",
+            "count": 2,
+            "selection": [
+                {
+                    "kind": "face", "tag": 555, "body_id": "BODY_1",
+                    "face_index": 3, "face_type": "Cylindrical",
+                    "owner_count": 1,
+                    "made_by": [{"feature": "HOLE_1(7)", "type": "HOLE"}],
+                    "err": "",
+                },
+                {
+                    "kind": "edge", "tag": 777, "body_id": "BODY_1",
+                    "edge_index": 5, "err": "",
+                },
+            ],
+            "result": "2 selected object(s)",
+        },
+    )
+    assert adapted["status"] == "success"
+    assert adapted["count"] == 2
+    assert adapted["route"] == "SelectionManager"
+    face = adapted["selection"][0]
+    assert face["kind"] == "face"
+    assert face["index"] == 3  # face_index/edge_index unify into index
+    assert face["made_by"][0]["feature"] == "HOLE_1(7)"
+    edge = adapted["selection"][1]
+    assert edge["index"] == 5
+
+
+def test_adapt_get_selection_empty_with_note():
+    from nx_mcp.loader_bridge import _adapt
+
+    adapted = _adapt(
+        "nx_get_selection",
+        {},
+        {"ok": True, "route": "", "count": 0, "selection": [],
+         "result": "0 selected object(s)",
+         "note": "no selection-manager route found on this NX build; run nx_probe_uisel"},
+    )
+    assert adapted["status"] == "success"
+    assert adapted["count"] == 0
+    assert adapted["selection"] == []
+    assert "nx_probe_uisel" in adapted["note"]
+
+
+def test_adapt_face_provenance_ownership_facts():
+    from nx_mcp.loader_bridge import _adapt
+
+    adapted = _adapt(
+        "nx_face_provenance",
+        {"body_id": "BODY_1", "face_index": 3},
+        {
+            "ok": True,
+            "body_id": "BODY_1",
+            "face_index": 3,
+            "tag": 555,
+            "face_type": "Cylindrical",
+            "owner_count": 1,
+            "made_by": [{"feature": "HOLE_1(7)", "type": "HOLE"}],
+            "owner_err": "",
+            "result": "face 3: 1 owner(s)",
+        },
+    )
+    assert adapted["status"] == "success"
+    assert adapted["owner_count"] == 1
+    assert adapted["made_by"][0]["type"] == "HOLE"
+    # zero owners is a fact (post-unite limitation), not an error
+    adapted2 = _adapt(
+        "nx_face_provenance",
+        {"body_id": "BODY_1", "face_index": 4},
+        {"ok": True, "body_id": "BODY_1", "face_index": 4, "tag": 556,
+         "face_type": "Planar", "owner_count": 0, "made_by": [],
+         "owner_err": "", "result": "face 4: 0 owner(s)"},
+    )
+    assert adapted2["owner_count"] == 0
+    assert adapted2["made_by"] == []
+    assert adapted2["owner_err"] == ""
+
+
 def _write_card(tmp_path, attributes, fmt="text"):
     from nx_mcp.certified import _write_process_card
 

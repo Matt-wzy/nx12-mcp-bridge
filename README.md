@@ -34,7 +34,7 @@ AI（自然语言）
 - 修复 `ShellBuilder` 相关 CS1061（改用 `ReplaceRules`）
 - 迁移 `Update.AddToDeleteList` → `AddObjectsToDeleteList`（NX12.0.0 弃用）
 
-### 新增能力（共 66 个 MCP 工具）
+### 新增能力（共 68 个 MCP 工具）
 
 | 类别 | 命令 |
 |---|---|
@@ -60,6 +60,10 @@ AI（自然语言）
 | 清理 | `nx_delete_annotation`（按 ID/名称或 `note:0`/`dim:1`） |
 | 导出 | `nx_export_pdf`（图纸 → PDF） |
 | 三维查询 | `nx_measure_distance`（两棱边最小距离，基于 UFUN） |
+| 选择回流 | `nx_get_selection`（读取图形区当前选择：用户在 NX 里点面/边/体，AI 拿到 body/face 索引，
+面带 made_by 特征归属；反射路由，空选择返回 count=0 事实而非报错） |
+| 面溯源 | `nx_face_provenance`（face_index 与 nx_list_faces 同索引空间 → 特征名/类型（made_by），
+点选面后 AI 直接定位生成它的特征；owner_count=0 为事实（unite 后所有权丢失）非错误） |
 
 ### 稳定性修复
 - **"保存 CGM"弹窗把 NX 卡死**：含多张图纸页的部件保存时 NX 弹模态框阻塞，

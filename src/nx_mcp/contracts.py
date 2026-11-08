@@ -17,6 +17,8 @@ __all__ = [
     "ExplosionListResult",
     "ExplosionResult",
     "ExtrudeResult",
+    "FaceProvenanceResult",
+    "FeatureOwner",
     "FeatureSuppressResult",
     "HoleInfo",
     "HoleListResult",
@@ -32,6 +34,8 @@ __all__ = [
     "PartResult",
     "Point2D",
     "SaveAsResult",
+    "SelectionResult",
+    "SelectedEntity",
     "StockResult",
     "StatusResult",
     "TableResult",
@@ -171,6 +175,82 @@ class HoleListResult(BaseModel):
     cylinders: int = 0
     face_count: int = 0
     holes: list[HoleInfo] = Field(default_factory=list)
+    message: str = ""
+
+
+class FeatureOwner(BaseModel):
+    """The feature that produced a face (made_by provenance).
+
+    feature is the (possibly localized) NX feature name, e.g. HOLE_1(7);
+    type is the NXOpen FeatureType string, e.g. HOLE / EXTRUDE. Post-unite
+    bodies may legitimately report zero owners (known NX limitation, see
+    受阻项调研档案) - owner_count=0 is a fact, not an error.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    feature: str = ""
+    type: str = ""
+
+
+class SelectedEntity(BaseModel):
+    """One object currently selected in the NX graphics area.
+
+    kind is body/face/edge or the raw NX type name for anything else. Faces
+    carry body_id + index (same indexing as nx_list_faces) and made_by
+    ownership facts. err keeps per-entity read failures visible instead of
+    dropping the row silently.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: str = ""
+    tag: int = 0
+    body_id: str = ""
+    index: int = -1
+    face_type: str = ""
+    name: str = ""
+    owner_count: int = 0
+    made_by: list[FeatureOwner] = Field(default_factory=list)
+    err: str = ""
+
+
+class SelectionResult(BaseModel):
+    """Current graphics-area selection (selection reflux for the agent).
+
+    route names the NX API member the resident Loader used; note carries a
+    named reason when nothing could be read (empty selection reads as
+    count=0 with an empty note, not an error).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["success"] = "success"
+    count: int = 0
+    route: str = ""
+    note: str = ""
+    selection: list[SelectedEntity] = Field(default_factory=list)
+    message: str = ""
+
+
+class FaceProvenanceResult(BaseModel):
+    """made_by facts for one face (pairs with nx_list_faces indexing).
+
+    face_index uses the body.GetFaces() order, identical to nx_list_faces /
+    nx_get_selection, so geometry facts and ownership facts share one index
+    space.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: Literal["success"] = "success"
+    body_id: str = ""
+    face_index: int = -1
+    tag: int = 0
+    face_type: str = ""
+    owner_count: int = 0
+    made_by: list[FeatureOwner] = Field(default_factory=list)
+    owner_err: str = ""
     message: str = ""
 
 
