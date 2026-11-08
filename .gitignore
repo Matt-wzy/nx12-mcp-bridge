@@ -48,3 +48,8 @@ NX_MCP_WORKSPACE/
 
 # WorkBuddy app-local folder (skill/config, never commit)
 .workbuddy/
+
+# maintainer-local archives (research/handover notes, never commit)
+docs/受阻项调研记录.md
+docs/经验总结.md
+docs/TODO交接.md
