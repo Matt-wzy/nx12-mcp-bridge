@@ -23,6 +23,7 @@ REQUIRED = [
     "references/runner-contract.md",
     "references/certified-tool-contract.json",
     "references/pipeline-contract.md",
+    "references/dfm-facts.md",
     "references/chinese-output.md",
     "examples/example-output.json",
     "examples/modeling-plan-example.json",
@@ -954,6 +955,62 @@ def main() -> None:
 
     if "loader health check failed" not in runner_source or "ping_error()" not in runner_source:
         fail("Runner Loader health-check diagnostics regression")
+
+    for token in (
+        "def derive_expected_holes",
+        "def match_hole_census",
+        "def _cmd_verify",
+        "def verify_lineage_errors",
+        "verify audits successful runs only",
+        "report was produced from a different plan",
+        "HOLE_TOOLS",
+    ):
+        if token not in runner_source:
+            fail(f"Runner verify read-back audit regression: missing {token}")
+
+    verify_tests = (RUNNER / "tests" / "test_model_verify.py").read_text(encoding="utf-8")
+    for token in (
+        "test_derive_pattern_on_unbound_reference_fails_closed",
+        "test_derive_example_executable_plan_census",
+        "test_match_extra_hole_review_by_default_fail_on_policy",
+        "test_bbox_findings_position_independent",
+        "test_verify_lineage_mismatch_rejected",
+    ):
+        if token not in verify_tests:
+            fail(f"Runner verify test missing: {token}")
+
+    for token in (
+        "读回校验（机器 verify，run 成功后强制）",
+        "runner.py verify",
+        "verify 失败不得进入 Controlled Self-Healing",
+        "不得把 unverified 当成“没有发现”",
+    ):
+        if token not in pipeline_contract:
+            fail(f"pipeline verify read-back audit regression: missing {token}")
+
+    if "读回校验（verify 子命令）" not in (RUNNER / "README.md").read_text(encoding="utf-8"):
+        fail("Runner README verify section missing")
+
+    dfm_rules = (SKILL / "references" / "dfm-facts.md").read_text(encoding="utf-8")
+    for token in (
+        "测量工具只报事实，永不判 verdict",
+        "禁止把 unverified 当成“无发现”或“合格”",
+        "项目内置默认表——**当前为空**",
+        "“图上看着没问题”不是证据",
+        "到全局原点的距离，不是圆柱面半径",
+        "几何一经修改",
+        "此前所有 DFM 结论",
+    ):
+        if token not in dfm_rules:
+            fail(f"DFM facts discipline regression: missing {token}")
+
+    for token in (
+        "读回校验（verify）披露要求",
+        "禁止把 unverified 写成“校验通过”",
+        "原文披露差异清单",
+    ):
+        if token not in output_rules:
+            fail(f"verify user-output disclosure regression: missing {token}")
 
     plan_tests = (RUNNER / "tests" / "test_plan_resolution.py").read_text(encoding="utf-8")
     if "test_transport_ping_error_passthrough" not in plan_tests:

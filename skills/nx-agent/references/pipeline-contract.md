@@ -93,6 +93,34 @@ Runner 正式开始建模后，任一 operation 失败：
 
 这一步只结束“当前尝试”，是否进入一次受控自动修复由 §5 决定。
 
+### 5.3 读回校验（机器 verify，run 成功后强制）
+
+attempt `report.status="success"` 后，必须执行 Runner 的读回审计（几何期望由
+Runner 从 executable plan 自行推导，禁止 Agent 手写期望值）：
+
+```text
+python_exe runner.py verify <executable.json> --report <attempt-report.json> \
+  --drawing <drawing.json>        # 仅 Mode B 需要；启用 bbox 家族
+```
+
+- exit 0 且 status="pass" → 读回校验通过；
+- exit 0 且 status="review" → 通过，但用户输出必须逐条披露 review 差异清单
+  （如多余孔），不得省略；
+- exit 1（status="fail" 或 "unverified"）→ **最终结果按失败处理**：`fail` 的
+  差异清单（缺孔/孔参数不符/bbox 跨度不符/body_count 漂移）必须原文披露；
+  `unverified` 表示有家族未能测量（读回失败、pattern 无法溯源、无线性边等），
+  **不得把 unverified 当成“没有发现”**；
+- exit 2（status="rejected"）→ 基础设施前置条件问题（plan/report/Loader 不可用），
+  如实报告“未能完成读回校验”，不得声称“已验证”。
+
+**verify 失败不得进入 Controlled Self-Healing**：verify 审计的是 run 成功后的
+实际模型，其失败属于建模结果错误，不是计划级可修复问题；修复门禁的 lineage
+以 run report 的 `failed_step` 为锚点，verify 失败没有合法 repair 入口，
+只能最终失败并交人工判断。禁止为通过 verify 而修改 Runner、drawing 或 plan 期望。
+
+用户输出状态权威仍是 Runner run report；verify 结果只能让“成功”降级为
+“失败/需人工复核”，永远不能把失败的 run 升级为成功。
+
 ## 6. Controlled Self-Healing（受控自动修复）
 
 ### 6.1 次数
@@ -118,6 +146,8 @@ Runner 正式开始建模后，任一 operation 失败：
 - A 阶段 blocking_unresolved > 0 / dimension conflict / 关键几何尺寸缺失；
 - 需要猜尺寸、改尺寸、改孔位、改特征数量；
 - **禁止数值 nudge / epsilon 修复**：任何来自工程图、derived、frozen plan 的几何数值（坐标、起止面、slot 底、孔中心、直径、深度、厚度、圆角/倒角等）都不得为了让 Boolean/切除成功而改成邻近值，例如 `Z=50 → Z=49`。即使 Agent 认为“最终实体等价”，也不能把这种数值改写当成 Controlled Self-Healing；
+- **禁止丢/缩特征修复**：修复不得省略或弱化输入明确要求的任何特征——跳过圆角/倒角、缩小半径/深度/直径、删除孔/槽让 Boolean 通过，产出的都是与要求**不同的零件**，不是“成功的简化”。特征缺失或被弱化与数值 nudge 同源：修复的结果必须与要求的设计一致，而不是相似；发现修复计划中出现未由输入要求的省略时，直接最终失败；
+- **禁止从图片读数**：诊断、修复与最终验证中的任何几何数值（尺寸、位置、数量）只能来自机器读回工具（`nx_list_dimensions` / `nx_list_holes` / `nx_mass_properties` / `nx_measure_distance` / `nx_measure_angle`）或 plan / drawing JSON 本身；PDF / PNG / 截图只用于确认视图布局与外观，不得作为任何数值的依据，“图上看着对”不构成验证；
 - 若失败根因是精确相切/共面导致的 CAD kernel Boolean 问题，只能使用**不改变任何设计数值与最终几何语义**、且已由 frozen contract 明确允许的计划级/选择级修复；没有这样的确定性修复路径就最终失败，不得靠扩大/缩短工具体来穿过门禁；
 - Boolean 不相交且根因属于几何设计/规划错误；
 - 超出 certified tools 能力边界；

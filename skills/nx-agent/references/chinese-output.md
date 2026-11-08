@@ -112,6 +112,20 @@ C 修复后再次失败：
 - 不得把内部英文键名直接展示给用户
 - 不得把 repair 后的成功描述为 0 次失败
 
+## 7. 读回校验（verify）披露要求
+
+run 成功后必须执行 `runner.py verify`（见 pipeline-contract §5.3），其结果进入最终输出：
+
+- `status="pass"` → 成功模板末尾加一行：`读回校验：通过（孔 N/N，跨度 ✓）`；
+- `status="review"` → 状态仍为成功，但必须逐条披露 review 差异清单（如多余孔），并标注“建议人工确认”；
+- `status="fail"` → 按最终失败汇报，失败原因一栏**原文披露差异清单**（缺孔 / 孔参数不符 / bbox 跨度不符 / body_count 漂移）；
+- `status="unverified"` → 按失败汇报或明确声明“未能完成读回校验”，必须列出未测量的家族与原因；**禁止把 unverified 写成“校验通过”**；
+- `status="rejected"`（exit 2）→ 如实报告“未能完成读回校验（前置条件不满足）”，不得声称已验证。
+
+verify 差异清单必须使用机器输出的原文数值（直径/深度/位置/跨度），不得转写、舍入或省略；禁止从截图/PDF 读数补充（pipeline-contract §6.3）。
+
+DFM 披露（dfm-facts.md）与 verify 披露相互独立：DFM fail 是工艺风险披露，不改变建模成功/失败状态，但必须出现在最终输出中，不得静默丢弃。
+
 ## 工程图 Gate A 用户输出
 
 - Gate A BLOCKED 时，只列出 `required_for_modeling=true` 的 blocking unresolved，并只询问继续建模所需的**最少问题**。

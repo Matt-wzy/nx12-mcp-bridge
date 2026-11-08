@@ -7,6 +7,21 @@ description: 作者：抖音 无趣。Siemens NX 自动建模统一入口。支�
 
 本 Skill 是 NX_MCP-Enhanced 的唯一用户入口。对外只显示一个 Skill，对内按模块化规则执行。
 
+## 0. 任务分派表（Start with the task）
+
+先按任务分派，再进入对应模式。表只决定入口动作与正常路径读取范围；门禁与硬规则以 §4、§5 和 `references/pipeline-contract.md` 为准。
+
+| 任务 | 模式 | 正常路径读取 | 入口动作 |
+|---|---|---|---|
+| 文字描述新零件 / 修改工作区内已保存零件 | A | `references/text-modeling.md` + `references/certified-tool-contract.json` | 生成 frozen plan → build/check → Plan Runner |
+| 二维工程图建模 | B | `references/drawing-reader.md` + `references/nx-drawing-rules.md` | validate-drawing（Gate A）→ frozen plan → build/check（Gate B）→ Plan Runner |
+| attempt 1 失败，评估受控修复 | — | `references/pipeline-contract.md` + 失败类型相关 `references/topology-safety.md` | 按 §5 判定；每任务最多 1 次 |
+| build/check 报 schema/contract 不兼容 | — | `references/runner-contract.md` | 修正计划表达；禁止修改契约本身 |
+| 可制造性 / 工艺性检查（DFM） | — | `references/dfm-facts.md` | 机器测量事实 → 按 §1 四态给判决 → 差异进用户输出 |
+| 用户明确要求解释底层规则 | — | 对应单个 reference | 只解释，不执行建模 |
+
+不在表中的任务先按 §1 自动选择模式判断；正常一次通过路径不得预读表中未列出的文件。
+
 ## 1. 自动选择模式
 
 ### 模式 A：文字描述建模（Fast Path）
@@ -110,7 +125,7 @@ required threaded feature 优先使用输入明确提供并批准交付的 `surr
 - 每个任务最多允许 1 次 Controlled Self-Healing。
 - 只允许修复根因明确、且不改变尺寸/位置/特征数量/几何语义的计划级问题。
 - 典型允许：edge/face `selection_criteria` 过严、Loader 已冻结的类型语义差异。
-- 禁止：猜尺寸、改图纸、改变主体结构、绕过能力边界、修改 Runner/NX_MCP/Loader。
+- 禁止：猜尺寸、改图纸、改变主体结构、丢/缩输入明确要求的特征、从 PDF/截图读几何数值、绕过能力边界、修改 Runner/NX_MCP/Loader（前两条的完整定义见 `references/pipeline-contract.md` §6.3）。
 - 禁止把任何图纸/derived/frozen 几何数值做 nudge/epsilon 改写来“救”执行，例如 `Z=50 → Z=49`；Boolean 相切失败不能通过改坐标、深度、孔位、直径等设计数值自动修复。
 - 修复后必须重新 build/check，并由 Runner 安全 preflight 丢弃本任务自己的失败零件，然后从第 1 步完整重跑。
 - attempt 1 失败后，禁止改 PRT/STEP 文件名、复制 drawing 或改成新的 normal run 来绕过 repair lineage；下一次执行只能携带原失败 report 的合法 repair attempt。
